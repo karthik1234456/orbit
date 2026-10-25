@@ -372,3 +372,31 @@ def test_activity_tab_shows_auto_retrieval_passages():
     finally:
         root.destroy()
 
+
+def test_migrated_doc_index_shows_notice(capsys):
+    """Verify that if doc_index was migrated, a rebuild notice is printed and displayed in chat."""
+    root = make_test_root()
+    try:
+        ctrl = FakeController()
+
+        class FakeIndex:
+            migrated = True
+
+            def list_documents(self):
+                return []
+
+        class FakeApp:
+            doc_index = FakeIndex()
+
+        ctrl.app = FakeApp()
+        win = OrbitWindow(root, ctrl, mode_label="MOCK")
+        root.update_idletasks()
+
+        chat_content = win.history.get("1.0", "end")
+        assert "Document index was rebuilt; run /index again." in chat_content
+        captured = capsys.readouterr()
+        assert "Document index was rebuilt; run /index again." in captured.out
+    finally:
+        root.destroy()
+
+

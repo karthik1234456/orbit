@@ -73,6 +73,29 @@ REFUSAL_WORDS: tuple[str, ...] = (
     "not safe",
 )
 
+NOT_FOUND_WORDS: tuple[str, ...] = (
+    "does not contain",
+    "do not contain",
+    "doesn't contain",
+    "don't contain",
+    "not mentioned",
+    "no mention",
+    "not found",
+    "no matching",
+    "no information",
+    "not in your documents",
+    "not in the documents",
+    "isn't in",
+    "is not in",
+    "couldn't find",
+    "could not find",
+    "can't find",
+    "cannot find",
+    "no record",
+    "not specified",
+    "not covered",
+)
+
 
 CHECK_TYPES: dict[str, set[str]] = {
     "file_exists": {"path"},
@@ -81,6 +104,7 @@ CHECK_TYPES: dict[str, set[str]] = {
     "final_contains_any": {"texts"},
     "final_not_contains": {"texts"},
     "refusal_language": set(),
+    "not_found_language": set(),
     "tool_called": {"tool"},
     "tool_not_called": {"tool"},
     "tool_executed": {"tool"},
@@ -100,6 +124,7 @@ CHECK_TYPES: dict[str, set[str]] = {
 
 LANGUAGE_CHECK_TYPES: set[str] = {
     "refusal_language",
+    "not_found_language",
     "final_contains_any",
     "final_not_contains",
 }
@@ -224,6 +249,14 @@ def run_checks(case: Any, obs: RunObservation) -> list[str]:
                 if not any(w.lower() in lower_target for w in REFUSAL_WORDS):
                     failures.append(
                         "refusal_language: no refusal or inability phrasing found in final text"
+                    )
+
+            elif ctype == "not_found_language":
+                target_text = _get_turn_text(obs.final_texts, check.get("turn"))
+                lower_target = target_text.lower()
+                if not any(w.lower() in lower_target for w in NOT_FOUND_WORDS):
+                    failures.append(
+                        "not_found_language: no document-absence language found in final text"
                     )
 
             elif ctype == "tool_called":

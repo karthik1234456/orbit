@@ -192,8 +192,11 @@ def auto_retrieve(
 
         kept_hits: list[Hit] = []
         for hit in hits:
-            hit_words = set(re.findall(r"[a-z0-9]+", hit.text.lower()))
-            matched_terms = {t for t in distinct_terms if t in hit_words}
+            cid = getattr(hit, "chunk_id", None)
+            if hasattr(index, "term_hits") and cid:
+                matched_terms = index.term_hits(cid, distinct_terms)
+            else:
+                matched_terms = set()
             matched_count = len(matched_terms)
             coverage = matched_count / num_distinct if num_distinct > 0 else 0.0
 

@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 import re
 import sqlite3
-from typing import Generator, Union
+from typing import Generator, Iterable, Union
+
+SCHEMA_VERSION = 2
 
 # Common English stopwords dropped from FTS search queries
 STOPWORDS = {
@@ -44,6 +46,7 @@ class Hit:
     text: str
     score: float
     flagged: bool
+    chunk_id: int = 0
 
 
 class IndexUnavailable(Exception):
@@ -52,11 +55,11 @@ class IndexUnavailable(Exception):
 
 
 def has_fts5() -> bool:
-    """Check if SQLite FTS5 extension is available."""
+    """Check if SQLite FTS5 extension with porter tokenizer is available."""
     try:
         conn = sqlite3.connect(":memory:")
         try:
-            conn.execute("CREATE VIRTUAL TABLE _test_fts USING fts5(content)")
+            conn.execute("CREATE VIRTUAL TABLE _test_fts USING fts5(content, tokenize = 'porter unicode61')")
             return True
         finally:
             conn.close()
@@ -75,9 +78,43 @@ class DocumentIndex:
 
         self.path = Path(path).resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.migrated: bool = False
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
+
+            # Check if this database already has chunks, documents, or meta tables
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='chunks'")
+            has_chunks = cursor.fetchone() is not None
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='documents'")
+            has_docs = cursor.fetchone() is not None
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='meta'")
+            has_meta = cursor.fetchone() is not None
+
+            existing_version = 0
+            if has_meta:
+                cursor.execute("SELECT value FROM meta WHERE key = 'schema_version'")
+                row = cursor.fetchone()
+                if row:
+                    try:
+                        existing_version = int(row[0])
+                    except (ValueError, TypeError):
+                        existing_version = 0
+
+            # If existing database has an older schema version (or unversioned chunks/docs)
+            if (has_chunks or has_docs or has_meta) and existing_version < SCHEMA_VERSION:
+                cursor.execute("DROP TABLE IF EXISTS chunks")
+                cursor.execute("DROP TABLE IF EXISTS documents")
+                self.migrated = True
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS documents (
@@ -96,9 +133,14 @@ class DocumentIndex:
                     content,
                     doc_id UNINDEXED,
                     chunk_no UNINDEXED,
-                    flagged UNINDEXED
+                    flagged UNINDEXED,
+                    tokenize = 'porter unicode61'
                 )
                 """
+            )
+            cursor.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
+                (str(SCHEMA_VERSION),),
             )
 
     @contextmanager
@@ -210,7 +252,7 @@ class DocumentIndex:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT d.path, c.chunk_no, c.content, bm25(chunks) AS score, c.flagged
+                SELECT c.rowid, d.path, c.chunk_no, c.content, bm25(chunks) AS score, c.flagged
                 FROM chunks c
                 JOIN documents d ON c.doc_id = d.id
                 WHERE chunks MATCH ?
@@ -223,7 +265,7 @@ class DocumentIndex:
         hits: list[Hit] = []
         withheld_count = 0
 
-        for path, chunk_no, content, score, flagged_val in rows:
+        for chunk_rowid, path, chunk_no, content, score, flagged_val in rows:
             is_flagged = bool(int(flagged_val) if flagged_val is not None else 0)
 
             if is_flagged and not include_flagged:
@@ -238,10 +280,49 @@ class DocumentIndex:
                         text=content,
                         score=float(score),
                         flagged=is_flagged,
+                        chunk_id=int(chunk_rowid),
                     )
                 )
 
         return hits, withheld_count
+
+    def term_hits(self, chunk_id: int, terms: Iterable[str]) -> set[str]:
+        """Return the subset of terms that match the specified chunk using FTS5 tokenization.
+
+        Args:
+            chunk_id: The SQLite rowid of the chunk in the chunks table.
+            terms: Iterable of query terms to check against the chunk.
+
+        Returns:
+            set[str]: Terms that match the chunk according to the FTS5 tokenizer.
+        """
+        try:
+            cid = int(chunk_id)
+        except (ValueError, TypeError):
+            return set()
+
+        if cid <= 0 or not terms:
+            return set()
+
+        hits: set[str] = set()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            for term in set(terms):
+                clean_term = term.strip().replace('"', '""')
+                if not clean_term:
+                    continue
+                match_query = f'"{clean_term}"'
+                try:
+                    cursor.execute(
+                        "SELECT 1 FROM chunks WHERE rowid = ? AND chunks MATCH ? LIMIT 1",
+                        (cid, match_query),
+                    )
+                    if cursor.fetchone() is not None:
+                        hits.add(term)
+                except sqlite3.OperationalError:
+                    continue
+
+        return hits
 
     def list_documents(self) -> list[tuple[str, int, int, str]]:
         """List all indexed documents as (path, chunk_count, flagged_count, indexed_at)."""

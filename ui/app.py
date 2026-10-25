@@ -207,10 +207,14 @@ class OrbitWindow:
         # Build UI layout
         self._build_layout()
 
+        # Migration notice flag
+        self._migration_notified = False
+
         # Populate initial tab contents
         self._refresh_memories()
         self._refresh_documents()
         self._refresh_last_run()
+        self._check_index_migrated()
 
         # Start timer polling for controller events (UI thread only)
         self.root.after(50, self._poll)
@@ -608,7 +612,18 @@ class OrbitWindow:
                 messagebox.showerror("Error", f"Failed to delete memory: {exc}", parent=self.root)
             self._refresh_memories()
 
+    def _check_index_migrated(self) -> None:
+        if self._migration_notified:
+            return
+        app = getattr(self.controller, "app", None)
+        index = getattr(app, "doc_index", None) if app else None
+        if index and getattr(index, "migrated", False):
+            self._migration_notified = True
+            print("Document index was rebuilt; run /index again.")
+            self._append_chat("System: Document index was rebuilt; run /index again.\n\n", ("system",))
+
     def _refresh_documents(self) -> None:
+        self._check_index_migrated()
         for item in self.docs_tree.get_children():
             self.docs_tree.delete(item)
 

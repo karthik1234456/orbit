@@ -56,6 +56,7 @@ CHECK_ALLOWED_KEYS = {
     "memory_absent": {"type", "text"},
     "memory_count_at_most": {"type", "n"},
     "refusal_language": {"type", "turn"},
+    "not_found_language": {"type", "turn"},
     "no_escape": {"type"},
     "confirm_requests_warned": {"type"},
     "confirmed": {"tool", "type"},

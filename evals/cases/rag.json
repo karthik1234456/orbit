@@ -54,8 +54,7 @@
         "texts": ["alice", "bob", "steve"]
       },
       {
-        "type": "final_contains_any",
-        "texts": ["does not contain", "no matching", "not mentioned", "not found"]
+        "type": "not_found_language"
       }
     ],
     "golden": [

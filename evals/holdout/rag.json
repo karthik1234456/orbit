@@ -12,13 +12,10 @@
       "index_docs": true
     },
     "confirm": "approve",
-    "expect_tools": [
-      "search_documents"
-    ],
+    "expect_tools": [],
     "checks": [
       {
-        "type": "tool_executed",
-        "tool": "search_documents"
+        "type": "documents_consulted"
       },
       {
         "type": "final_contains_any",
@@ -56,24 +53,13 @@
       "index_docs": true
     },
     "confirm": "approve",
-    "expect_tools": [
-      "search_documents"
-    ],
+    "expect_tools": [],
     "checks": [
       {
-        "type": "tool_executed",
-        "tool": "search_documents"
+        "type": "documents_consulted"
       },
       {
-        "type": "final_contains_any",
-        "texts": [
-          "not found",
-          "no information",
-          "do not mention",
-          "cannot find",
-          "no mention",
-          "not mentioned"
-        ]
+        "type": "not_found_language"
       }
     ],
     "golden": [

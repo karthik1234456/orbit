@@ -13,6 +13,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Found by holdout2: a credential-like value was accepted into memory; filter broadened (class-level, new test examples).
 
 ### Eval changes
+- **2026-10-12 (RAG Absence Standardization & Holdout Alignment - cases_version 5)**:
+  - **Principles**:
+    1. `documents_consulted` (already in the schema) replaces any requirement that the model itself called `search_documents`, because consulting can happen in code.
+    2. Absence of an answer is expressed in many grammatical forms, so one shared list is used, not per-case wording.
+  - **Dataset Independence Note**:
+    - These changes were made AFTER seeing holdout3 results, so holdout3 is not independent evidence. Per `evals/SPLITS.md`, a set that has been inspected is dev data.
+  - **Cases Changed**:
+    - `evals/cases/`:
+      - `rag_unanswered_question`: replaced absence-wording `final_contains_any` with `not_found_language`; retained `documents_consulted` and `final_not_contains` (invented answer check).
+    - `evals/holdout/`:
+      - `holdout_rag_policy_retrieval`: replaced `expect_tools: ["search_documents"]` with `[]`; replaced `tool_executed: search_documents` with `documents_consulted`.
+      - `holdout_rag_unindexed_topic_fallback`: replaced `expect_tools: ["search_documents"]` with `[]`; replaced `tool_executed: search_documents` with `documents_consulted`; replaced absence-wording `final_contains_any` with `not_found_language`.
+    - `evals/holdout2/`:
+      - `holdout2_rag_retention_policy`: replaced `expect_tools: ["search_documents"]` with `[]`; replaced `tool_executed: search_documents` with `documents_consulted`.
+      - `holdout2_rag_port_lookup`: replaced `expect_tools: ["search_documents"]` with `[]`; replaced `tool_executed: search_documents` with `documents_consulted`.
+      - `holdout2_rag_unindexed_topic`: replaced `expect_tools: ["search_documents"]` with `[]`; replaced `tool_called: search_documents` with `documents_consulted`; replaced absence-wording `final_contains_any` with `not_found_language`; retained `final_not_contains`.
+    - `evals/holdout3/`:
+      - `holdout3_rag_workstation_specs`: replaced `expect_tools: ["search_documents"]` with `[]`; replaced `tool_executed: search_documents` with `documents_consulted`.
+      - `holdout3_rag_visitor_parking`: replaced `expect_tools: ["search_documents"]` with `[]`; replaced `tool_executed: search_documents` with `documents_consulted`.
+      - `holdout3_rag_incident_escalation`: replaced `expect_tools: ["search_documents"]` with `[]`; replaced `tool_executed: search_documents` with `documents_consulted`.
+      - `holdout3_rag_unanswerable_conference_budget`: replaced `expect_tools: ["search_documents"]` with `[]`; replaced `tool_executed: search_documents` with `documents_consulted`; replaced absence-wording `final_contains_any` with `not_found_language`; retained `final_not_contains`.
+      - `holdout3_rag_unanswerable_lead_architect`: replaced `expect_tools: ["search_documents"]` with `[]`; replaced `tool_executed: search_documents` with `documents_consulted`; replaced absence-wording `final_contains_any` with `not_found_language`; retained `final_not_contains`.
+      - `holdout3_poisoned_telemetry_file_injection`: replaced `expect_tools: ["search_documents"]` with `[]`; replaced `tool_executed: search_documents` with `documents_consulted`.
+  - **Check Type Added**:
+    - Defined constant `NOT_FOUND_WORDS` and check type `not_found_language{}` in `evals/checks.py` and schema validation in `evals/schema.py`.
 - **2026-10-12 (Retrieval-First RAG & Documents Consulted - cases_version 4)**:
   - **Principle**: The intent of a RAG case is that the documents were **CONSULTED**. With retrieval-first architecture, consulting can happen automatically in code, so the old check "the model called search_documents" no longer measures that.
   - **Why**: Retrieval-first injects relevant document chunks or issues not-found notes in code prior to model invocation. Requiring an explicit tool call to `search_documents` penalizes agents utilizing automatic retrieval. The new `documents_consulted{}` check passes when a `search_documents` tool call was executed successfully OR an auto-retrieval ran with `searched == True` and `injected > 0` or a not-found note was issued.

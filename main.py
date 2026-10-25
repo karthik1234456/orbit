@@ -179,6 +179,8 @@ def main() -> None:
 
         if doc_index is None:
             print("Warning: Document index unavailable. Continuing without document tools.")
+        elif getattr(doc_index, "migrated", False):
+            print("Document index was rebuilt; run /index again.")
 
         # Initialize Voice components
         recorder = Recorder(device=MIC_DEVICE, max_seconds=MAX_RECORD_SECONDS)

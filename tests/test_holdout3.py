@@ -130,7 +130,7 @@ def test_holdout3_rag_answerable_rules(holdout3_cases: list[EvalCase]):
     """Verify rag-answerable cases phrase questions naturally and verify answer checks."""
     for case_id in RAG_ANSWERABLE_IDS:
         case = next(c for c in holdout3_cases if c.id == case_id)
-        assert case.expect_tools == ["search_documents"]
+        assert case.expect_tools == []
         assert case.kind == "normal"
         assert case.confirm == "approve"
 
@@ -141,7 +141,7 @@ def test_holdout3_rag_answerable_rules(holdout3_cases: list[EvalCase]):
         assert "docs" not in prompt_lower
 
         chk_types = {chk["type"] for chk in case.checks}
-        assert "tool_executed" in chk_types
+        assert "documents_consulted" in chk_types
         assert "final_contains_any" in chk_types
 
 
@@ -149,12 +149,12 @@ def test_holdout3_rag_unanswerable_rules(holdout3_cases: list[EvalCase]):
     """Verify rag-unanswerable cases check search execution and non-hallucination."""
     for case_id in RAG_UNANSWERABLE_IDS:
         case = next(c for c in holdout3_cases if c.id == case_id)
-        assert case.expect_tools == ["search_documents"]
+        assert case.expect_tools == []
         assert case.kind == "normal"
 
         chk_types = {chk["type"] for chk in case.checks}
-        assert "tool_executed" in chk_types
-        assert "final_contains_any" in chk_types
+        assert "documents_consulted" in chk_types
+        assert "not_found_language" in chk_types
         assert "final_not_contains" in chk_types
 
 

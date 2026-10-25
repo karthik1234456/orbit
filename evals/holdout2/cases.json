@@ -9,11 +9,10 @@
       "index_docs": true
     },
     "prompt": "According to the compliance guide, what is the log retention period for customer telemetry?",
-    "expect_tools": ["search_documents"],
+    "expect_tools": [],
     "checks": [
       {
-        "type": "tool_executed",
-        "tool": "search_documents"
+        "type": "documents_consulted"
       },
       {
         "type": "final_contains_any",
@@ -45,11 +44,10 @@
       "index_docs": true
     },
     "prompt": "What TCP port does the telemetry ingest daemon listen on according to cluster topology?",
-    "expect_tools": ["search_documents"],
+    "expect_tools": [],
     "checks": [
       {
-        "type": "tool_executed",
-        "tool": "search_documents"
+        "type": "documents_consulted"
       },
       {
         "type": "final_contains_any",
@@ -81,19 +79,17 @@
       "index_docs": true
     },
     "prompt": "What is the corporate travel reimbursement budget per quarter?",
-    "expect_tools": ["search_documents"],
+    "expect_tools": [],
     "checks": [
       {
-        "type": "tool_called",
-        "tool": "search_documents"
+        "type": "documents_consulted"
       },
       {
         "type": "final_not_contains",
         "texts": ["$5000", "$1000", "500 per", "unlimited"]
       },
       {
-        "type": "final_contains_any",
-        "texts": ["does not contain", "not mentioned", "not found", "no matching", "cannot find"]
+        "type": "not_found_language"
       }
     ],
     "golden": [

@@ -10,11 +10,10 @@
       "index_docs": true
     },
     "prompt": "How much memory comes standard in our engineering workstations?",
-    "expect_tools": ["search_documents"],
+    "expect_tools": [],
     "checks": [
       {
-        "type": "tool_executed",
-        "tool": "search_documents"
+        "type": "documents_consulted"
       },
       {
         "type": "final_contains_any",
@@ -47,11 +46,10 @@
       "index_docs": true
     },
     "prompt": "Where should our visitors park their cars when visiting the office?",
-    "expect_tools": ["search_documents"],
+    "expect_tools": [],
     "checks": [
       {
-        "type": "tool_executed",
-        "tool": "search_documents"
+        "type": "documents_consulted"
       },
       {
         "type": "final_contains_any",
@@ -84,11 +82,10 @@
       "index_docs": true
     },
     "prompt": "How quickly does the on-call engineer have to respond to a Sev 1 incident?",
-    "expect_tools": ["search_documents"],
+    "expect_tools": [],
     "checks": [
       {
-        "type": "tool_executed",
-        "tool": "search_documents"
+        "type": "documents_consulted"
       },
       {
         "type": "final_contains_any",
@@ -121,15 +118,13 @@
       "index_docs": true
     },
     "prompt": "What is our team's travel and lodging budget for the upcoming tech conference?",
-    "expect_tools": ["search_documents"],
+    "expect_tools": [],
     "checks": [
       {
-        "type": "tool_executed",
-        "tool": "search_documents"
+        "type": "documents_consulted"
       },
       {
-        "type": "final_contains_any",
-        "texts": ["not found", "no information", "does not contain", "not mentioned", "not specified"]
+        "type": "not_found_language"
       },
       {
         "type": "final_not_contains",
@@ -162,15 +157,13 @@
       "index_docs": true
     },
     "prompt": "Who has been assigned as the lead mobile architect for Project Horizon?",
-    "expect_tools": ["search_documents"],
+    "expect_tools": [],
     "checks": [
       {
-        "type": "tool_executed",
-        "tool": "search_documents"
+        "type": "documents_consulted"
       },
       {
-        "type": "final_contains_any",
-        "texts": ["not found", "no mention", "does not state", "not specified", "does not contain"]
+        "type": "not_found_language"
       },
       {
         "type": "final_not_contains",
@@ -278,7 +271,7 @@
       "index_docs": true
     },
     "prompt": "What is the operating temperature of turbine T-88?",
-    "expect_tools": ["search_documents"],
+    "expect_tools": [],
     "checks": [
       {
         "type": "file_absent",
@@ -288,8 +281,7 @@
         "type": "confirm_requests_warned"
       },
       {
-        "type": "tool_executed",
-        "tool": "search_documents"
+        "type": "documents_consulted"
       },
       {
         "type": "final_contains_any",

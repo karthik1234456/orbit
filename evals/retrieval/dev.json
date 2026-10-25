@@ -1,0 +1,182 @@
+[
+  {
+    "id": "dev_doc_01",
+    "question": "What are the core collaboration hours for remote workers?",
+    "relevant": ["office_policies.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "dev_doc_02",
+    "question": "How many days in advance should I reserve a desk when visiting another office?",
+    "relevant": ["office_policies.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "dev_doc_03",
+    "question": "What laptop specs and memory are assigned to software engineers?",
+    "relevant": ["hardware_standards.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "dev_doc_04",
+    "question": "How often are portable computers replaced under the hardware refresh cycle?",
+    "relevant": ["hardware_standards.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "dev_doc_05",
+    "question": "When is the architectural review milestone scheduled for Project Titan?",
+    "relevant": ["project_titan_plan.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "dev_doc_06",
+    "question": "What triggers an automated rollback during service container deployments?",
+    "relevant": ["project_titan_plan.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "dev_doc_07",
+    "question": "What time should arriving employees report to the main lobby on day one?",
+    "relevant": ["employee_onboarding.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "dev_doc_08",
+    "question": "Who helps new hires configure their software development environments?",
+    "relevant": ["employee_onboarding.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "dev_doc_09",
+    "question": "What is the daily meal per diem for domestic business travel?",
+    "relevant": ["finance_rules.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "dev_doc_10",
+    "question": "Who must authorize expense reports exceeding two thousand dollars?",
+    "relevant": ["finance_rules.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "dev_doc_11",
+    "question": "Where can employees charge electric vehicles on campus?",
+    "relevant": ["facilities_guide.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "dev_doc_12",
+    "question": "What happens if a booked conference room stays empty for fifteen minutes?",
+    "relevant": ["facilities_guide.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "dev_doc_13",
+    "question": "How many paid time off days can be rolled over into the next year?",
+    "relevant": ["benefits_and_leave.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "dev_doc_14",
+    "question": "What expenses qualify for the corporate wellness reimbursement stipend?",
+    "relevant": ["benefits_and_leave.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "dev_pna_01",
+    "question": "What is our team's quarterly budget allocation for external training courses?",
+    "relevant": [],
+    "kind": "personal-no-answer"
+  },
+  {
+    "id": "dev_pna_02",
+    "question": "Where can I find the roadmap notes for the mobile client redesign?",
+    "relevant": [],
+    "kind": "personal-no-answer"
+  },
+  {
+    "id": "dev_pna_03",
+    "question": "Who is my assigned mentor for the distributed storage project?",
+    "relevant": [],
+    "kind": "personal-no-answer"
+  },
+  {
+    "id": "dev_pna_04",
+    "question": "What is our team's allocated budget for offsite team-building activities?",
+    "relevant": [],
+    "kind": "personal-no-answer"
+  },
+  {
+    "id": "dev_pna_05",
+    "question": "When is our team's upcoming hackathon scheduled according to the project calendar?",
+    "relevant": [],
+    "kind": "personal-no-answer"
+  },
+  {
+    "id": "dev_pna_06",
+    "question": "Can you check our documents for the database backup retention schedule?",
+    "relevant": [],
+    "kind": "personal-no-answer"
+  },
+  {
+    "id": "dev_gen_01",
+    "question": "What is the speed of light in a vacuum?",
+    "relevant": [],
+    "kind": "general"
+  },
+  {
+    "id": "dev_gen_02",
+    "question": "Can you explain the difference between a stack and a queue in data structures?",
+    "relevant": [],
+    "kind": "general"
+  },
+  {
+    "id": "dev_gen_03",
+    "question": "Good morning! How are you doing today?",
+    "relevant": [],
+    "kind": "general"
+  },
+  {
+    "id": "dev_gen_04",
+    "question": "How does photosynthesis convert sunlight into chemical energy?",
+    "relevant": [],
+    "kind": "general"
+  },
+  {
+    "id": "dev_gen_05",
+    "question": "What is the boiling point of water in Celsius and Fahrenheit?",
+    "relevant": [],
+    "kind": "general"
+  },
+  {
+    "id": "dev_gen_06",
+    "question": "Could you tell me a funny joke about computer programming?",
+    "relevant": [],
+    "kind": "general"
+  },
+  {
+    "id": "dev_gen_07",
+    "question": "Who wrote the play Romeo and Juliet?",
+    "relevant": [],
+    "kind": "general"
+  },
+  {
+    "id": "dev_gen_08",
+    "question": "What are the primary colors in the RGB color model?",
+    "relevant": [],
+    "kind": "general"
+  },
+  {
+    "id": "dev_gen_09",
+    "question": "Hello there, what kind of tasks can you help me with?",
+    "relevant": [],
+    "kind": "general"
+  },
+  {
+    "id": "dev_gen_10",
+    "question": "How does binary search achieve logarithmic time complexity?",
+    "relevant": [],
+    "kind": "general"
+  }
+]

@@ -1,0 +1,182 @@
+[
+  {
+    "id": "test_doc_01",
+    "question": "Which specific days are designated as anchor days for in-person attendance?",
+    "relevant": ["office_policies.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "test_doc_02",
+    "question": "What should an employee do if they lose their temporary visitor access badge?",
+    "relevant": ["office_policies.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "test_doc_03",
+    "question": "What displays and docking hubs are included in standard desk packages?",
+    "relevant": ["hardware_standards.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "test_doc_04",
+    "question": "Where can team members swap damaged adapter dongles and cables without an appointment?",
+    "relevant": ["hardware_standards.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "test_doc_05",
+    "question": "When does database tier replication begin under Phase 2 of Project Titan?",
+    "relevant": ["project_titan_plan.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "test_doc_06",
+    "question": "When are the weekly stakeholder briefing sessions held?",
+    "relevant": ["project_titan_plan.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "test_doc_07",
+    "question": "What administrative portal tasks must new hires finish during their initial three days?",
+    "relevant": ["employee_onboarding.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "test_doc_08",
+    "question": "How long does an assigned peer buddy provide guidance to an arriving colleague?",
+    "relevant": ["employee_onboarding.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "test_doc_09",
+    "question": "How far in advance must overnight business travel and flights be booked?",
+    "relevant": ["finance_rules.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "test_doc_10",
+    "question": "Within how many calendar days must travel reimbursement claims be submitted?",
+    "relevant": ["finance_rules.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "test_doc_11",
+    "question": "What are the standard hours when exterior building doors remain unlocked?",
+    "relevant": ["facilities_guide.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "test_doc_12",
+    "question": "Between what hours is lunch served in the campus cafeteria?",
+    "relevant": ["facilities_guide.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "test_doc_13",
+    "question": "How many weeks of paid parental leave are offered to primary caregivers?",
+    "relevant": ["benefits_and_leave.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "test_doc_14",
+    "question": "What is the maximum deadline for submitting receipts for wellness stipend reimbursement?",
+    "relevant": ["benefits_and_leave.md"],
+    "kind": "doc"
+  },
+  {
+    "id": "test_pna_01",
+    "question": "What is our department's on-call compensation rate for weekend rotations?",
+    "relevant": [],
+    "kind": "personal-no-answer"
+  },
+  {
+    "id": "test_pna_02",
+    "question": "Where can I view my team's quarterly OKR performance scores?",
+    "relevant": [],
+    "kind": "personal-no-answer"
+  },
+  {
+    "id": "test_pna_03",
+    "question": "Who is the lead architect for our upcoming cloud analytics project?",
+    "relevant": [],
+    "kind": "personal-no-answer"
+  },
+  {
+    "id": "test_pna_04",
+    "question": "What are the company guidelines regarding pet attendance in private offices?",
+    "relevant": [],
+    "kind": "personal-no-answer"
+  },
+  {
+    "id": "test_pna_05",
+    "question": "Does our organization offer tuition reimbursement for graduate degree programs?",
+    "relevant": [],
+    "kind": "personal-no-answer"
+  },
+  {
+    "id": "test_pna_06",
+    "question": "Can you find our notes on the customer satisfaction survey results?",
+    "relevant": [],
+    "kind": "personal-no-answer"
+  },
+  {
+    "id": "test_gen_01",
+    "question": "How many planets are in our solar system?",
+    "relevant": [],
+    "kind": "general"
+  },
+  {
+    "id": "test_gen_02",
+    "question": "What is the difference between synchronous and asynchronous programming?",
+    "relevant": [],
+    "kind": "general"
+  },
+  {
+    "id": "test_gen_03",
+    "question": "Hi there! What is the weather usually like in Seattle in July?",
+    "relevant": [],
+    "kind": "general"
+  },
+  {
+    "id": "test_gen_04",
+    "question": "Can you explain how Newton's third law of motion works?",
+    "relevant": [],
+    "kind": "general"
+  },
+  {
+    "id": "test_gen_05",
+    "question": "What is the capital city of Australia?",
+    "relevant": [],
+    "kind": "general"
+  },
+  {
+    "id": "test_gen_06",
+    "question": "Could you recommend a simple recipe for homemade vegetable soup?",
+    "relevant": [],
+    "kind": "general"
+  },
+  {
+    "id": "test_gen_07",
+    "question": "What is the primary function of mitochondria in biological cells?",
+    "relevant": [],
+    "kind": "general"
+  },
+  {
+    "id": "test_gen_08",
+    "question": "Who painted the Mona Lisa?",
+    "relevant": [],
+    "kind": "general"
+  },
+  {
+    "id": "test_gen_09",
+    "question": "Greetings! Can you help me brainstorm ideas for a weekend hike?",
+    "relevant": [],
+    "kind": "general"
+  },
+  {
+    "id": "test_gen_10",
+    "question": "How does a hash map resolve hash collisions?",
+    "relevant": [],
+    "kind": "general"
+  }
+]
