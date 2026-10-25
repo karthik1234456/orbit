@@ -1,3 +1,3 @@
 """Version definition for ORBIT."""
 
-VERSION = "1.2.1"
+VERSION = "2.1.2"

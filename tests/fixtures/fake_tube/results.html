@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Results - FakeTube</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 0;
+            padding: 20px;
+            min-height: 3000px;
+            background-color: #f9f9f9;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #ddd;
+        }
+        a {
+            display: inline-block;
+            color: #065fd4;
+            text-decoration: none;
+            margin: 8px 0;
+            font-size: 16px;
+        }
+        .video-item {
+            display: block;
+            margin: 16px 0;
+            padding: 10px;
+            background: #fff;
+            border: 1px solid #eee;
+            width: 400px;
+            height: 60px;
+        }
+        .ad-item {
+            background: #fff8e1;
+            border: 1px dashed #ffa000;
+        }
+        .shelf {
+            margin: 20px 0;
+            padding: 10px;
+            background: #f1f8e9;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <span class="logo">FakeTube Search Results</span>
+        <div class="auth-bar">
+            <a href="/signin" id="signin-link">Sign in</a>
+        </div>
+    </div>
+
+    <div id="contents" class="ytd-section-list-renderer">
+        <!-- Promoted ad block (must be ignored by click_result) -->
+        <div class="promoted-video ytd-promoted-video-renderer video-item ad-item">
+            <span class="badge">Ad</span>
+            <a href="/watch?v=ad_fake" title="Sponsored Commercial Video">Sponsored Commercial Video</a>
+        </div>
+
+        <!-- Shorts shelf (must be ignored by click_result) -->
+        <div class="ytd-reel-shelf-renderer shelf">
+            <h3>Shorts</h3>
+            <a href="/shorts/shelf_short_1" title="Short Viral Video 1">Short Viral Video 1</a>
+            <a href="/shorts/shelf_short_2" title="Short Viral Video 2">Short Viral Video 2</a>
+        </div>
+
+        <!-- Six standard video results with /watch?v= hrefs -->
+        <div class="video-item">
+            <a href="/watch?v=vid1" title="First Video Result">First Video Result</a>
+        </div>
+        <div class="video-item">
+            <a href="/watch?v=vid2" title="Second Video Result">Second Video Result</a>
+        </div>
+        <div class="video-item">
+            <a href="/watch?v=vid3" title="Third Video Result">Third Video Result</a>
+        </div>
+        <div class="video-item">
+            <a href="/watch?v=vid4" title="Fourth Video Result">Fourth Video Result</a>
+        </div>
+        <div class="video-item">
+            <a href="/watch?v=vid5" title="Fifth Video Result">Fifth Video Result</a>
+        </div>
+        <div class="video-item">
+            <a href="/watch?v=vid6" title="Sixth Video Result">Sixth Video Result</a>
+        </div>
+    </div>
+    <div class="spacer" style="height: 300vh; min-height: 300vh;"></div>
+</body>
+</html>

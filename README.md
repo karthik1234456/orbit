@@ -173,6 +173,45 @@ python -m ui
 
 ---
 
+## Browser Control (Optional)
+
+ORBIT includes optional model-driven browser control for navigating and interacting with approved websites (YouTube, Google, Wikipedia, GitHub).
+
+### Installation & Setup
+
+1. **Install browser dependencies**:
+   ```powershell
+   pip install -r requirements-browser.txt
+   ```
+
+2. **Chrome Channel vs. Playwright Chromium**:
+   - By default, ORBIT uses your installed Google Chrome via `BROWSER_CHANNEL="chrome"`.
+   - If you do not have Google Chrome installed or prefer an isolated Chromium build, install Playwright's browser binary:
+     ```powershell
+     playwright install chromium
+     ```
+     And set `BROWSER_CHANNEL=` (empty string) in your `.env` file or environment.
+
+3. **Separate Browser Profile & Cookie Storage**:
+   - ORBIT operates inside a dedicated persistent browser profile stored at `data/browser_profile/`.
+   - Cookies, cached assets, and storage reside strictly within `data/browser_profile/` and are isolated from your everyday personal browser.
+   - The `data/` directory is git-ignored to prevent accidental exposure or commitment of session cookies and profile data.
+
+4. **Interactive Site Allowlist**:
+   - Interactive automation tools (`browser_click_result`, `browser_media`, `browser_scroll`, `browser_history`, `browser_read_page`) are strictly restricted at execution time to approved public domains:
+     - **YouTube** (`youtube.com`)
+     - **Google** (`google.com`)
+     - **Wikipedia** (`wikipedia.org`)
+     - **GitHub** (`github.com`)
+   - Sensitive web portals such as Gmail (`mail.google.com`) and WhatsApp Web (`web.whatsapp.com`) are explicitly barred from interactive automation.
+
+5. **Operational Limits & Caveats**:
+   - **Video Advertisements**: Pre-roll or mid-roll ads (e.g. on YouTube) can delay playback or intercept media controls before the main content starts.
+   - **Layout Evolution**: Site layouts change over time. If search result clicking fails on updated pages, adjust the selector list in `config/browser_sites.py`.
+   - **Automated Sign-In Blocks**: Major services (including Google) may detect automated browser drivers and refuse interactive sign-in attempts ("This browser or app may not be secure").
+
+---
+
 ## Safety Model
 
 ORBIT operates under a strict, layered security model designed to defend against malicious input, unverified commands, and prompt injection:

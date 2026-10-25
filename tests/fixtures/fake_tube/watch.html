@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Watch - FakeTube</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 0;
+            padding: 20px;
+            min-height: 3000px;
+            background-color: #f9f9f9;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #ddd;
+            margin-bottom: 20px;
+        }
+        .container {
+            display: flex;
+            gap: 24px;
+        }
+        .primary {
+            flex: 2;
+        }
+        .secondary {
+            flex: 1;
+            padding: 10px;
+            background: #fff;
+            border: 1px solid #eee;
+        }
+        a {
+            display: inline-block;
+            color: #065fd4;
+            text-decoration: none;
+            margin: 6px 0;
+            font-size: 15px;
+        }
+        .rec-item {
+            display: block;
+            margin: 12px 0;
+            padding: 8px;
+            background: #fafafa;
+            border-bottom: 1px solid #eee;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <span class="logo">FakeTube Watch</span>
+        <div class="auth-bar">
+            <a href="/signin" id="signin-link">Sign in</a>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Primary column: Video Player -->
+        <div class="primary" id="primary">
+            <h2>Active Video Player</h2>
+            <video id="player" controls width="480" height="270"
+                   src="data:video/mp4;base64,AAAAHGZ0eXBtcDQyAAAAAG1wNDJpc29tYXZjMQAAAAhmcmVlAAAACG1kYXQ="
+                   muted>
+            </video>
+            <p>Playing FakeTube video content...</p>
+        </div>
+
+        <!-- Secondary column: Recommended videos -->
+        <div class="secondary" id="secondary">
+            <h3>Up Next / Recommended</h3>
+            <div class="rec-item">
+                <a href="/watch?v=rec1" title="First Recommended Video">First Recommended Video</a>
+            </div>
+            <div class="rec-item">
+                <a href="/watch?v=rec2" title="Second Recommended Video">Second Recommended Video</a>
+            </div>
+            <div class="rec-item">
+                <a href="/watch?v=rec3" title="Third Recommended Video">Third Recommended Video</a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Ensure standard HTMLMediaElement state updates in test environments
+        (function() {
+            const v = document.querySelector('video');
+            if (v) {
+                let _paused = true;
+                let _muted = true;
+                v.play = function() {
+                    _paused = false;
+                    return Promise.resolve();
+                };
+                v.pause = function() {
+                    _paused = true;
+                };
+                Object.defineProperty(v, 'paused', {
+                    get: function() { return _paused; },
+                    set: function(val) { _paused = Boolean(val); },
+                    configurable: true
+                });
+                Object.defineProperty(v, 'muted', {
+                    get: function() { return _muted; },
+                    set: function(val) { _muted = Boolean(val); },
+                    configurable: true
+                });
+            }
+        })();
+    </script>
+    <div class="spacer" style="height: 300vh; min-height: 300vh;"></div>
+</body>
+</html>

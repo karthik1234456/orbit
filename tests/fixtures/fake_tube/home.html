@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>FakeTube</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 0;
+            padding: 20px;
+            min-height: 2500px;
+            background-color: #f9f9f9;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #ddd;
+        }
+        a {
+            display: inline-block;
+            color: #065fd4;
+            text-decoration: none;
+            margin: 8px 0;
+            font-size: 16px;
+        }
+        .video-card {
+            display: block;
+            margin: 16px 0;
+            padding: 10px;
+            background: #fff;
+            border: 1px solid #eee;
+            width: 350px;
+            height: 60px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <span class="logo">FakeTube Home</span>
+        <div class="auth-bar">
+            <a href="/signin" id="signin-link">Sign in</a>
+        </div>
+    </div>
+
+    <div id="contents" class="ytd-rich-grid-renderer">
+        <div class="video-card">
+            <a href="/watch?v=home_vid1" title="Home Trending Video 1">Home Trending Video 1</a>
+        </div>
+        <div class="video-card">
+            <a href="/watch?v=home_vid2" title="Home Trending Video 2">Home Trending Video 2</a>
+        </div>
+        <div class="video-card">
+            <a href="/watch?v=home_vid3" title="Home Trending Video 3">Home Trending Video 3</a>
+        </div>
+    </div>
+    <div class="spacer" style="height: 300vh; min-height: 300vh;"></div>
+</body>
+</html>

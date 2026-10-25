@@ -48,8 +48,38 @@ def test_register_all_tools_into_fresh_registry(tmp_path: Path):
     # 1. No duplicate names
     assert len(tool_names) == len(set(tool_names)), f"Duplicate tool names detected: {tool_names}"
 
-    # Verify expected total tools count (4 builtin + 5 file + 3 app + 3 browser + 1 vscode + 1 open_workspace_folder = 17)
-    assert len(tools) == 17
+    core_tools = {
+        "get_current_time",
+        "calculate",
+        "system_info",
+        "write_note",
+        "list_files",
+        "read_file",
+        "create_file",
+        "create_folder",
+        "move_file",
+        "open_application",
+        "close_application",
+        "list_allowed_apps",
+        "open_website",
+        "search_web",
+        "search_site",
+        "open_in_vscode",
+        "open_workspace_folder",
+    }
+    browser_tools = {
+        "browser_click_result",
+        "browser_media",
+        "browser_scroll",
+        "browser_history",
+        "browser_read_page",
+        "browser_close",
+    }
+    from config import settings
+    if settings.browser_enabled():
+        assert set(tool_names) == core_tools | browser_tools
+    else:
+        assert set(tool_names) == core_tools
 
     # Verify open_workspace_folder is present with correct attributes
     assert "open_workspace_folder" in tool_names
@@ -84,9 +114,30 @@ def test_main_system_prompt_instructions():
 
 def test_startup_message_contains_version():
     """Verify that STARTUP_MESSAGE in main.py contains the single VERSION constant."""
-    assert VERSION == "1.2.1"
+    assert VERSION == "2.1.2"
     assert VERSION in STARTUP_MESSAGE
     assert f"ORBIT v{VERSION}" in STARTUP_MESSAGE
+
+
+def test_no_stale_version_strings_in_non_test_source():
+    """Verify that neither '1.2.1' nor 'v1.2' remains in any non-test source files."""
+    repo_root = Path(__file__).resolve().parent.parent
+    stale_patterns = ["1.2.1", "v1.2"]
+    offending: list[str] = []
+
+    for path in repo_root.rglob("*.py"):
+        parts = path.parts
+        if "tests" in parts or ".venv" in parts or "venv" in parts or ".git" in parts or "__pycache__" in parts:
+            continue
+        try:
+            content = path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        for p in stale_patterns:
+            if p in content:
+                offending.append(f"{path.relative_to(repo_root)} contains '{p}'")
+
+    assert not offending, f"Stale version strings found in source: {offending}"
 
 
 def test_open_workspace_folder_success(tmp_path: Path, monkeypatch):

@@ -120,6 +120,15 @@ def render_markdown(
     else:
         session_context_str = "off"
     lines.append(f"- **SESSION_CONTEXT**: {session_context_str}")
+    browser_enabled_val = meta.get("BROWSER_ENABLED")
+    if browser_enabled_val is not None:
+        if isinstance(browser_enabled_val, str):
+            browser_enabled_str = "on" if browser_enabled_val.strip().lower() in ("1", "true", "yes", "on") else "off"
+        else:
+            browser_enabled_str = "on" if bool(browser_enabled_val) else "off"
+    else:
+        browser_enabled_str = "off"
+    lines.append(f"- **BROWSER_ENABLED**: {browser_enabled_str}")
     if is_holdout:
         lines.append("- **Dataset**: Holdout")
     if provider == "ollama":

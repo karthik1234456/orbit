@@ -63,6 +63,18 @@ PROBE_PHRASES: list[tuple[str, list[str]]] = [
     ("what is the capital of france", ["none"]),
 ]
 
+BROWSER_PROBE_PHRASES: list[tuple[str, list[str]]] = [
+    ("scroll down", ["browser_scroll"]),
+    ("pause the video", ["browser_media"]),
+    ("play the first video", ["browser_click_result"]),
+    ("mute", ["browser_media"]),
+    ("go back", ["browser_history"]),
+    ("open youtube and play free fire videos", ["open_website", "search_site"]),
+    ("play lofi music on youtube", ["search_site"]),
+    ("what's on this page", ["browser_read_page"]),
+    ("close the browser", ["browser_close"]),
+]
+
 
 @dataclass
 class SingleRunResult:
@@ -115,6 +127,7 @@ class ProbeReport:
     total_pass_count: int
     total_count: int
     output_path: Optional[Path] = None
+    browser_enabled: bool = False
 
 
 def get_git_info() -> str:
@@ -142,7 +155,10 @@ def get_git_info() -> str:
     return commit
 
 
-def build_probe_registry(workspace_path: Union[str, Path]) -> ToolRegistry:
+def build_probe_registry(
+    workspace_path: Union[str, Path],
+    browser_enabled: bool = False,
+) -> ToolRegistry:
     """Build ToolRegistry with standard desktop, file, app, memory, and doc tools."""
     paths = AppPaths.under(workspace_path)
 
@@ -150,7 +166,15 @@ def build_probe_registry(workspace_path: Union[str, Path]) -> ToolRegistry:
         def generate(self, messages, tools=None, on_delta=None, should_stop=None) -> LLMResponse:
             return LLMResponse(text="")
 
-    app = build_app(provider=_DummyProvider(), paths=paths)
+    if browser_enabled:
+        from browser.backend import FakeBackend
+        app = build_app(
+            provider=_DummyProvider(),
+            paths=paths,
+            browser_backend_factory=lambda: FakeBackend(),
+        )
+    else:
+        app = build_app(provider=_DummyProvider(), paths=paths, browser_controller=None)
     return app.registry
 
 
@@ -275,6 +299,7 @@ def format_markdown_report(report: ProbeReport) -> str:
     lines.append(f"- **Model**: `{report.model}`")
     lines.append(f"- **Temperature**: `{report.temperature}`")
     lines.append(f"- **RAG_AUTO**: `False`")
+    lines.append(f"- **BROWSER_ENABLED**: `{'on' if report.browser_enabled else 'off'}`")
     lines.append(f"- **Seeds Evaluated**: `{report.seeds}`")
     lines.append(f"- **System Prompt Source**: `{report.system_prompt_source}`\n")
     lines.append(
@@ -359,6 +384,7 @@ def run_intent_probe(
     system_prompt_source: str = "default",
     write_report: bool = True,
     output_path: Optional[Union[Path, str]] = None,
+    browser_enabled: bool = False,
 ) -> ProbeReport:
     """Execute intent probe across phrases and seeds, recording dry-run tool calls and summary metrics."""
     phrase_summaries: list[PhraseSummary] = []
@@ -434,6 +460,7 @@ def run_intent_probe(
         total_pass_count=total_pass_count,
         total_count=total_count,
         output_path=dest_file,
+        browser_enabled=browser_enabled,
     )
 
     if write_report and dest_file is not None:
@@ -478,6 +505,12 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         default=None,
         help="Explicit output path for markdown report (default: evals/results/intent-probe-<label>-<timestamp>.md).",
     )
+    parser.add_argument(
+        "--browser",
+        action="store_true",
+        default=False,
+        help="Enable browser automation tools using FakeBackend (dry run).",
+    )
     return parser.parse_args(argv)
 
 
@@ -506,8 +539,16 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     model = args.model or getattr(settings, "OLLAMA_MODEL", "qwen3:8b")
 
+    if args.browser:
+        os.environ["BROWSER_ENABLED"] = "1"
+        browser_enabled = True
+    else:
+        if "BROWSER_ENABLED" not in os.environ:
+            os.environ["BROWSER_ENABLED"] = "0"
+        browser_enabled = os.getenv("BROWSER_ENABLED", "0").lower() in ("1", "true", "yes", "on")
+
     with tempfile.TemporaryDirectory() as tmp_dir:
-        registry = build_probe_registry(tmp_dir)
+        registry = build_probe_registry(tmp_dir, browser_enabled=browser_enabled)
 
         def provider_factory(seed: int) -> LLMProvider:
             return OllamaProvider(
@@ -517,12 +558,15 @@ def main(argv: Optional[list[str]] = None) -> int:
                 think=False,
             )
 
+        active_phrases = PROBE_PHRASES + (BROWSER_PROBE_PHRASES if browser_enabled else [])
+
         print("=" * 70)
         print("ORBIT INTENT PROBE")
         print("Note: The probe is a dev tool (not a held-out set)")
         print(f"Model: {model} | Temp: 0.2 | Seeds: {seeds}")
         print(f"System prompt: {prompt_source}")
-        print(f"Phrases: {len(PROBE_PHRASES)} | Total turns: {len(PROBE_PHRASES) * len(seeds)}")
+        print(f"Browser tools: {'ENABLED (FakeBackend)' if browser_enabled else 'DISABLED'}")
+        print(f"Phrases: {len(active_phrases)} | Total turns: {len(active_phrases) * len(seeds)}")
         print("=" * 70)
 
         def on_single_result(res: SingleRunResult) -> None:
@@ -536,7 +580,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             provider_factory=provider_factory,
             registry=registry,
             system_prompt=system_prompt,
-            phrases=PROBE_PHRASES,
+            phrases=active_phrases,
             seeds=seeds,
             on_single_result=on_single_result,
             label=args.label,
@@ -544,6 +588,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             system_prompt_source=prompt_source,
             write_report=True,
             output_path=args.output,
+            browser_enabled=browser_enabled,
         )
 
         print("\n" + "=" * 70)

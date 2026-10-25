@@ -125,6 +125,16 @@ def test_each_tool_maps_to_the_right_fields():
     assert state.last_folder == "docs"
     assert state.last_tool == "open_workspace_folder"
 
+    # 7. browser_click_result -> only updates last_tool and updated_at
+    state.update_from_tool("browser_click_result", {"n": 4}, "success")
+    assert state.last_tool == "browser_click_result"
+    assert state.last_folder == "docs"
+
+    # 8. browser_media -> only updates last_tool and updated_at
+    state.update_from_tool("browser_media", {"action": "play"}, "success")
+    assert state.last_tool == "browser_media"
+    assert state.last_folder == "docs"
+
 
 def test_ttl_expiry_gives_empty_block_injectable_clock():
     """Verify that TTL expiry renders the session state empty and context_block() empty."""

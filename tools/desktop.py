@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import subprocess
-from typing import Any, Mapping, Optional, Union
+from typing import Any, Callable, Mapping, Optional, Union
 
+from config import settings
 from security.permissions import PermissionLevel
 from tools.apps import make_app_tools
-from tools.browser import make_browser_tools
+from tools.browser import make_browser_tools as make_classic_browser_tools
+from tools.browser_tools import make_browser_tools as make_controller_browser_tools
 from tools.files import make_file_tools, resolve_safe
 from tools.registry import Tool, ToolRegistry
 from tools.vscode import make_vscode_tool
@@ -80,12 +83,22 @@ def make_open_workspace_folder_tool(workspace_root: Union[str, Path]) -> Tool:
     )
 
 
+_OMITTED = object()
+
+
+def is_browser_enabled() -> bool:
+    """Return True if managed browser automation is enabled via environment or settings."""
+    return settings.browser_enabled()
+
+
 def register_desktop_tools(
     registry: ToolRegistry,
     workspace_root: Union[str, Path],
     allowed_apps: Mapping[str, Any],
     sites: Optional[Mapping[str, Any]] = None,
-) -> None:
+    browser_controller: Any = _OMITTED,
+    browser_backend_factory: Optional[Callable[[], Any]] = None,
+) -> Optional[Any]:
     """Create workspace directory if missing, instantiate file, app, browser, VS Code, and workspace folder tools, and register them."""
     root = Path(workspace_root).resolve()
     # Create the workspace folder if missing
@@ -93,10 +106,28 @@ def register_desktop_tools(
 
     file_tools = make_file_tools(root)
     app_tools = make_app_tools(allowed_apps)
-    browser_tools = make_browser_tools(sites)
+
+    if browser_controller is _OMITTED:
+        if browser_backend_factory is not None or is_browser_enabled():
+            from browser.controller import BrowserController
+            controller = BrowserController(backend_factory=browser_backend_factory)
+            browser_tools = make_controller_browser_tools(controller, sites=sites)
+        else:
+            controller = None
+            browser_tools = make_classic_browser_tools(sites=sites)
+    elif browser_controller is not None:
+        controller = browser_controller
+        browser_tools = make_controller_browser_tools(controller, sites=sites)
+    else:
+        # Caller passed browser_controller=None explicitly -> "no browser"
+        controller = None
+        browser_tools = make_classic_browser_tools(sites=sites)
+
     vscode_tool = make_vscode_tool(root)
     folder_tool = make_open_workspace_folder_tool(root)
 
     for tool in file_tools + app_tools + browser_tools + [vscode_tool, folder_tool]:
         registry.register(tool)
+
+    return controller
 

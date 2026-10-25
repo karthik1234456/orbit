@@ -262,5 +262,9 @@ class SessionState:
             folder = str(args.get("path", "")).strip()
             self._last_folder = sanitize_context_value(folder, max_chars=80)
 
+        elif tool_name in ("browser_click_result", "browser_media"):
+            # Interaction tools intentionally update only last_tool and updated_at
+            pass
+
         self._last_tool = tool_name
         self.updated_at = now

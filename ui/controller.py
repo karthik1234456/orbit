@@ -362,3 +362,10 @@ class ChatController:
         if worker is not None and worker.is_alive():
             if threading.current_thread() != worker:
                 worker.join(timeout=2.0)
+        with self._lock:
+            app = self.app
+        if app is not None and hasattr(app, "shutdown") and callable(app.shutdown):
+            try:
+                app.shutdown()
+            except Exception:
+                pass

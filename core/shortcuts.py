@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Union
 
 _DISALLOWED_CHARS = set(";&|`$><")
 
@@ -23,13 +23,26 @@ class ToolCallSpec:
     id: Optional[str] = None
 
 
+@dataclass
+class ShortcutPlan:
+    """Specification for a multi-step shortcut execution chain."""
+
+    steps: list[ToolCallSpec]
+    site: str = ""
+    query: str = ""
+    is_play: bool = False
+    ordinal: int = 1
+    style: str = ""
+
+
 def parse_shortcut(
     text: str,
     allowed_apps: Optional[Mapping[str, Any]] = None,
     sites: Optional[Mapping[str, Any]] = None,
     state: Optional[Any] = None,
-) -> Optional[ToolCallSpec]:
-    """Parse user text into a ToolCallSpec if it matches a strict shortcut pattern.
+    browser_enabled: bool = False,
+) -> Optional[Union[ToolCallSpec, ShortcutPlan]]:
+    """Parse user text into a ToolCallSpec or ShortcutPlan if it matches a strict shortcut pattern.
 
     Returns None for any text that does not strictly match the whitelisted patterns,
     allowing the message to fall through to the model.
@@ -72,6 +85,279 @@ def parse_shortcut(
 
     if not cleaned:
         return None
+
+    if browser_enabled:
+        if sites is None:
+            from config.sites import SITES
+            sites = SITES
+        from config.sites import resolve_site
+        clean_sites_map = {k.lower(): k for k in sites}
+
+        # Pattern B: Media controls (bare)
+        # "pause" or "pause the video", "play" or "resume" or "play the video" (bare), "mute", "unmute"
+        if re.match(r"^(?:pause|pause\s+the\s+video)$", cleaned, re.IGNORECASE):
+            return ToolCallSpec(
+                name="browser_media",
+                args={"action": "pause"},
+                target_name="pause",
+            )
+
+        if re.match(r"^(?:play|resume|play\s+the\s+video)$", cleaned, re.IGNORECASE):
+            return ToolCallSpec(
+                name="browser_media",
+                args={"action": "play"},
+                target_name="play",
+            )
+
+        if re.match(r"^mute$", cleaned, re.IGNORECASE):
+            return ToolCallSpec(
+                name="browser_media",
+                args={"action": "mute"},
+                target_name="mute",
+            )
+
+        if re.match(r"^unmute$", cleaned, re.IGNORECASE):
+            return ToolCallSpec(
+                name="browser_media",
+                args={"action": "unmute"},
+                target_name="unmute",
+            )
+
+        # Pattern C: History controls
+        # "go back", "go forward", "reload" or "refresh"
+        if re.match(r"^go\s+back$", cleaned, re.IGNORECASE):
+            return ToolCallSpec(
+                name="browser_history",
+                args={"action": "back"},
+                target_name="go back",
+            )
+
+        if re.match(r"^go\s+forward$", cleaned, re.IGNORECASE):
+            return ToolCallSpec(
+                name="browser_history",
+                args={"action": "forward"},
+                target_name="go forward",
+            )
+
+        if re.match(r"^(?:reload|refresh)$", cleaned, re.IGNORECASE):
+            return ToolCallSpec(
+                name="browser_history",
+                args={"action": "reload"},
+                target_name="reload",
+            )
+
+        # Pattern A: Scrolling
+        # "scroll down|up", "scroll to the top|bottom", "scroll down N screens|pages" (1-5), and bare "down"|"up"
+        if re.match(r"^(?:down|up)$", cleaned, re.IGNORECASE):
+            d = cleaned.lower()
+            return ToolCallSpec(
+                name="browser_scroll",
+                args={"direction": d, "screens": 1},
+                target_name=f"scroll {d}",
+            )
+
+        scroll_dir_match = re.match(r"^scroll\s+(down|up)$", cleaned, re.IGNORECASE)
+        if scroll_dir_match:
+            d = scroll_dir_match.group(1).lower()
+            return ToolCallSpec(
+                name="browser_scroll",
+                args={"direction": d, "screens": 1},
+                target_name=f"scroll {d}",
+            )
+
+        scroll_to_match = re.match(r"^scroll\s+to\s+(?:the\s+)?(top|bottom)$", cleaned, re.IGNORECASE)
+        if scroll_to_match:
+            d = scroll_to_match.group(1).lower()
+            return ToolCallSpec(
+                name="browser_scroll",
+                args={"direction": d, "screens": 1},
+                target_name=f"scroll to {d}",
+            )
+
+        scroll_n_match = re.match(r"^scroll\s+(down|up)\s+(\w+)\s+(?:screens?|pages?)$", cleaned, re.IGNORECASE)
+        if scroll_n_match:
+            d = scroll_n_match.group(1).lower()
+            n_str = scroll_n_match.group(2).lower()
+            n_map = {
+                "1": 1, "2": 2, "3": 3, "4": 4, "5": 5,
+                "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+            }
+            if n_str in n_map:
+                sc = n_map[n_str]
+                return ToolCallSpec(
+                    name="browser_scroll",
+                    args={"direction": d, "screens": sc},
+                    target_name=f"scroll {d} {sc} screens",
+                )
+            return None
+
+        # Pattern D: Click Result & Ordinal Search Chains
+        # "play|open|click (the)? <ordinal> (video|result|one)? [of|for|from]? <query> [on|in <site>]"
+        ord_token_pattern = r"(10th|[1-9](?:st|nd|rd|th)?|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|top)"
+        num_token_pattern = r"(10th|10|[1-9](?:st|nd|rd|th)?|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|top|one|two|three|four|five|six|seven|eight|nine|ten)"
+        click_ord_match = re.match(
+            rf"^(?:play|open|click)(?:\s+the)?\s+{ord_token_pattern}(?:\s+(?:video|result|one))?(?:\s+(.*))?$",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if not click_ord_match:
+            click_ord_match = re.match(
+                rf"^(?:play|open|click)\s+number\s+{num_token_pattern}(?:\s+(.*))?$",
+                cleaned,
+                re.IGNORECASE,
+            )
+
+        if click_ord_match:
+            ord_map = {
+                "first": 1, "1st": 1, "top": 1, "one": 1, "1": 1,
+                "second": 2, "2nd": 2, "two": 2, "2": 2,
+                "third": 3, "3rd": 3, "three": 3, "3": 3,
+                "fourth": 4, "4th": 4, "four": 4, "4": 4,
+                "fifth": 5, "5th": 5, "five": 5, "5": 5,
+                "sixth": 6, "6th": 6, "six": 6, "6": 6,
+                "seventh": 7, "7th": 7, "seven": 7, "7": 7,
+                "eighth": 8, "8th": 8, "eight": 8, "8": 8,
+                "ninth": 9, "9th": 9, "nine": 9, "9": 9,
+                "tenth": 10, "10th": 10, "ten": 10, "10": 10,
+            }
+            n = ord_map[click_ord_match.group(1).lower()]
+            rem = (click_ord_match.group(2) or "").strip()
+
+            if not rem:
+                return ToolCallSpec(
+                    name="browser_click_result",
+                    args={"n": n},
+                    target_name=f"result #{n}",
+                )
+
+            if rem.lower() in ("of", "for", "from"):
+                return None
+
+            conn_match = re.match(r"^(?:of|for|from)\s+(.+)$", rem, re.IGNORECASE)
+            if conn_match:
+                rem = conn_match.group(1).strip()
+
+            if not rem:
+                return None
+
+            target_site = None
+            query_candidate = rem
+
+            site_suffix_match = re.search(r"\s+(?:on|in)\s+([a-zA-Z0-9_-]+)$", rem, re.IGNORECASE)
+            if site_suffix_match:
+                cand_site = site_suffix_match.group(1).strip()
+                resolved_s = resolve_site(cand_site) or cand_site.lower()
+                if resolved_s in clean_sites_map:
+                    s_cfg = sites.get(resolved_s)
+                    if isinstance(s_cfg, dict) and s_cfg.get("search"):
+                        target_site = resolved_s
+                        query_candidate = rem[: site_suffix_match.start()].strip()
+
+            if not query_candidate:
+                return None
+
+            words = query_candidate.split()
+            if not (1 <= len(words) <= 8):
+                return None
+
+            if target_site is None:
+                last_s = getattr(state, "last_site", None) if state else None
+                if last_s:
+                    from config.browser_sites import INTERACTIVE_SITES
+                    resolved_last = resolve_site(str(last_s)) or str(last_s).lower()
+                    if resolved_last in INTERACTIVE_SITES and resolved_last in clean_sites_map:
+                        s_cfg = sites.get(resolved_last)
+                        if isinstance(s_cfg, dict) and s_cfg.get("search"):
+                            target_site = resolved_last
+
+            if target_site is None:
+                target_site = "youtube"
+
+            site_entry = sites.get(target_site)
+            if not (isinstance(site_entry, dict) and site_entry.get("search")):
+                return None
+
+            steps = [
+                ToolCallSpec(name="search_site", args={"site": target_site, "query": query_candidate}, target_name=target_site),
+                ToolCallSpec(name="browser_click_result", args={"n": n}, target_name=f"result #{n}"),
+                ToolCallSpec(name="browser_media", args={"action": "play"}, target_name="play"),
+            ]
+            return ShortcutPlan(
+                steps=steps,
+                site=target_site,
+                query=query_candidate,
+                is_play=True,
+                ordinal=n,
+                style="ordinal",
+            )
+
+        # Pattern E: Read Page
+        # "what's on this page" and "read the page" -> browser_read_page
+        if re.match(r"^(?:what'?s\s+on\s+this\s+page|read\s+the\s+page)$", cleaned, re.IGNORECASE):
+            return ToolCallSpec(
+                name="browser_read_page",
+                args={},
+                target_name="page",
+            )
+
+        # Pattern F: Close Browser
+        if re.match(r"^close\s+(?:the\s+)?browser$", cleaned, re.IGNORECASE):
+            return ToolCallSpec(
+                name="browser_close",
+                args={},
+                target_name="browser",
+            )
+
+        # Pattern G: Chains
+        # "open|go to <site> and play|search for <query>" and "play <query> on <site>"
+        chain_a_match = re.match(
+            r"^(?:open|go\s+to)\s+(.+?)\s+and\s+(play|search\s+for)\s+(.+)$",
+            cleaned,
+            re.IGNORECASE,
+        )
+        chain_b_match = re.match(
+            r"^play\s+(.+?)\s+on\s+(.+)$",
+            cleaned,
+            re.IGNORECASE,
+        )
+
+        cand_site_chain: Optional[str] = None
+        cand_query_chain: Optional[str] = None
+        is_play_chain: bool = False
+
+        if chain_a_match:
+            cand_site_chain = chain_a_match.group(1).strip()
+            act_word = chain_a_match.group(2).strip().lower()
+            is_play_chain = act_word == "play"
+            cand_query_chain = chain_a_match.group(3).strip()
+        elif chain_b_match:
+            cand_query_chain = chain_b_match.group(1).strip()
+            cand_site_chain = chain_b_match.group(2).strip()
+            is_play_chain = True
+
+        if cand_site_chain is not None and cand_query_chain is not None:
+            resolved = resolve_site(cand_site_chain)
+            site_key = (resolved or cand_site_chain).lower()
+            if site_key in clean_sites_map:
+                site_cfg = sites[site_key]
+                search_tmpl = None
+                if isinstance(site_cfg, dict):
+                    search_tmpl = site_cfg.get("search") or site_cfg.get("search_template")
+                if search_tmpl:
+                    words = cand_query_chain.split()
+                    if 1 <= len(words) <= 8:
+                        if is_play_chain:
+                            steps = [
+                                ToolCallSpec(name="search_site", args={"site": site_key, "query": cand_query_chain}, target_name=site_key),
+                                ToolCallSpec(name="browser_click_result", args={"n": 1}, target_name="first result"),
+                                ToolCallSpec(name="browser_media", args={"action": "play"}, target_name="play"),
+                            ]
+                            return ShortcutPlan(steps=steps, site=site_key, query=cand_query_chain, is_play=True)
+                        else:
+                            steps = [
+                                ToolCallSpec(name="search_site", args={"site": site_key, "query": cand_query_chain}, target_name=site_key),
+                            ]
+                            return ShortcutPlan(steps=steps, site=site_key, query=cand_query_chain, is_play=False)
 
     # Pattern 1: Folder navigation
     # "open (my )?(workspace )?folders?" -> open_workspace_folder with path "."

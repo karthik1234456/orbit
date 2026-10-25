@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 
 from pathlib import Path
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 # Load environment variables from .env file
 load_dotenv()
@@ -151,6 +151,38 @@ STREAM_REPLIES: bool = _parse_bool(os.getenv("STREAM_REPLIES"), True)
 COMMAND_SHORTCUTS: bool = _parse_bool(os.getenv("COMMAND_SHORTCUTS"), True)
 SESSION_CONTEXT: bool = _parse_bool(os.getenv("SESSION_CONTEXT"), True)
 SESSION_TTL_SECONDS: float = _parse_float(os.getenv("SESSION_TTL_SECONDS"), 1800.0)
+
+
+def _parse_browser_enabled(val: Optional[str] = None) -> bool:
+    if val is not None and val.strip():
+        v = val.strip().lower()
+        if v in ("1", "true", "yes", "on"):
+            return True
+        if v in ("0", "false", "no", "off"):
+            return False
+    try:
+        import importlib.util
+        return importlib.util.find_spec("playwright") is not None
+    except Exception:
+        return False
+
+
+def browser_enabled() -> bool:
+    """Read the environment at call time to determine whether browser automation is enabled."""
+    return _parse_browser_enabled(os.getenv("BROWSER_ENABLED"))
+
+
+def __getattr__(name: str) -> Any:
+    if name == "BROWSER_ENABLED":
+        return browser_enabled()
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+
+
+BROWSER_CHANNEL: str = _parse_str(os.getenv("BROWSER_CHANNEL"), "chrome")
+BROWSER_PROFILE_DIR: str = _parse_str(os.getenv("BROWSER_PROFILE_DIR"), "data/browser_profile")
+BROWSER_COMMAND_TIMEOUT_S: int = _parse_int(os.getenv("BROWSER_COMMAND_TIMEOUT_S"), 20)
+BROWSER_ALLOW_SIGNIN: bool = _parse_bool(os.getenv("BROWSER_ALLOW_SIGNIN"), False)
+BROWSER_CHROMIUM_SANDBOX: bool = _parse_bool(os.getenv("BROWSER_CHROMIUM_SANDBOX"), True)
 
 
 def require_api_key() -> str:

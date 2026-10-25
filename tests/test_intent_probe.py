@@ -382,3 +382,63 @@ def test_cli_system_prompt_override(monkeypatch: pytest.MonkeyPatch) -> None:
         assert captured["system_prompt"] == "Custom instructions for ORBIT."
         assert captured["label"] == "custom-prompt"
         assert str(custom_prompt_file) in captured["system_prompt_source"]
+
+
+def test_intent_probe_browser_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify that --browser includes BROWSER_PROBE_PHRASES and sets up browser tools."""
+    from scripts.intent_probe import BROWSER_PROBE_PHRASES
+
+    expected_phrases = [
+        ("scroll down", ["browser_scroll"]),
+        ("pause the video", ["browser_media"]),
+        ("play the first video", ["browser_click_result"]),
+        ("mute", ["browser_media"]),
+        ("go back", ["browser_history"]),
+        ("open youtube and play free fire videos", ["open_website", "search_site"]),
+        ("play lofi music on youtube", ["search_site"]),
+        ("what's on this page", ["browser_read_page"]),
+        ("close the browser", ["browser_close"]),
+    ]
+    assert BROWSER_PROBE_PHRASES == expected_phrases
+
+    # Verify registry has browser tools when browser_enabled=True
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        reg = build_probe_registry(tmp_dir, browser_enabled=True)
+        assert reg.get("browser_scroll") is not None
+        assert reg.get("browser_media") is not None
+        assert reg.get("browser_click_result") is not None
+        assert reg.get("browser_history") is not None
+        assert reg.get("browser_read_page") is not None
+        assert reg.get("browser_close") is not None
+
+        # Test CLI invocation with --browser
+        captured: dict[str, Any] = {}
+
+        def mock_run_intent_probe(**kwargs: Any) -> ProbeReport:
+            captured.update(kwargs)
+            return ProbeReport(
+                commit="test",
+                timestamp="now",
+                label=kwargs.get("label", "baseline"),
+                model=kwargs.get("model_name", "model"),
+                temperature=0.2,
+                seeds=[1],
+                system_prompt=kwargs.get("system_prompt", ""),
+                system_prompt_source=kwargs.get("system_prompt_source", ""),
+                phrase_summaries=[],
+                action_pass_count=0,
+                action_total_count=0,
+                notool_pass_count=0,
+                notool_total_count=0,
+                total_pass_count=0,
+                total_count=0,
+                output_path=Path(tmp_dir) / "rep.md",
+            )
+
+        monkeypatch.setattr("scripts.intent_probe.run_intent_probe", mock_run_intent_probe)
+
+        exit_code = main(["--browser", "--seeds", "1"])
+        assert exit_code == 0
+        assert captured["browser_enabled"] is True
+        assert len(captured["phrases"]) == len(PROBE_PHRASES) + len(BROWSER_PROBE_PHRASES)
+

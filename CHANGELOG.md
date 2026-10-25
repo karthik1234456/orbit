@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.1.2] - 2026-10-20
+
+### Fixed & Hardened
+- **Test Isolation & Playwright Decoupling**:
+  - Dynamically read `BROWSER_ENABLED` at call time via `browser_enabled()` in `config/settings.py` with module-level `__getattr__` support.
+  - Added autouse fixture in `tests/conftest.py` setting `BROWSER_ENABLED=0` and hard blocking real `sync_playwright` invocations during test runs.
+  - Replaced hardcoded tool count assertions in `tests/test_bootstrap.py` and `tests/test_desktop.py` with exact name set assertions for browser on vs off.
+  - Isolated evaluation environments in `evals/runner.py` via context manager disabling the browser during eval suites.
+  - Updated `register_desktop_tools(browser_controller=None)` to treat explicit `None` as "no browser".
+- **Google Country Domains & Security Guard**:
+  - Expanded interactive site and page type detection to match Google country domains (`google.co.uk`, `google.co.in`, `google.com.au`, `google.de`, etc.) via regex `_GOOGLE_HOST_RE` while rejecting spoofed and subdomain attack hosts.
+  - Enhanced sign-in and consent URL matching across all international Google and YouTube domains.
+- **Scroll Polling & Fallback**:
+  - Implemented 100ms interval polling up to 1s in `PlaywrightBackend.scroll` to observe real smooth scroll changes.
+  - Added `window.scrollBy` JavaScript fallback when mouse wheel events are unhandled.
+  - Direction-specific boundary checks for `"Already at the bottom."` and `"Already at the top."` with fallback to `"The page didn't scroll."`.
+- **YouTube Results Filtering & Click Verification**:
+  - Excluded radio, mix, playlist, and Shorts cards from YouTube search results selection, and sanitized titles from card attributes.
+  - Added `verify_click_result` in `browser/guards.py` verifying target URLs, permitting watch-to-watch navigation across distinct video IDs, rejecting same-video loopbacks, and reverting sign-in redirects.
+  - Added 300vh height spacers to fake tube fixtures to support real scrolling in tests.
+- **Shortcuts & Diagnostics**:
+  - Expanded shortcut pattern matching in `core/shortcuts.py` to parse number words ("one" through "ten") and ordinals in `"play|open|click number <n>"`.
+  - Updated diagnostics 20 KB cap in `core/diagnostics.py` to drop oldest lines first from index 0 until within limits.
+
+---
+
+## [2.1.1] - 2026-10-20
+
+### Fixed & Hardened
+- **Sign-in & Consent Guard**:
+  - Abort document navigation requests to authentication and consent portals (`accounts.google.com`, `consent.youtube.com`, `consent.google.com`, `/signin`, `/login`) in the route handler.
+  - Automatically revert via `history("back")` and raise `BrowserRefused` if any navigation or action lands on a sign-in or consent page.
+  - Setting `BROWSER_ALLOW_SIGNIN` allows manual sign-in, while strictly barring ORBIT from clicking or typing on `accounts.google.com`.
+- **Verified Action Outcomes & Result Selection**:
+  - Result selection by href and DOM order for YouTube (`/watch?v=`, non-empty title, main content container, excluding navigation, ads, Shorts, and current video).
+  - Google, Wikipedia, and GitHub result selection without generic fallback, refusing with `"I only found <k> results on this page."` when fewer than N items exist.
+  - `click_result` verifies URL changed to expected page type (`youtube_watch`, article, or repository page) and returns `"Opened result <n>: <title, sanitized, 100 chars>"`. Marked `untrusted_output=True`.
+  - `media` reads real `<video>` state (`paused`, `muted`, `currentTime`), returning `"Playing."`, `"Paused."`, `"Muted."`, `"Unmuted."`. Autoplay pause handling tries player focus and "k" key retry, returning `"The video is open but didn't start; press play."` without error.
+  - `scroll` compares scroll positions before and after, returning `"Scrolled down N px."`, `"Already at the bottom."`, or `"Already at the top."`.
+  - `history` returns new page type or `"No earlier page."`.
+- **Chromium Sandbox**:
+  - Native sandboxing enabled by default (`BROWSER_CHROMIUM_SANDBOX=True`, passing `chromium_sandbox=True`).
+  - Controller status output warns if sandbox is disabled.
+  - Never falls back silently; launch failures report the error and the setting to disable it.
+- **Shortcuts & Ordinal Search Chains**:
+  - Exact-match pattern `play|open|click (the)? <ordinal> (video|result|one)? [of|for|from]? <query> [on|in <site>]` produces 3-step `ShortcutPlan` (`search_site` + `browser_click_result` + `browser_media`).
+  - Without a query, produces single `browser_click_result` on the current page.
+  - Leftover words matching neither return `None`.
+  - Bare `"down"`/`"up"` scroll shortcuts.
+- **Version Alignment**:
+  - Unified `VERSION = "2.1.1"` in `core/version.py`, used by `main.py`, UI title, and evaluation reports.
+
+---
+
+## [2.1.0] - 2026-10-19
+
+### Added
+- **Playwright Browser Backend**: Production-grade Playwright browser automation backend (`browser/playwright_backend.py`) supporting Google Chrome and Chromium.
+  - Persistent browser profile context (`data/browser_profile/`) preserving session data across runs while remaining git-ignored.
+  - In-browser network routing guard (`context.route("**/*")`) aborting requests to private, loopback, or reserved IP addresses.
+  - Automatic dismissal of JavaScript modal popups and alerts (`page.on("dialog")`).
+  - Active page and tab lifecycle tracking capping open tabs to 5 and closing the oldest.
+  - Per-site search result clicking using configurable selector dictionaries (`config/browser_sites.py`) with strict `check_url` verification of target `href` attributes.
+  - Safe media control (`play`, `pause`, `toggle`, `mute`, `unmute`) and text extraction (`read_page`) executing fixed module-level JavaScript constants only.
+  - Viewport mouse scrolling and Home/End keyboard scrolling.
+  - Friendly error translations mapping missing browser executables, closed targets, and timeouts to actionable messages.
+- **Optional Browser Requirements**: Defined `requirements-browser.txt` for optional Playwright dependencies without polluting core `requirements.txt`.
+- **Manual Verification Utility**: `scripts/browser_check.py` for manual end-to-end diagnostic verification of browser automation flows.
+- **Threat Model Update**: Documented Threat 12 ("Model-Driven Browser Control") covering URL validation, private network blocking, interactive site allowlisting, script immutability, and residual risks.
+
+---
+
 ## [1.7.0] - 2026-10-18
 
 ### v1.7 Retrieval Evaluation

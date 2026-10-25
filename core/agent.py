@@ -57,6 +57,7 @@ class Agent:
         session_state: Optional[SessionState] = None,
         allowed_apps: Optional[Mapping[str, Any]] = None,
         sites: Optional[Mapping[str, Any]] = None,
+        browser_controller: Optional[Any] = None,
     ):
         """Initialize agent with LLM provider, tool registry, permission policy, guards, and audit logger."""
         self.provider = provider
@@ -74,6 +75,7 @@ class Agent:
         self.command_shortcuts = command_shortcuts
         self.session_context = session_context
         self.session_state = session_state if session_state is not None else SessionState()
+        self.browser_controller = browser_controller
 
         if allowed_apps is None:
             from config.apps import ALLOWED_APPS
@@ -550,15 +552,161 @@ class Agent:
 
         # Deterministic shortcut bypass before any LLM call
         if self.shortcuts_enabled():
-            from core.shortcuts import parse_shortcut
+            from core.shortcuts import ShortcutPlan, ToolCallSpec, parse_shortcut
+
+            browser_enabled = bool(
+                getattr(self, "browser_controller", None)
+                or (self.registry and (bool(self.registry.get("browser_click_result")) or bool(self.registry.get("browser_scroll"))))
+            )
 
             shortcut_spec = parse_shortcut(
                 user_text,
                 self.allowed_apps,
                 self.sites,
                 state=self.session_state,
+                browser_enabled=browser_enabled,
             )
-            if (
+
+            if isinstance(shortcut_spec, ShortcutPlan):
+                if not all(self.registry and self.registry.get(s.name) for s in shortcut_spec.steps):
+                    pass
+                else:
+                    if cancel_event is not None and cancel_event.is_set():
+                        cancel_reply = "(interrupted)"
+                        run.finish(RunStatus.CANCELLED, cancel_reply)
+                        if self.run_logger:
+                            self.run_logger.log(run)
+                        self.history.append({"role": "assistant", "content": cancel_reply})
+                        self._emit_event({
+                            "type": "task_end",
+                            "status": RunStatus.CANCELLED.value,
+                            "tool": None,
+                            "index": len(run.steps),
+                        })
+                        return cancel_reply
+
+                    site_display = {
+                        "youtube": "YouTube",
+                        "google": "Google",
+                        "github": "GitHub",
+                        "wikipedia": "Wikipedia",
+                    }.get(shortcut_spec.site.lower(), shortcut_spec.site.title())
+
+                    failed_step_index = None
+                    failed_reason = ""
+                    stop_reason = None
+
+                    for idx, step in enumerate(shortcut_spec.steps):
+                        if cancel_event is not None and cancel_event.is_set():
+                            cancel_reply = "(interrupted)"
+                            run.finish(RunStatus.CANCELLED, cancel_reply)
+                            if self.run_logger:
+                                self.run_logger.log(run)
+                            self.history.append({"role": "assistant", "content": cancel_reply})
+                            self._emit_event({
+                                "type": "task_end",
+                                "status": RunStatus.CANCELLED.value,
+                                "tool": None,
+                                "index": len(run.steps),
+                            })
+                            return cancel_reply
+
+                        s_stop_reason, status, outcome, result, hint, tainted = self._execute_single_tool(
+                            step.name,
+                            step.args,
+                            guard,
+                            run,
+                            tainted,
+                            is_shortcut=True,
+                        )
+
+                        if s_stop_reason is not None:
+                            failed_step_index = idx
+                            stop_reason = s_stop_reason
+                            failed_reason = self._build_stop_message(s_stop_reason, run.steps, [step.name])
+                            break
+
+                        if status != "success":
+                            failed_step_index = idx
+                            clean_msg = result
+                            for pfx in ("ERROR: REJECTED:", "ERROR: BLOCKED:", "ERROR:"):
+                                if clean_msg.startswith(pfx):
+                                    clean_msg = clean_msg[len(pfx):].strip()
+                                    break
+                            failed_reason = clean_msg
+                            break
+
+                    if getattr(shortcut_spec, "style", "") == "ordinal":
+                        ordinal_num = getattr(shortcut_spec, "ordinal", 1)
+                        step1_res = run.steps[1].result if len(run.steps) > 1 else ""
+                        prefix = f"Opened result {ordinal_num}: "
+                        if step1_res.startswith(prefix):
+                            title = step1_res[len(prefix):].strip()
+                        elif step1_res.startswith("Opened result"):
+                            title = step1_res.split(":", 1)[-1].strip() if ":" in step1_res else step1_res.strip()
+                        else:
+                            title = step1_res.strip()
+
+                        if failed_step_index is None:
+                            step2_res = run.steps[2].result if len(run.steps) > 2 else "Playing."
+                            if step2_res.strip() == "Playing.":
+                                reply = f"Opened result {ordinal_num}: {title}. Playing."
+                            elif "didn't start" in step2_res or "press play" in step2_res:
+                                reply = f"Opened result {ordinal_num}: {title}. The video is open but didn't start; press play."
+                            else:
+                                reply = f"Opened result {ordinal_num}: {title}. {step2_res}"
+                            run.finish(RunStatus.COMPLETED, reply)
+                        elif failed_step_index == 2:
+                            reply = f"Opened result {ordinal_num}: {title}. The video is open but didn't start; press play."
+                            run.finish(RunStatus.COMPLETED, reply)
+                        elif failed_step_index == 1:
+                            clean_r = failed_reason.rstrip(".")
+                            reply = f"Searched {site_display} for {shortcut_spec.query}, but I couldn't open result {ordinal_num}: {clean_r}."
+                            run.finish(stop_reason if stop_reason is not None else RunStatus.COMPLETED, reply)
+                        else:
+                            clean_r = failed_reason.rstrip(".")
+                            reply = f"Searched {site_display} for {shortcut_spec.query}, but search failed: {clean_r}."
+                            run.finish(stop_reason if stop_reason is not None else RunStatus.COMPLETED, reply)
+                    elif shortcut_spec.is_play:
+                        if failed_step_index is None:
+                            reply = f"Searched {site_display} for {shortcut_spec.query} and started the first result."
+                            run.finish(RunStatus.COMPLETED, reply)
+                        elif failed_step_index == 2:
+                            # Final media(play) step failure is not fatal
+                            reply = f"Searched {site_display} for {shortcut_spec.query} and opened the first result; press play if it didn't start."
+                            run.finish(RunStatus.COMPLETED, reply)
+                        else:
+                            clean_r = failed_reason.rstrip(".")
+                            reply = f"Searched {site_display} for {shortcut_spec.query}, but I couldn't start a video: {clean_r}."
+                            run.finish(stop_reason if stop_reason is not None else RunStatus.COMPLETED, reply)
+                    else:
+                        if failed_step_index is None:
+                            reply = f"Searched {site_display} for {shortcut_spec.query}."
+                            run.finish(RunStatus.COMPLETED, reply)
+                        else:
+                            clean_r = failed_reason.rstrip(".")
+                            reply = f"Searched {site_display} for {shortcut_spec.query}, but failed: {clean_r}."
+                            run.finish(stop_reason if stop_reason is not None else RunStatus.COMPLETED, reply)
+
+                    stream_cb = effective_on_delta or on_delta
+                    if stream_cb:
+                        try:
+                            stream_cb(reply)
+                        except Exception:
+                            pass
+
+                    self.history.append({"role": "assistant", "content": reply})
+                    if self.run_logger:
+                        self.run_logger.log(run)
+                    self._emit_event({
+                        "type": "task_end",
+                        "status": run.status.value if run.status else RunStatus.COMPLETED.value,
+                        "tool": None,
+                        "index": len(run.steps),
+                    })
+                    return reply
+
+            elif (
                 shortcut_spec is not None
                 and self.registry
                 and self.registry.get(shortcut_spec.name)
@@ -589,11 +737,17 @@ class Agent:
                     reply = self._build_stop_message(stop_reason, run.steps, [shortcut_spec.name])
                     run.finish(stop_reason, reply)
                 elif status == "success":
-                    target_name = getattr(shortcut_spec, "target_name", "") or shortcut_spec.name
-                    reply = f"Opened {target_name}."
+                    if shortcut_spec.name.startswith("browser_"):
+                        reply = result
+                    else:
+                        target_name = getattr(shortcut_spec, "target_name", "") or shortcut_spec.name
+                        reply = f"Opened {target_name}."
                     run.finish(RunStatus.COMPLETED, reply)
                 else:
-                    reply = result
+                    if result.startswith("ERROR: I can only control"):
+                        reply = result[len("ERROR:"):].strip()
+                    else:
+                        reply = result
                     run.finish(RunStatus.COMPLETED, reply)
 
                 stream_cb = effective_on_delta or on_delta

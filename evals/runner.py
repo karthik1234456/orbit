@@ -36,6 +36,29 @@ def get_gpu_info(timeout: float = 3.0) -> tuple[str, str]:
         return "unknown", "unknown"
 
 
+from contextlib import contextmanager
+
+
+@contextmanager
+def _isolated_eval_environment():
+    """Ensure eval runs with browser disabled and clean defaults, restoring env on exit."""
+    keys = ["COMMAND_SHORTCUTS", "SESSION_CONTEXT", "BROWSER_ENABLED"]
+    prev = {k: os.environ.get(k) for k in keys}
+    try:
+        if "COMMAND_SHORTCUTS" not in os.environ:
+            os.environ["COMMAND_SHORTCUTS"] = "0"
+        if "SESSION_CONTEXT" not in os.environ:
+            os.environ["SESSION_CONTEXT"] = "0"
+        os.environ["BROWSER_ENABLED"] = "0"
+        yield
+    finally:
+        for k, v in prev.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 def run_case(
     case: EvalCase,
     provider_factory: Callable[[EvalCase], LLMProvider],
@@ -47,165 +70,170 @@ def run_case(
     Re-raises QuotaExceededError so caller can handle quota depletion across a suite.
     Any other LLMError or unexpected exception results in status='error'.
     """
-    sandbox = make_sandbox(case)
-    try:
+    with _isolated_eval_environment():
+        sandbox = make_sandbox(case)
         try:
-            raw_provider = provider_factory(case, repeat)
-        except TypeError:
-            raw_provider = provider_factory(case)
-        counting_provider = CountingProvider(raw_provider)
-
-        is_ollama = (
-            getattr(raw_provider, "provider", "") == "ollama"
-            or type(raw_provider).__name__ == "OllamaProvider"
-            or "ollama" in type(raw_provider).__name__.lower()
-        )
-
-        if task_timeout is not None:
-            max_s = task_timeout
-        elif "MAX_TASK_SECONDS" in os.environ:
-            max_s = float(os.environ["MAX_TASK_SECONDS"])
-        elif is_ollama:
-            max_s = 300.0
-        else:
-            max_s = settings.MAX_TASK_SECONDS
-
-        confirmations: list[ConfirmationRecord] = []
-        current_turn: list[int] = [0]
-
-        # Automatic answer for every CONFIRM prompt while recording requests
-        def confirm_callback(tool_name: str, args: dict, warning: Optional[str] = None) -> bool:
-            answer = getattr(case, "confirm", "approve") == "approve"
-            confirmations.append(
-                ConfirmationRecord(
-                    tool=tool_name,
-                    args=args,
-                    warning=warning,
-                    answer=answer,
-                    turn=current_turn[0],
-                )
-            )
-            return answer
-
-        # Evals measure the model directly, so disable shortcuts by default unless explicitly enabled
-        if "COMMAND_SHORTCUTS" not in os.environ:
-            os.environ["COMMAND_SHORTCUTS"] = "0"
-        shortcuts_on = os.getenv("COMMAND_SHORTCUTS", "0").lower() in ("1", "true", "yes", "on")
-
-        if "SESSION_CONTEXT" not in os.environ:
-            os.environ["SESSION_CONTEXT"] = "0"
-        context_on = os.getenv("SESSION_CONTEXT", "0").lower() in ("1", "true", "yes", "on")
-
-        app = build_app(
-            provider=counting_provider,
-            confirm_callback=confirm_callback,
-            paths=sandbox.paths,
-            doc_index=getattr(sandbox, "doc_index", None),
-            limits=Limits(
-                max_tool_calls=settings.MAX_TOOL_CALLS,
-                max_consecutive_errors=settings.MAX_CONSECUTIVE_ERRORS,
-                max_seconds=max_s,
-            ),
-        )
-        app.agent.command_shortcuts = shortcuts_on
-        app.agent.session_context = context_on
-
-        recorder = Recorder()
-        final_texts: list[str] = []
-        events: list[ToolEvent] = []
-        all_auto_retrievals: list[dict] = []
-        last_run_status: Optional[str] = None
-        error_msg: Optional[str] = None
-        unverified_claims_count: int = 0
-
-        t0 = time.perf_counter()
-
-        with no_real_launches(recorder):
-            for turn_idx, turn in enumerate(case.turns):
-                current_turn[0] = turn_idx
-                try:
-                    reply = app.agent.chat(turn)
-                    final_texts.append(reply)
-                except QuotaExceededError:
-                    raise
-                except Exception as exc:
-                    error_msg = str(exc)
-                    final_texts.append(f"(error: {exc})")
-                    break
-
-                if app.agent.last_run:
-                    if app.agent.last_run.status:
-                        last_run_status = app.agent.last_run.status.value
-                    unverified_claims_count += getattr(app.agent.last_run, "unverified_claims", 0)
-                    for ar in getattr(app.agent.last_run, "auto_retrievals", []):
-                        all_auto_retrievals.append(ar)
-                    for step in app.agent.last_run.steps:
-                        events.append(
-                            ToolEvent(
-                                tool=step.tool,
-                                args=step.args,
-                                status=step.status,
-                                turn=turn_idx,
-                            )
-                        )
-
-        latency_s = time.perf_counter() - t0
-
-        memory_texts: list[str] = []
-        if app.memory_store:
             try:
-                memory_texts = [m.content for m in app.memory_store.list_all(limit=1000)]
-            except Exception:
-                memory_texts = []
+                raw_provider = provider_factory(case, repeat)
+            except TypeError:
+                raw_provider = provider_factory(case)
+            counting_provider = CountingProvider(raw_provider)
 
-        obs = RunObservation(
-            final_texts=final_texts,
-            events=events,
-            launches=recorder.launches,
-            llm_calls=counting_provider.calls,
-            latency_s=latency_s,
-            workspace=sandbox.paths.workspace,
-            sentinel_path=sandbox.sentinel_path,
-            sentinel_text=sandbox.sentinel_text,
-            root=sandbox.root,
-            expected_root_entries=sandbox.expected_root_entries,
-            memory_texts=memory_texts,
-            confirmations=confirmations,
-            unverified_claims=unverified_claims_count,
-            auto_retrievals=all_auto_retrievals,
-        )
+            is_ollama = (
+                getattr(raw_provider, "provider", "") == "ollama"
+                or type(raw_provider).__name__ == "OllamaProvider"
+                or "ollama" in type(raw_provider).__name__.lower()
+            )
 
-        failed_checks = run_checks(case, obs)
+            if task_timeout is not None:
+                max_s = task_timeout
+            elif "MAX_TASK_SECONDS" in os.environ:
+                max_s = float(os.environ["MAX_TASK_SECONDS"])
+            elif is_ollama:
+                max_s = 300.0
+            else:
+                max_s = settings.MAX_TASK_SECONDS
 
-        if error_msg is not None:
-            status = "error"
-        elif failed_checks:
-            status = "failed"
-        else:
-            status = "passed"
+            confirmations: list[ConfirmationRecord] = []
+            current_turn: list[int] = [0]
 
-        tools_called = [e.tool for e in events]
-        tools_executed = [e.tool for e in events if e.status == "success"]
-        final_text = final_texts[-1] if final_texts else ""
+            # Automatic answer for every CONFIRM prompt while recording requests
+            def confirm_callback(tool_name: str, args: dict, warning: Optional[str] = None) -> bool:
+                answer = getattr(case, "confirm", "approve") == "approve"
+                confirmations.append(
+                    ConfirmationRecord(
+                        tool=tool_name,
+                        args=args,
+                        warning=warning,
+                        answer=answer,
+                        turn=current_turn[0],
+                    )
+                )
+                return answer
 
-        return CaseResult(
-            id=case.id,
-            category=case.category,
-            repeat=repeat,
-            status=status,
-            failed_checks=failed_checks,
-            tools_called=tools_called,
-            tools_executed=tools_executed,
-            llm_calls=counting_provider.calls,
-            latency_s=latency_s,
-            run_status=last_run_status,
-            final_text=final_text,
-            error=error_msg,
-            unverified_claims=obs.unverified_claims,
-            auto_retrievals=all_auto_retrievals,
-        )
-    finally:
-        sandbox.cleanup()
+            # Evals measure the model directly, so disable shortcuts by default unless explicitly enabled
+            if "COMMAND_SHORTCUTS" not in os.environ:
+                os.environ["COMMAND_SHORTCUTS"] = "0"
+            shortcuts_on = os.getenv("COMMAND_SHORTCUTS", "0").lower() in ("1", "true", "yes", "on")
+
+            if "SESSION_CONTEXT" not in os.environ:
+                os.environ["SESSION_CONTEXT"] = "0"
+            context_on = os.getenv("SESSION_CONTEXT", "0").lower() in ("1", "true", "yes", "on")
+
+            if "BROWSER_ENABLED" not in os.environ:
+                os.environ["BROWSER_ENABLED"] = "0"
+            browser_on = os.getenv("BROWSER_ENABLED", "0").lower() in ("1", "true", "yes", "on")
+
+            app = build_app(
+                provider=counting_provider,
+                confirm_callback=confirm_callback,
+                paths=sandbox.paths,
+                doc_index=getattr(sandbox, "doc_index", None),
+                limits=Limits(
+                    max_tool_calls=settings.MAX_TOOL_CALLS,
+                    max_consecutive_errors=settings.MAX_CONSECUTIVE_ERRORS,
+                    max_seconds=max_s,
+                ),
+            )
+            app.agent.command_shortcuts = shortcuts_on
+            app.agent.session_context = context_on
+
+            recorder = Recorder()
+            final_texts: list[str] = []
+            events: list[ToolEvent] = []
+            all_auto_retrievals: list[dict] = []
+            last_run_status: Optional[str] = None
+            error_msg: Optional[str] = None
+            unverified_claims_count: int = 0
+
+            t0 = time.perf_counter()
+
+            with no_real_launches(recorder):
+                for turn_idx, turn in enumerate(case.turns):
+                    current_turn[0] = turn_idx
+                    try:
+                        reply = app.agent.chat(turn)
+                        final_texts.append(reply)
+                    except QuotaExceededError:
+                        raise
+                    except Exception as exc:
+                        error_msg = str(exc)
+                        final_texts.append(f"(error: {exc})")
+                        break
+
+                    if app.agent.last_run:
+                        if app.agent.last_run.status:
+                            last_run_status = app.agent.last_run.status.value
+                        unverified_claims_count += getattr(app.agent.last_run, "unverified_claims", 0)
+                        for ar in getattr(app.agent.last_run, "auto_retrievals", []):
+                            all_auto_retrievals.append(ar)
+                        for step in app.agent.last_run.steps:
+                            events.append(
+                                ToolEvent(
+                                    tool=step.tool,
+                                    args=step.args,
+                                    status=step.status,
+                                    turn=turn_idx,
+                                )
+                            )
+
+            latency_s = time.perf_counter() - t0
+
+            memory_texts: list[str] = []
+            if app.memory_store:
+                try:
+                    memory_texts = [m.content for m in app.memory_store.list_all(limit=1000)]
+                except Exception:
+                    memory_texts = []
+
+            obs = RunObservation(
+                final_texts=final_texts,
+                events=events,
+                launches=recorder.launches,
+                llm_calls=counting_provider.calls,
+                latency_s=latency_s,
+                workspace=sandbox.paths.workspace,
+                sentinel_path=sandbox.sentinel_path,
+                sentinel_text=sandbox.sentinel_text,
+                root=sandbox.root,
+                expected_root_entries=sandbox.expected_root_entries,
+                memory_texts=memory_texts,
+                confirmations=confirmations,
+                unverified_claims=unverified_claims_count,
+                auto_retrievals=all_auto_retrievals,
+            )
+
+            failed_checks = run_checks(case, obs)
+
+            if error_msg is not None:
+                status = "error"
+            elif failed_checks:
+                status = "failed"
+            else:
+                status = "passed"
+
+            tools_called = [e.tool for e in events]
+            tools_executed = [e.tool for e in events if e.status == "success"]
+            final_text = final_texts[-1] if final_texts else ""
+
+            return CaseResult(
+                id=case.id,
+                category=case.category,
+                repeat=repeat,
+                status=status,
+                failed_checks=failed_checks,
+                tools_called=tools_called,
+                tools_executed=tools_executed,
+                llm_calls=counting_provider.calls,
+                latency_s=latency_s,
+                run_status=last_run_status,
+                final_text=final_text,
+                error=error_msg,
+                unverified_claims=obs.unverified_claims,
+                auto_retrievals=all_auto_retrievals,
+            )
+        finally:
+            sandbox.cleanup()
 
 
 def _save_suite_results(out_path: Path, results: list[CaseResult], meta: dict[str, Any]) -> None:
@@ -233,175 +261,182 @@ def run_suite(
     Returns:
         tuple[list[CaseResult], bool]: (all_results, quota_hit)
     """
-    out_file = Path(out_path).resolve()
-    done_set: set[tuple[str, int]] = set(already_done) if already_done else set()
-    results: list[CaseResult] = []
-    if "COMMAND_SHORTCUTS" not in os.environ:
-        os.environ["COMMAND_SHORTCUTS"] = "0"
-    shortcuts_on = os.getenv("COMMAND_SHORTCUTS", "0").lower() in ("1", "true", "yes", "on")
+    with _isolated_eval_environment():
+        out_file = Path(out_path).resolve()
+        done_set: set[tuple[str, int]] = set(already_done) if already_done else set()
+        results: list[CaseResult] = []
+        if "COMMAND_SHORTCUTS" not in os.environ:
+            os.environ["COMMAND_SHORTCUTS"] = "0"
+        shortcuts_on = os.getenv("COMMAND_SHORTCUTS", "0").lower() in ("1", "true", "yes", "on")
 
-    if "SESSION_CONTEXT" not in os.environ:
-        os.environ["SESSION_CONTEXT"] = "0"
-    context_on = os.getenv("SESSION_CONTEXT", "0").lower() in ("1", "true", "yes", "on")
+        if "SESSION_CONTEXT" not in os.environ:
+            os.environ["SESSION_CONTEXT"] = "0"
+        context_on = os.getenv("SESSION_CONTEXT", "0").lower() in ("1", "true", "yes", "on")
 
-    meta: dict[str, Any] = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "total_cases": len(cases),
-        "repeats": repeats,
-        "cases_version": 6,
-        "RAG_AUTO": getattr(settings, "RAG_AUTO", True),
-        "RAG_AUTO_MIN_TERMS": getattr(settings, "RAG_AUTO_MIN_TERMS", 2),
-        "RAG_AUTO_MIN_COVERAGE": getattr(settings, "RAG_AUTO_MIN_COVERAGE", 0.5),
-        "RAG_AUTO_TOP_K": getattr(settings, "RAG_AUTO_TOP_K", 3),
-        "RAG_AUTO_MAX_CHARS": getattr(settings, "RAG_AUTO_MAX_CHARS", 1500),
-        "COMMAND_SHORTCUTS": shortcuts_on,
-        "SESSION_CONTEXT": context_on,
-    }
-    if extra_meta:
-        meta.update(extra_meta)
+        if "BROWSER_ENABLED" not in os.environ:
+            os.environ["BROWSER_ENABLED"] = "0"
+        browser_on = os.getenv("BROWSER_ENABLED", "0").lower() in ("1", "true", "yes", "on")
 
-    meta.setdefault("cases_version", 6)
-    meta.setdefault("RAG_AUTO", getattr(settings, "RAG_AUTO", True))
-    meta.setdefault("RAG_AUTO_MIN_TERMS", getattr(settings, "RAG_AUTO_MIN_TERMS", 2))
-    meta.setdefault("RAG_AUTO_MIN_COVERAGE", getattr(settings, "RAG_AUTO_MIN_COVERAGE", 0.5))
-    meta.setdefault("RAG_AUTO_TOP_K", getattr(settings, "RAG_AUTO_TOP_K", 3))
-    meta.setdefault("RAG_AUTO_MAX_CHARS", getattr(settings, "RAG_AUTO_MAX_CHARS", 1500))
-    meta.setdefault("COMMAND_SHORTCUTS", shortcuts_on)
-    meta.setdefault("SESSION_CONTEXT", context_on)
+        meta: dict[str, Any] = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "total_cases": len(cases),
+            "repeats": repeats,
+            "cases_version": 6,
+            "RAG_AUTO": getattr(settings, "RAG_AUTO", True),
+            "RAG_AUTO_MIN_TERMS": getattr(settings, "RAG_AUTO_MIN_TERMS", 2),
+            "RAG_AUTO_MIN_COVERAGE": getattr(settings, "RAG_AUTO_MIN_COVERAGE", 0.5),
+            "RAG_AUTO_TOP_K": getattr(settings, "RAG_AUTO_TOP_K", 3),
+            "RAG_AUTO_MAX_CHARS": getattr(settings, "RAG_AUTO_MAX_CHARS", 1500),
+            "COMMAND_SHORTCUTS": shortcuts_on,
+            "SESSION_CONTEXT": context_on,
+            "BROWSER_ENABLED": browser_on,
+        }
+        if extra_meta:
+            meta.update(extra_meta)
 
-    if "cases_sha256" not in meta:
-        from evals.schema import compute_cases_sha256
-        if Path("evals/cases").exists():
-            meta.setdefault("cases_sha256", compute_cases_sha256("evals/cases"))
+        meta.setdefault("cases_version", 6)
+        meta.setdefault("RAG_AUTO", getattr(settings, "RAG_AUTO", True))
+        meta.setdefault("RAG_AUTO_MIN_TERMS", getattr(settings, "RAG_AUTO_MIN_TERMS", 2))
+        meta.setdefault("RAG_AUTO_MIN_COVERAGE", getattr(settings, "RAG_AUTO_MIN_COVERAGE", 0.5))
+        meta.setdefault("RAG_AUTO_TOP_K", getattr(settings, "RAG_AUTO_TOP_K", 3))
+        meta.setdefault("RAG_AUTO_MAX_CHARS", getattr(settings, "RAG_AUTO_MAX_CHARS", 1500))
+        meta.setdefault("COMMAND_SHORTCUTS", shortcuts_on)
+        meta.setdefault("SESSION_CONTEXT", context_on)
+        meta.setdefault("BROWSER_ENABLED", browser_on)
 
-    # Gather GPU info via nvidia-smi
-    gpu_name, total_vram = get_gpu_info()
-    meta.setdefault("gpu_name", gpu_name)
-    meta.setdefault("total_vram", total_vram)
-    meta.setdefault("gpu_vram", total_vram)
-    if gpu_name != "unknown":
-        meta.setdefault("gpu", f"{gpu_name} ({total_vram})")
-    else:
-        meta.setdefault("gpu", "unknown")
+        if "cases_sha256" not in meta:
+            from evals.schema import compute_cases_sha256
+            if Path("evals/cases").exists():
+                meta.setdefault("cases_sha256", compute_cases_sha256("evals/cases"))
 
-    # Detect provider metadata if not fully populated
-    sample_provider = None
-    if cases:
-        try:
-            try:
-                sample_provider = provider_factory(cases[0], 0)
-            except TypeError:
-                sample_provider = provider_factory(cases[0])
-        except Exception:
-            pass
-
-    is_ollama = False
-    prov_name = meta.get("provider")
-    if prov_name:
-        is_ollama = (prov_name.lower() == "ollama")
-    elif sample_provider:
-        p_name = getattr(sample_provider, "provider", "") or type(sample_provider).__name__
-        if p_name == "OllamaProvider" or "ollama" in p_name.lower():
-            is_ollama = True
-            meta.setdefault("provider", "ollama")
-        elif "gemini" in p_name.lower():
-            meta.setdefault("provider", "gemini")
+        # Gather GPU info via nvidia-smi
+        gpu_name, total_vram = get_gpu_info()
+        meta.setdefault("gpu_name", gpu_name)
+        meta.setdefault("total_vram", total_vram)
+        meta.setdefault("gpu_vram", total_vram)
+        if gpu_name != "unknown":
+            meta.setdefault("gpu", f"{gpu_name} ({total_vram})")
         else:
-            meta.setdefault("provider", "mock")
+            meta.setdefault("gpu", "unknown")
 
-    if is_ollama:
-        meta.setdefault("provider", "ollama")
-        if sample_provider:
-            model_val = getattr(
-                sample_provider,
-                "model",
-                getattr(sample_provider, "model_name", settings.OLLAMA_MODEL),
-            )
-            meta.setdefault("model", model_val)
-            meta.setdefault("num_ctx", getattr(sample_provider, "num_ctx", settings.OLLAMA_NUM_CTX))
-            meta.setdefault("temperature", getattr(sample_provider, "temperature", 0.0))
-            eff_seed = getattr(
-                sample_provider,
-                "seed",
-                settings.OLLAMA_SEED if settings.OLLAMA_SEED is not None else 42,
-            )
-            meta.setdefault("seed", eff_seed)
-            meta.setdefault("base_seed", getattr(sample_provider, "base_seed", eff_seed))
-            meta.setdefault("repeat_mode", getattr(sample_provider, "repeat_mode", "same"))
-            meta.setdefault("think", getattr(sample_provider, "think", settings.OLLAMA_THINK))
-            host = getattr(sample_provider, "host", settings.OLLAMA_HOST)
-            server_ver = getattr(sample_provider, "server_version", None)
-            if server_ver is None:
+        # Detect provider metadata if not fully populated
+        sample_provider = None
+        if cases:
+            try:
                 try:
-                    from core.ollama_provider import server_version
-                    server_ver = server_version(host)
-                except Exception:
-                    server_ver = None
-            ver_str = server_ver or "unknown"
-            meta.setdefault("ollama_server_version", ver_str)
-            meta.setdefault("ollama_version", ver_str)
+                    sample_provider = provider_factory(cases[0], 0)
+                except TypeError:
+                    sample_provider = provider_factory(cases[0])
+            except Exception:
+                pass
 
-    if "MAX_TASK_SECONDS" in os.environ:
-        task_timeout = float(os.environ["MAX_TASK_SECONDS"])
-    elif is_ollama:
-        task_timeout = 300.0
-    else:
-        task_timeout = settings.MAX_TASK_SECONDS
+        is_ollama = False
+        prov_name = meta.get("provider")
+        if prov_name:
+            is_ollama = (prov_name.lower() == "ollama")
+        elif sample_provider:
+            p_name = getattr(sample_provider, "provider", "") or type(sample_provider).__name__
+            if p_name == "OllamaProvider" or "ollama" in p_name.lower():
+                is_ollama = True
+                meta.setdefault("provider", "ollama")
+            elif "gemini" in p_name.lower():
+                meta.setdefault("provider", "gemini")
+            else:
+                meta.setdefault("provider", "mock")
 
-    meta.setdefault("task_timeout", task_timeout)
-    meta.setdefault("task_timeout_s", task_timeout)
-
-    # Load existing results if resuming
-    if out_file.exists():
-        try:
-            data = json.loads(out_file.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                meta.update(data.get("meta", {}))
-                for item in data.get("results", []):
-                    res = CaseResult.from_dict(item)
-                    results.append(res)
-                    done_set.add((res.id, res.repeat))
-        except Exception:
-            pass
-
-    # Build sequence of planned runs
-    planned: list[tuple[EvalCase, int]] = []
-    for r in range(repeats):
-        for c in cases:
-            if (c.id, r) not in done_set:
-                planned.append((c, r))
-
-    quota_hit = False
-
-    for idx, (case, repeat) in enumerate(planned):
-        try:
-            res = run_case(case, provider_factory, repeat=repeat, task_timeout=task_timeout)
-            results.append(res)
-            _save_suite_results(out_file, results, meta)
-            if on_progress:
-                on_progress(
-                    f"[{res.status.upper()}] {case.id} (repeat {repeat}) - {len(res.failed_checks)} failure(s)"
+        if is_ollama:
+            meta.setdefault("provider", "ollama")
+            if sample_provider:
+                model_val = getattr(
+                    sample_provider,
+                    "model",
+                    getattr(sample_provider, "model_name", settings.OLLAMA_MODEL),
                 )
-        except QuotaExceededError:
-            quota_hit = True
-            if on_progress:
-                on_progress(f"[QUOTA] Hit quota limit during {case.id} (repeat {repeat}). Stopping suite.")
+                meta.setdefault("model", model_val)
+                meta.setdefault("num_ctx", getattr(sample_provider, "num_ctx", settings.OLLAMA_NUM_CTX))
+                meta.setdefault("temperature", getattr(sample_provider, "temperature", 0.0))
+                eff_seed = getattr(
+                    sample_provider,
+                    "seed",
+                    settings.OLLAMA_SEED if settings.OLLAMA_SEED is not None else 42,
+                )
+                meta.setdefault("seed", eff_seed)
+                meta.setdefault("base_seed", getattr(sample_provider, "base_seed", eff_seed))
+                meta.setdefault("repeat_mode", getattr(sample_provider, "repeat_mode", "same"))
+                meta.setdefault("think", getattr(sample_provider, "think", settings.OLLAMA_THINK))
+                host = getattr(sample_provider, "host", settings.OLLAMA_HOST)
+                server_ver = getattr(sample_provider, "server_version", None)
+                if server_ver is None:
+                    try:
+                        from core.ollama_provider import server_version
+                        server_ver = server_version(host)
+                    except Exception:
+                        server_ver = None
+                ver_str = server_ver or "unknown"
+                meta.setdefault("ollama_server_version", ver_str)
+                meta.setdefault("ollama_version", ver_str)
 
-            # Mark this case and all remaining planned cases as not_run
-            for rem_case, rem_r in planned[idx:]:
-                results.append(
-                    CaseResult(
-                        id=rem_case.id,
-                        category=rem_case.category,
-                        repeat=rem_r,
-                        status="not_run",
-                        error="QuotaExceededError",
+        if "MAX_TASK_SECONDS" in os.environ:
+            task_timeout = float(os.environ["MAX_TASK_SECONDS"])
+        elif is_ollama:
+            task_timeout = 300.0
+        else:
+            task_timeout = settings.MAX_TASK_SECONDS
+
+        meta.setdefault("task_timeout", task_timeout)
+        meta.setdefault("task_timeout_s", task_timeout)
+
+        # Load existing results if resuming
+        if out_file.exists():
+            try:
+                data = json.loads(out_file.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    meta.update(data.get("meta", {}))
+                    for item in data.get("results", []):
+                        res = CaseResult.from_dict(item)
+                        results.append(res)
+                        done_set.add((res.id, res.repeat))
+            except Exception:
+                pass
+
+        # Build sequence of planned runs
+        planned: list[tuple[EvalCase, int]] = []
+        for r in range(repeats):
+            for c in cases:
+                if (c.id, r) not in done_set:
+                    planned.append((c, r))
+
+        quota_hit = False
+
+        for idx, (case, repeat) in enumerate(planned):
+            try:
+                res = run_case(case, provider_factory, repeat=repeat, task_timeout=task_timeout)
+                results.append(res)
+                _save_suite_results(out_file, results, meta)
+                if on_progress:
+                    on_progress(
+                        f"[{res.status.upper()}] {case.id} (repeat {repeat}) - {len(res.failed_checks)} failure(s)"
                     )
-                )
-            _save_suite_results(out_file, results, meta)
-            break
+            except QuotaExceededError:
+                quota_hit = True
+                if on_progress:
+                    on_progress(f"[QUOTA] Hit quota limit during {case.id} (repeat {repeat}). Stopping suite.")
 
-        if sleep_s > 0 and idx < len(planned) - 1:
-            time.sleep(sleep_s)
+                # Mark this case and all remaining planned cases as not_run
+                for rem_case, rem_r in planned[idx:]:
+                    results.append(
+                        CaseResult(
+                            id=rem_case.id,
+                            category=rem_case.category,
+                            repeat=rem_r,
+                            status="not_run",
+                            error="QuotaExceededError",
+                        )
+                    )
+                _save_suite_results(out_file, results, meta)
+                break
 
-    return results, quota_hit
+            if sleep_s > 0 and idx < len(planned) - 1:
+                time.sleep(sleep_s)
+
+        return results, quota_hit

@@ -351,6 +351,7 @@ class OrbitWindow:
             "query": tk.StringVar(value="—"),
             "app": tk.StringVar(value="—"),
             "folder": tk.StringVar(value="—"),
+            "browser": tk.StringVar(value="—"),
             "last_tool": tk.StringVar(value="—"),
             "age": tk.StringVar(value="—"),
         }
@@ -363,6 +364,7 @@ class OrbitWindow:
             ("Query:", "query"),
             ("App:", "app"),
             ("Folder:", "folder"),
+            ("Browser:", "browser"),
             ("Last tool:", "last_tool"),
             ("Age:", "age"),
         ]
@@ -384,6 +386,13 @@ class OrbitWindow:
             command=self._on_new_conversation,
         )
         self.new_conv_btn.pack(side="left")
+
+        self.copy_diag_btn = ttk.Button(
+            btn_box,
+            text="Copy diagnostics",
+            command=self._on_copy_diagnostics,
+        )
+        self.copy_diag_btn.pack(side="left", padx=(8, 0))
 
     def _build_memories_tab(self) -> None:
         self.memories_frame = ttk.Frame(self.notebook, padding=6)
@@ -927,6 +936,55 @@ class OrbitWindow:
 
         self._refresh_context_tab()
 
+    def _on_copy_diagnostics(self) -> None:
+        try:
+            from core.diagnostics import generate_diagnostics
+
+            raw_text = self.history.get("1.0", tk.END).strip()
+            chat_lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
+
+            activity_events = []
+            for item_id in self.activity_tree.get_children():
+                vals = self.activity_tree.item(item_id, "values")
+                if len(vals) >= 5 and vals[0] != "—":
+                    activity_events.append({
+                        "task": vals[0],
+                        "step": vals[1],
+                        "tool": vals[2],
+                        "status": vals[3],
+                        "detail": vals[4],
+                    })
+
+            app = getattr(self.controller, "app", None)
+            agent = getattr(app, "agent", None) if app else None
+
+            file_path, diag_text = generate_diagnostics(
+                app=app,
+                agent=agent,
+                chat_controller=self.controller,
+                provider_label=self.mode_label,
+                recent_chat_lines=chat_lines,
+                activity_events=activity_events,
+            )
+
+            try:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(diag_text)
+            except Exception:
+                pass
+
+            messagebox.showinfo(
+                "Diagnostics Saved",
+                f"Diagnostics written to:\n{file_path}\n\nCopied to clipboard.\nThis file is safe to share after a quick look.",
+                parent=self.root,
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "Diagnostics Error",
+                f"Failed to generate diagnostics: {exc}",
+                parent=self.root,
+            )
+
     def _refresh_context_tab(self) -> None:
         app = getattr(self.controller, "app", None)
         agent = getattr(app, "agent", None) if app else None
@@ -963,11 +1021,31 @@ class OrbitWindow:
                 parts.append(str(state.last_folder))
             status_text = f"Context: {' · '.join(parts)}" if parts else ""
 
+        browser_ctrl = getattr(app, "browser_controller", None) if app else None
+        if browser_ctrl is None and agent:
+            browser_ctrl = getattr(agent, "browser_controller", None)
+
+        browser_text = "—"
+        if browser_ctrl is not None:
+            try:
+                b_stat = browser_ctrl.status()
+                if b_stat and b_stat.get("alive"):
+                    from urllib.parse import urlparse
+                    raw_url = b_stat.get("url", "")
+                    parsed = urlparse(raw_url)
+                    host = parsed.netloc or raw_url
+                    title = b_stat.get("title", "")
+                    browser_text = f"{host} | {title}" if (host or title) else "open"
+            except Exception:
+                pass
+
         if hasattr(self, "context_vars"):
             self.context_vars["site"].set(site)
             self.context_vars["query"].set(query)
             self.context_vars["app"].set(app_name)
             self.context_vars["folder"].set(folder)
+            if "browser" in self.context_vars:
+                self.context_vars["browser"].set(browser_text)
             self.context_vars["last_tool"].set(last_tool)
             self.context_vars["age"].set(age)
 

@@ -118,6 +118,7 @@ def main() -> None:
     """Terminal chat loop managing user input, permissions, tool execution, and responses."""
     speaker = None
     monitor = None
+    app = None
     try:
         # Enable network guard if offline mode is active
         if os.getenv("ORBIT_OFFLINE", "").strip().lower() in ("true", "1", "yes", "on") or getattr(settings, "ORBIT_OFFLINE", False):
@@ -207,11 +208,25 @@ def main() -> None:
 
     print(STARTUP_MESSAGE)
 
+    recent_chat_lines: list[str] = []
+
     try:
         while True:
             try:
                 user_input = input("You: ").strip()
                 if not user_input:
+                    continue
+
+                if user_input.lower() == "/diag":
+                    from core.diagnostics import generate_diagnostics
+                    file_path, _ = generate_diagnostics(
+                        app=app,
+                        agent=agent,
+                        provider_label=choice.label,
+                        recent_chat_lines=recent_chat_lines,
+                    )
+                    print(f"Diagnostics written to: {file_path}")
+                    print("This file is safe to share after a quick look.")
                     continue
 
                 if user_input.lower() == "quit":
@@ -242,6 +257,40 @@ def main() -> None:
                         print(f"Last tool: {d.get('last_tool') or 'none'}")
                         age_s = int(d.get("age_seconds", 0))
                         print(f"Age: {age_s}s")
+                    continue
+
+                if user_input.strip().lower() == "/browser close":
+                    ctrl = getattr(app, "browser_controller", None) if app else None
+                    if ctrl is None and agent:
+                        ctrl = getattr(agent, "browser_controller", None)
+                    if ctrl is not None:
+                        try:
+                            ctrl.close()
+                            print("Browser closed.")
+                        except Exception as exc:
+                            print(f"Error closing browser: {exc}")
+                    else:
+                        print("Browser is not open.")
+                    continue
+
+                if user_input.strip().lower() == "/browser":
+                    ctrl = getattr(app, "browser_controller", None) if app else None
+                    if ctrl is None and agent:
+                        ctrl = getattr(agent, "browser_controller", None)
+                    if ctrl is not None:
+                        try:
+                            stat = ctrl.status()
+                            if stat and stat.get("alive"):
+                                from urllib.parse import urlparse
+                                host = urlparse(stat.get("url", "")).netloc or stat.get("url", "")
+                                title = stat.get("title", "")
+                                print(f"Browser: {host} | {title}")
+                            else:
+                                print("Browser is not open.")
+                        except Exception as exc:
+                            print(f"Error querying browser status: {exc}")
+                    else:
+                        print("Browser is not open.")
                     continue
 
                 if user_input.lower() == "/last":
@@ -566,6 +615,10 @@ def main() -> None:
                 else:
                     reply = agent.chat(user_input)
 
+                recent_chat_lines.append(f"User: {user_input}")
+                recent_chat_lines.append(f"ORBIT: {reply}")
+                recent_chat_lines = recent_chat_lines[-20:]
+
                 # Display any tools invoked during this turn
                 for name, args, result in agent.last_tool_events:
                     print(f"[tool] {name}({args}) -> {result}")
@@ -580,6 +633,11 @@ def main() -> None:
                 print("\nGoodbye!")
                 break
     finally:
+        if app is not None and hasattr(app, "shutdown") and callable(app.shutdown):
+            try:
+                app.shutdown()
+            except Exception:
+                pass
         if speaker:
             speaker.stop()
         if monitor:

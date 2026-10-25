@@ -148,8 +148,45 @@ def test_all_expected_tools_registered_with_no_duplicates(tmp_path: Path):
     assert "list_documents" in tool_names
     assert "remove_document" in tool_names
 
-    # Expected count: 4 + 5 + 3 + 3 + 1 + 1 + 4 + 4 = 25
-    assert len(tools) == 25
+    core_tool_names = {
+        "get_current_time",
+        "calculate",
+        "system_info",
+        "write_note",
+        "list_files",
+        "read_file",
+        "create_file",
+        "create_folder",
+        "move_file",
+        "open_application",
+        "close_application",
+        "list_allowed_apps",
+        "open_website",
+        "search_web",
+        "search_site",
+        "open_in_vscode",
+        "open_workspace_folder",
+        "remember_fact",
+        "recall_memories",
+        "list_memories",
+        "forget_memory",
+        "index_documents",
+        "search_documents",
+        "list_documents",
+        "remove_document",
+    }
+    browser_tools = {
+        "browser_click_result",
+        "browser_media",
+        "browser_scroll",
+        "browser_history",
+        "browser_read_page",
+        "browser_close",
+    }
+    if settings.browser_enabled():
+        assert set(tool_names) == core_tool_names | browser_tools
+    else:
+        assert set(tool_names) == core_tool_names
 
 
 def test_every_created_path_is_inside_tmp_path(tmp_path: Path):

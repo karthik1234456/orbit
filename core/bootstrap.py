@@ -13,7 +13,7 @@ from rag.index import DocumentIndex, IndexUnavailable
 from security.audit import AuditLogger
 from security.permissions import PermissionPolicy
 from tools.builtin import register_builtin_tools
-from tools.desktop import register_desktop_tools
+from tools.desktop import _OMITTED, register_desktop_tools
 from tools.doc_tools import make_doc_tools
 from tools.memory_tools import make_memory_tools
 from tools.registry import ToolRegistry
@@ -119,6 +119,15 @@ class App:
     paths: AppPaths
     provider: Any
     retriever: Optional[Callable[[str], Any]] = None
+    browser_controller: Optional[Any] = None
+
+    def shutdown(self) -> None:
+        """Clean up and shut down application resources."""
+        if self.browser_controller is not None:
+            try:
+                self.browser_controller.shutdown()
+            except Exception:
+                pass
 
 
 def build_app(
@@ -132,6 +141,8 @@ def build_app(
     doc_index: Optional[DocumentIndex] = None,
     retriever: Optional[Callable[[str], Any]] = None,
     sites: Optional[Mapping[str, Any]] = None,
+    browser_controller: Any = _OMITTED,
+    browser_backend_factory: Optional[Callable[[], Any]] = None,
 ) -> App:
     """Build and wire an ORBIT application instance with configured tools, policy, and logging."""
     if paths is None:
@@ -162,7 +173,14 @@ def build_app(
     memory_store = MemoryStore(path=paths.memory_db, max_items=settings.MEMORY_MAX_ITEMS)
     registry = ToolRegistry()
     register_builtin_tools(registry)
-    register_desktop_tools(registry, paths.workspace, allowed_apps, sites=sites)
+    browser_ctrl = register_desktop_tools(
+        registry,
+        paths.workspace,
+        allowed_apps,
+        sites=sites,
+        browser_controller=browser_controller,
+        browser_backend_factory=browser_backend_factory,
+    )
     for tool in make_memory_tools(memory_store):
         registry.register(tool)
 
@@ -204,6 +222,7 @@ def build_app(
         retriever=retriever,
         allowed_apps=allowed_apps,
         sites=sites,
+        browser_controller=browser_ctrl,
     )
 
     return App(
@@ -216,4 +235,5 @@ def build_app(
         paths=paths,
         provider=provider,
         retriever=retriever,
+        browser_controller=browser_ctrl,
     )
