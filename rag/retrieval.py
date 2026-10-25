@@ -25,12 +25,11 @@ Heuristics and Architecture Rationale:
 
 from dataclasses import dataclass, field
 import math
-from pathlib import Path
 import re
 from typing import Any, Optional
 
 from config import settings
-from rag.index import STOPWORDS, DocumentIndex, Hit
+from rag.index import STOPWORDS, Hit
 from rag.safety import build_docs_block
 
 # Cues indicating that a user query is scoped to personal/team documents or plans

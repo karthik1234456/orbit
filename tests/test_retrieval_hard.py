@@ -1,6 +1,5 @@
 """Tests for the hard retrieval benchmark (evals/retrieval_hard)."""
 
-import json
 from pathlib import Path
 import pytest
 

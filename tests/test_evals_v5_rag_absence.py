@@ -18,7 +18,7 @@ from evals.checks import (
 )
 from evals.providers import GoldenProvider, NoopProvider
 from evals.runner import run_case, run_suite
-from evals.schema import CHECK_ALLOWED_KEYS, CaseError, EvalCase, _validate_and_parse_case, load_cases
+from evals.schema import CHECK_ALLOWED_KEYS, CaseError, _validate_and_parse_case, load_cases
 
 
 def test_schema_validates_not_found_language():

@@ -4,7 +4,7 @@ from pathlib import Path
 import sqlite3
 import pytest
 
-from rag.index import DocumentIndex, Hit, has_fts5, SCHEMA_VERSION
+from rag.index import DocumentIndex, has_fts5, SCHEMA_VERSION
 from rag.retrieval import auto_retrieve
 
 pytestmark = pytest.mark.skipif(not has_fts5(), reason="SQLite FTS5 extension is not available")

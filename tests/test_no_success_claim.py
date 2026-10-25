@@ -10,7 +10,6 @@ from evals.checks import (
     CHECK_TYPES,
     LANGUAGE_CHECK_TYPES,
     RunObservation,
-    ToolEvent,
     run_checks,
 )
 from evals.providers import GoldenProvider, NoopProvider
@@ -18,7 +17,6 @@ from evals.runner import run_case
 from evals.schema import (
     CHECK_ALLOWED_KEYS,
     CaseError,
-    EvalCase,
     _validate_and_parse_case,
     load_cases,
 )

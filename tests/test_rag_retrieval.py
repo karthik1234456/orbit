@@ -7,7 +7,6 @@ import pytest
 from config import settings
 from rag.index import DocumentIndex, has_fts5
 from rag.retrieval import (
-    AutoRetrieval,
     auto_retrieve,
     not_found_note,
     query_terms,

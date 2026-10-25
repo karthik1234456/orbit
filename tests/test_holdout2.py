@@ -224,7 +224,7 @@ def test_publish_refuses_holdout(capsys, monkeypatch, tmp_path):
     monkeypatch.setattr("evals.__main__.Path", lambda p: test_report_dest if "REPORT.md" in str(p) else Path(p))
 
     # Run holdout2 with --publish
-    code = main([
+    main([
         "--holdout", "holdout2",
         "--publish",
         "--limit", "1",

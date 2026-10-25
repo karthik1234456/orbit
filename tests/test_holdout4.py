@@ -1,18 +1,14 @@
 """Tests for evals/holdout4/ suite, case validation, integrity rules, and markers."""
 
 from collections import Counter
-from datetime import datetime, timezone
 import json
 from pathlib import Path
-import re
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
-from core.llm import LLMProvider, LLMResponse, ToolCall
+from core.llm import LLMProvider, LLMResponse
 from evals import __main__ as evals_main
 from evals.providers import GoldenProvider, NoopProvider
-from evals.report import render_markdown
 from evals.runner import run_case
 from evals.schema import load_cases
 

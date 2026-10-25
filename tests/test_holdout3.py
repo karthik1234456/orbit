@@ -255,7 +255,7 @@ def test_publish_refuses_holdout3(capsys, monkeypatch, tmp_path):
     test_report_dest = tmp_path / "REPORT_TEST.md"
     monkeypatch.setattr("evals.__main__.Path", lambda p: test_report_dest if "REPORT.md" in str(p) else Path(p))
 
-    code = main([
+    main([
         "--holdout", "holdout3",
         "--publish",
         "--limit", "1",

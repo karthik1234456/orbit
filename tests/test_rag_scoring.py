@@ -1,12 +1,10 @@
 """Synthetic unit tests for ORBIT RAG scoring methods, obsolescence detection, and outdated tagging."""
 
 from pathlib import Path
-import pytest
 
 from config import settings
 from rag.index import DocumentIndex, is_document_outdated
 from rag.retrieval import auto_retrieve
-from rag.safety import build_docs_block
 
 
 def test_obsolescence_detection_true_and_false_cases():

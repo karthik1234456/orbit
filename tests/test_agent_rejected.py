@@ -13,10 +13,10 @@ from evals.report import render_markdown
 from evals.schema import EvalCase
 from memory.store import MemoryStore
 from security.audit import AuditLogger
-from security.permissions import PermissionLevel, PermissionPolicy
+from security.permissions import PermissionPolicy
 from tools.builtin import register_builtin_tools
 from tools.memory_tools import make_memory_tools
-from tools.registry import Tool, ToolRegistry
+from tools.registry import ToolRegistry
 
 
 class ScriptedProvider(LLMProvider):

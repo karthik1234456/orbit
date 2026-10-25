@@ -1,18 +1,15 @@
 """Tests for retrieval evaluation benchmark harness and dataset splits."""
 
-import json
 from pathlib import Path
 import pytest
 
 from evals.retrieval_eval import (
     build_retrieval_index,
     compute_retrieval_metrics,
-    evaluate_item,
-    get_git_commit,
     load_retrieval_dataset,
     run_retrieval_eval,
 )
-from rag.index import DocumentIndex, has_fts5
+from rag.index import has_fts5
 from rag.retrieval import auto_retrieve
 
 pytestmark = pytest.mark.skipif(not has_fts5(), reason="SQLite FTS5 extension is not available")
