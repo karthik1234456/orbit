@@ -48,8 +48,8 @@ def test_register_all_tools_into_fresh_registry(tmp_path: Path):
     # 1. No duplicate names
     assert len(tool_names) == len(set(tool_names)), f"Duplicate tool names detected: {tool_names}"
 
-    # Verify expected total tools count (4 builtin + 5 file + 3 app + 2 browser + 1 vscode + 1 open_workspace_folder = 16)
-    assert len(tools) == 16
+    # Verify expected total tools count (4 builtin + 5 file + 3 app + 3 browser + 1 vscode + 1 open_workspace_folder = 17)
+    assert len(tools) == 17
 
     # Verify open_workspace_folder is present with correct attributes
     assert "open_workspace_folder" in tool_names

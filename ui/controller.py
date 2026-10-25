@@ -87,6 +87,8 @@ class ChatController:
 
         self._request_counter: int = 0
         self._pending_confirmation: Optional[dict] = None
+        self._task_counter: int = 0
+        self._current_task: int = 0
 
     def attach(self, app: Any) -> None:
         """Attach the wired App instance to the controller."""
@@ -98,6 +100,14 @@ class ChatController:
         with self._lock:
             return self._busy
 
+    @property
+    def pending_tool(self) -> Optional[str]:
+        """Return the tool name currently awaiting confirmation, if any."""
+        with self._lock:
+            if self._pending_confirmation is not None:
+                return self._pending_confirmation.get("tool")
+        return None
+
     def drain(self, max_items: int = 100) -> list[UiEvent]:
         """Perform non-blocking read of queued UiEvents for UI timer processing."""
         events: list[UiEvent] = []
@@ -108,9 +118,15 @@ class ChatController:
                 break
         return events
 
-    def _emit(self, kind: str, data: Optional[dict] = None) -> None:
+    def _emit(self, kind: str, data: Optional[dict] = None, task: Optional[int] = None) -> None:
         """Enqueue a new UiEvent for the UI thread."""
-        self._events.put(UiEvent(kind=kind, data=data if data is not None else {}))
+        event_data = dict(data) if data is not None else {}
+        if "task" not in event_data:
+            if task is not None:
+                event_data["task"] = task
+            elif self._current_task:
+                event_data["task"] = self._current_task
+        self._events.put(UiEvent(kind=kind, data=event_data))
 
     def on_agent_event(self, event: dict) -> None:
         """Convert agent lifecycle events into UiEvents. Must never raise."""
@@ -119,7 +135,10 @@ class ChatController:
                 return
             etype = event.get("type")
             if etype in ("step_start", "step_end", "task_end", "auto_retrieval"):
-                self._emit(etype, dict(event))
+                data = dict(event)
+                if "task" not in data and self._current_task:
+                    data["task"] = self._current_task
+                self._emit(etype, data)
         except Exception:
             pass
 
@@ -137,14 +156,21 @@ class ChatController:
         with self._lock:
             if self._shutdown or self._busy:
                 if self._busy:
-                    self._emit("busy")
+                    pending_tool = self._pending_confirmation.get("tool") if self._pending_confirmation else None
+                    self._emit("busy", {
+                        "pending_confirmation": self._pending_confirmation is not None,
+                        "tool": pending_tool,
+                    })
                 return False
 
             self._busy = True
+            self._task_counter += 1
+            task_id = self._task_counter
+            self._current_task = task_id
             self.cancel_event.clear()
             worker = threading.Thread(
                 target=self._worker_loop,
-                args=(clean_text,),
+                args=(clean_text, task_id),
                 daemon=True,
                 name="ChatControllerWorker",
             )
@@ -152,7 +178,7 @@ class ChatController:
             worker.start()
             return True
 
-    def _worker_loop(self, text: str) -> None:
+    def _worker_loop(self, text: str, task_id: int) -> None:
         """Background worker thread executing the agent chat loop."""
         streamed_any = False
 
@@ -160,7 +186,7 @@ class ChatController:
             nonlocal streamed_any
             if delta:
                 streamed_any = True
-                self._emit("delta", {"delta": delta, "text": delta})
+                self._emit("delta", {"delta": delta, "text": delta, "task": task_id})
 
         try:
             if self.app is None or not hasattr(self.app, "agent"):
@@ -172,14 +198,27 @@ class ChatController:
                 cancel_event=self.cancel_event,
             )
 
+            had_denial = False
+            agent = getattr(self.app, "agent", None)
+            if agent and getattr(agent, "last_run", None):
+                for step in getattr(agent.last_run, "steps", []):
+                    if getattr(step, "status", "") == "denied" or "user denied permission" in str(getattr(step, "result", "")).lower():
+                        had_denial = True
+                        break
+            if "user denied permission" in str(final_text).lower():
+                had_denial = True
+
+            if had_denial:
+                final_text = "Okay, I didn't do that because you didn't approve it."
+
             self._emit("reply", {
                 "text": final_text,
                 "reply": final_text,
                 "streamed": streamed_any,
+                "task": task_id,
             })
 
             summary = ""
-            agent = getattr(self.app, "agent", None)
             if agent is not None and getattr(agent, "last_run", None) is not None:
                 last_run = agent.last_run
                 if hasattr(last_run, "summary") and callable(last_run.summary):
@@ -187,6 +226,7 @@ class ChatController:
 
             self._emit("task_done", {
                 "summary": summary,
+                "task": task_id,
             })
 
         except QuotaExceededError:
@@ -199,6 +239,7 @@ class ChatController:
                 "error": msg,
                 "message": msg,
                 "model": model_name,
+                "task": task_id,
             })
 
         except Exception as exc:
@@ -206,6 +247,7 @@ class ChatController:
             self._emit("error", {
                 "error": msg,
                 "message": msg,
+                "task": task_id,
             })
 
         finally:
@@ -231,6 +273,7 @@ class ChatController:
             confirm_event = threading.Event()
             pending = {
                 "id": req_id,
+                "tool": tool,
                 "event": confirm_event,
                 "allowed": False,
             }
@@ -251,6 +294,7 @@ class ChatController:
             "args": req.args,
             "warning": warning,
             "timeout_s": self.confirm_timeout_s,
+            "task": self._current_task,
         })
 
         signaled = confirm_event.wait(timeout=self.confirm_timeout_s)
@@ -299,6 +343,14 @@ class ChatController:
 
         if pending is not None:
             pending["event"].set()
+
+    def reset(self) -> None:
+        """Reset agent conversation history and session state."""
+        with self._lock:
+            app = self.app
+        if app is not None and hasattr(app, "agent") and app.agent is not None:
+            if hasattr(app.agent, "reset"):
+                app.agent.reset()
 
     def shutdown(self) -> None:
         """Cancel, deny pending confirmations, and join worker thread for up to 2s."""

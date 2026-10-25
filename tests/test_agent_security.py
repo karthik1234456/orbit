@@ -483,6 +483,7 @@ def test_valid_app_still_asks_for_confirmation(tmp_path: Path):
         policy=policy,
         audit=audit,
         confirm_callback=confirm_callback,
+        command_shortcuts=False,
     )
 
     with patch("shutil.which", return_value="C:\\Windows\\notepad.exe"), patch("subprocess.Popen"):

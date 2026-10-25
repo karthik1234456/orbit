@@ -483,3 +483,29 @@ def test_list_models_and_server_version():
         # Failure for server_version
         mock_get.side_effect = requests.exceptions.ConnectionError()
         assert server_version(host="http://127.0.0.1:11434") is None
+
+
+def test_hard_timeout_raises_ollama_unavailable():
+    """Verify that exceeding OLLAMA_TIMEOUT_S during streaming raises OllamaUnavailable."""
+    class SlowFakeResponse(FakeResponse):
+        def iter_lines(self):
+            import time
+            for line in self._lines:
+                time.sleep(0.05)
+                yield line.encode("utf-8")
+
+    lines = [
+        '{"message": {"role": "assistant", "content": "token1"}}',
+        '{"message": {"role": "assistant", "content": "token2"}}',
+        '{"done": true}',
+    ]
+
+    def fake_post(url, json=None, stream=False, timeout=None):
+        return SlowFakeResponse(lines=lines)
+
+    provider = OllamaProvider(timeout_s=0.02, http_post=fake_post)
+    with pytest.raises(OllamaUnavailable) as exc:
+        provider.generate(messages=[{"role": "user", "content": "Hi"}])
+    assert "Ollama is not running at" in str(exc.value)
+    assert "ollama serve" in str(exc.value)
+

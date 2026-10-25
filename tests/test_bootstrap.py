@@ -148,8 +148,8 @@ def test_all_expected_tools_registered_with_no_duplicates(tmp_path: Path):
     assert "list_documents" in tool_names
     assert "remove_document" in tool_names
 
-    # Expected count: 4 + 5 + 3 + 2 + 1 + 1 + 4 + 4 = 24
-    assert len(tools) == 24
+    # Expected count: 4 + 5 + 3 + 3 + 1 + 1 + 4 + 4 = 25
+    assert len(tools) == 25
 
 
 def test_every_created_path_is_inside_tmp_path(tmp_path: Path):

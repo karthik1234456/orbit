@@ -7,6 +7,7 @@ execute exclusively on the Tkinter main thread.
 """
 
 import json
+import sys
 import threading
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
@@ -44,6 +45,10 @@ class ConfirmDialog(tk.Toplevel):
         self.title("Action Confirmation Required")
         self.transient(parent)
         self.resizable(False, False)
+        try:
+            self.attributes("-topmost", True)
+        except Exception:
+            pass
 
         # Build modal content
         self._build_ui()
@@ -54,6 +59,7 @@ class ConfirmDialog(tk.Toplevel):
         # Keybindings and window protocol
         self.protocol("WM_DELETE_WINDOW", lambda: self._resolve(False))
         self.bind("<Escape>", lambda e: self._resolve(False))
+        self.bind("<Destroy>", self._on_dialog_destroy)
         # Enter must NEVER mean Allow
         self.bind("<Return>", lambda e: self._on_enter())
         self.bind("<KP_Enter>", lambda e: self._on_enter())
@@ -157,13 +163,21 @@ class ConfirmDialog(tk.Toplevel):
         self._resolve(False)
         return "break"
 
+    def _on_dialog_destroy(self, event: Optional[tk.Event] = None) -> None:
+        if event is None or getattr(event, "widget", None) == self:
+            if not self._resolved:
+                self._resolve(False)
+
     def _resolve(self, allowed: bool) -> None:
         if self._resolved:
             return
         self._resolved = True
 
         if self._countdown_timer is not None:
-            self.after_cancel(self._countdown_timer)
+            try:
+                self.after_cancel(self._countdown_timer)
+            except Exception:
+                pass
             self._countdown_timer = None
 
         try:
@@ -173,7 +187,10 @@ class ConfirmDialog(tk.Toplevel):
                 self.grab_release()
             except Exception:
                 pass
-            self.destroy()
+            try:
+                self.destroy()
+            except Exception:
+                pass
 
 
 class OrbitWindow:
@@ -195,6 +212,11 @@ class OrbitWindow:
         self._shutdown_called = False
         self._streaming = False
         self._confirm_dialog: Optional[ConfirmDialog] = None
+        self._view_task_counter: int = 0
+        self._current_view_task: int = 0
+        self._last_activity_task: Optional[int] = None
+        self._tasks_with_ui_error: set[int] = set()
+        self._current_task_had_denial: bool = False
 
         self.root.title(f"ORBIT v{VERSION} Desktop Assistant")
         self.root.geometry("1020x680")
@@ -214,6 +236,7 @@ class OrbitWindow:
         self._refresh_memories()
         self._refresh_documents()
         self._refresh_last_run()
+        self._refresh_context_tab()
         self._check_index_migrated()
 
         # Start timer polling for controller events (UI thread only)
@@ -282,6 +305,7 @@ class OrbitWindow:
         self.notebook.pack(fill="both", expand=True)
 
         self._build_activity_tab()
+        self._build_context_tab()
         self._build_memories_tab()
         self._build_documents_tab()
         self._build_last_run_tab()
@@ -293,18 +317,20 @@ class OrbitWindow:
         self.activity_frame = ttk.Frame(self.notebook, padding=6)
         self.notebook.add(self.activity_frame, text="Activity")
 
-        columns = ("step", "tool", "status", "info")
+        columns = ("task", "step", "tool", "status", "info")
         self.activity_tree = ttk.Treeview(
             self.activity_frame,
             columns=columns,
             show="headings",
             selectmode="browse",
         )
+        self.activity_tree.heading("task", text="Task")
         self.activity_tree.heading("step", text="#")
         self.activity_tree.heading("tool", text="Tool")
         self.activity_tree.heading("status", text="Status")
         self.activity_tree.heading("info", text="Detail")
 
+        self.activity_tree.column("task", width=45, stretch=False)
         self.activity_tree.column("step", width=35, stretch=False)
         self.activity_tree.column("tool", width=110, stretch=False)
         self.activity_tree.column("status", width=80, stretch=False)
@@ -315,6 +341,49 @@ class OrbitWindow:
 
         self.activity_tree.pack(side="left", fill="both", expand=True)
         tree_scroll.pack(side="right", fill="y")
+
+    def _build_context_tab(self) -> None:
+        self.context_frame = ttk.Frame(self.notebook, padding=12)
+        self.notebook.add(self.context_frame, text="Context")
+
+        self.context_vars = {
+            "site": tk.StringVar(value="—"),
+            "query": tk.StringVar(value="—"),
+            "app": tk.StringVar(value="—"),
+            "folder": tk.StringVar(value="—"),
+            "last_tool": tk.StringVar(value="—"),
+            "age": tk.StringVar(value="—"),
+        }
+
+        grid_frame = ttk.Frame(self.context_frame)
+        grid_frame.pack(fill="x", anchor="n", pady=(0, 16))
+
+        fields = [
+            ("Site:", "site"),
+            ("Query:", "query"),
+            ("App:", "app"),
+            ("Folder:", "folder"),
+            ("Last tool:", "last_tool"),
+            ("Age:", "age"),
+        ]
+
+        self.context_labels = {}
+        for row_idx, (label_text, key) in enumerate(fields):
+            lbl = ttk.Label(grid_frame, text=label_text, font=("Segoe UI", 9, "bold"), width=12)
+            lbl.grid(row=row_idx, column=0, sticky="w", pady=4)
+            val_lbl = ttk.Label(grid_frame, textvariable=self.context_vars[key], font=("Segoe UI", 9))
+            val_lbl.grid(row=row_idx, column=1, sticky="w", pady=4)
+            self.context_labels[key] = val_lbl
+
+        btn_box = ttk.Frame(self.context_frame)
+        btn_box.pack(fill="x", side="bottom")
+
+        self.new_conv_btn = ttk.Button(
+            btn_box,
+            text="New conversation",
+            command=self._on_new_conversation,
+        )
+        self.new_conv_btn.pack(side="left")
 
     def _build_memories_tab(self) -> None:
         self.memories_frame = ttk.Frame(self.notebook, padding=6)
@@ -403,6 +472,7 @@ class OrbitWindow:
     def _build_status_bar(self, container: ttk.Frame) -> None:
         status_bar = ttk.Frame(container, padding=(8, 4))
         status_bar.pack(fill="x", side="bottom")
+        self.status_bar = status_bar
 
         # Mode indicator
         is_mock = "MOCK" in self.mode_label
@@ -424,6 +494,14 @@ class OrbitWindow:
         )
         self.busy_lbl.pack(side="left", padx=(0, 12))
 
+        # One-line context status (hidden when empty)
+        self.context_lbl = tk.Label(
+            status_bar,
+            text="",
+            fg="#2c3e50",
+            font=("Segoe UI", 9),
+        )
+
         # Notice banner
         if self.notice:
             self.notice_lbl = tk.Label(
@@ -436,32 +514,71 @@ class OrbitWindow:
 
     # --- Polling & Event Handling (UI Thread Only) ---
 
+    def _mark_running_steps_interrupted(self) -> None:
+        """Mark any activity row still showing 'running...' as 'interrupted'."""
+        for item_id in self.activity_tree.get_children():
+            values = list(self.activity_tree.item(item_id, "values"))
+            if len(values) >= 4 and values[3] == "running...":
+                values[3] = "interrupted"
+                tool_name = str(values[2]) if len(values) > 2 else ""
+                if not tool_name.startswith("✗") and not tool_name.startswith("✓"):
+                    values[2] = f"✗ {tool_name}".strip()
+                self.activity_tree.item(item_id, values=values)
+
     def _poll(self) -> None:
         if self._destroyed:
             return
 
-        events = self.controller.drain(max_items=100)
-        for event in events:
-            self._handle_event(event)
+        try:
+            events = self.controller.drain(max_items=100)
+            for event in events:
+                try:
+                    self._handle_event(event)
+                except Exception as exc:
+                    import traceback
+                    traceback.print_exc(file=sys.stderr)
+                    task_id = None
+                    try:
+                        event_data = getattr(event, "data", None)
+                        if isinstance(event_data, dict):
+                            task_id = event_data.get("task")
+                    except Exception:
+                        pass
+                    if task_id is None:
+                        task_id = self._current_view_task or 0
+                    if task_id not in self._tasks_with_ui_error:
+                        self._tasks_with_ui_error.add(task_id)
+                        err_msg = str(exc) or exc.__class__.__name__
+                        self._append_chat(f"UI error: {err_msg}\n\n", ("system",))
 
-        # Synchronize busy UI state
-        self._update_busy_ui(self.controller.is_busy)
-
-        # Dynamically attach Documents tab if doc_index became available
-        if "Documents" not in [self.notebook.tab(i, "text") for i in self.notebook.tabs()]:
-            if (
-                self.controller.app
-                and getattr(self.controller.app, "doc_index", None) is not None
-            ):
-                self.notebook.add(self.docs_frame, text="Documents")
-                self._refresh_documents()
-
-        if not self._destroyed:
-            self.root.after(50, self._poll)
+            # Dynamically attach Documents tab if doc_index became available
+            if "Documents" not in [self.notebook.tab(i, "text") for i in self.notebook.tabs()]:
+                if (
+                    self.controller.app
+                    and getattr(self.controller.app, "doc_index", None) is not None
+                ):
+                    self.notebook.add(self.docs_frame, text="Documents")
+                    self._refresh_documents()
+        finally:
+            try:
+                self._update_busy_ui(self.controller.is_busy)
+            except Exception:
+                pass
+            try:
+                self._refresh_context_tab()
+            except Exception:
+                pass
+            if not self._destroyed:
+                try:
+                    self.root.after(50, self._poll)
+                except Exception:
+                    pass
 
     def _handle_event(self, event: UiEvent) -> None:
-        kind = event.kind
-        data = event.data
+        kind = getattr(event, "kind", "")
+        data = getattr(event, "data", {})
+        if not isinstance(data, dict):
+            data = {}
 
         if kind == "delta":
             delta_text = data.get("delta") or data.get("text", "")
@@ -473,6 +590,8 @@ class OrbitWindow:
         elif kind == "reply":
             full_text = data.get("text") or data.get("reply", "")
             streamed = data.get("streamed", False)
+            if self._current_task_had_denial or "user denied permission" in str(full_text).lower():
+                full_text = "Okay, I didn't do that because you didn't approve it."
             if not streamed and not self._streaming:
                 self._append_chat("ORBIT: ", ("orbit_prefix",))
                 self._append_chat(f"{full_text}\n\n", ("orbit",))
@@ -481,50 +600,110 @@ class OrbitWindow:
             self._streaming = False
 
         elif kind == "error":
+            self._mark_running_steps_interrupted()
             msg = data.get("message") or data.get("error", "An error occurred.")
             self._append_chat(f"Error: {msg}\n\n", ("error",))
             self._streaming = False
+            self._current_task_had_denial = False
+            if data.get("task") is None:
+                self._view_task_counter += 1
 
         elif kind == "busy":
-            self._append_chat("System: ORBIT is currently busy with another task.\n\n", ("system",))
+            pass
 
         elif kind == "task_done":
+            self._mark_running_steps_interrupted()
             self._refresh_last_run()
+            self._current_task_had_denial = False
+            if data.get("task") is None:
+                self._view_task_counter += 1
 
         elif kind == "step_start":
-            idx = data.get("index", "")
+            idx = data.get("index", data.get("idx", ""))
             tool = data.get("tool", "")
-            self.activity_tree.insert("", "end", iid=f"step_{idx}", values=(idx, tool, "running...", ""))
+            task = data.get("task")
+            if task is None:
+                if self._view_task_counter == 0:
+                    self._view_task_counter = 1
+                task = self._view_task_counter
+            self._current_view_task = task
+
+            if self._last_activity_task is not None and task != self._last_activity_task:
+                sep_id = f"sep_t{task}"
+                if not self.activity_tree.exists(sep_id):
+                    self.activity_tree.insert("", "end", iid=sep_id, values=("—", "—", "—", "—", "—"))
+            self._last_activity_task = task
+
+            item_id = f"t{task}_s{idx}"
+            if self.activity_tree.exists(item_id):
+                self.activity_tree.item(item_id, values=(task, idx, tool, "running...", ""))
+            else:
+                self.activity_tree.insert("", "end", iid=item_id, values=(task, idx, tool, "running...", ""))
             self.activity_tree.yview_moveto(1.0)
 
         elif kind == "step_end":
-            idx = data.get("index", "")
+            idx = data.get("index", data.get("idx", ""))
             tool = data.get("tool", "")
             status = data.get("status", "")
-            result = str(data.get("result", ""))[:60]
+            detail = data.get("detail", data.get("result", ""))
+            result_str = str(detail)[:60]
             symbol = "✓" if status == "success" else "✗"
-            item_id = f"step_{idx}"
-            display_tool = f"{symbol} {tool}"
+            display_tool = f"{symbol} {tool}".strip()
+
+            task = data.get("task")
+            if task is None:
+                if self._view_task_counter == 0:
+                    self._view_task_counter = 1
+                task = self._view_task_counter
+            self._current_view_task = task
+
+            if self._last_activity_task is not None and task != self._last_activity_task:
+                sep_id = f"sep_t{task}"
+                if not self.activity_tree.exists(sep_id):
+                    self.activity_tree.insert("", "end", iid=sep_id, values=("—", "—", "—", "—", "—"))
+            self._last_activity_task = task
+
+            if status == "denied" or "user denied permission" in str(detail).lower():
+                self._current_task_had_denial = True
+
+            item_id = f"t{task}_s{idx}"
             if self.activity_tree.exists(item_id):
-                self.activity_tree.item(item_id, values=(idx, display_tool, status, result))
+                self.activity_tree.item(item_id, values=(task, idx, display_tool, status, result_str))
             else:
-                self.activity_tree.insert("", "end", iid=item_id, values=(idx, display_tool, status, result))
+                self.activity_tree.insert("", "end", iid=item_id, values=(task, idx, display_tool, status, result_str))
             self.activity_tree.yview_moveto(1.0)
 
         elif kind == "auto_retrieval":
             injected = int(data.get("injected", 0) or 0)
             if injected > 0:
+                task = data.get("task")
+                if task is None:
+                    task = self._current_view_task or ""
                 self.activity_tree.insert(
                     "",
                     "end",
-                    values=("", "documents", "retrieved", f"Searched your documents: {injected} passages"),
+                    values=(task, "", "documents", "retrieved", f"Searched your documents: {injected} passages"),
                 )
                 self.activity_tree.yview_moveto(1.0)
 
         elif kind == "confirm_request":
             req = data.get("request")
             if req is not None:
+                try:
+                    self.root.lift()
+                except Exception:
+                    pass
+                try:
+                    self.root.bell()
+                except Exception:
+                    pass
                 self._confirm_dialog = ConfirmDialog(self.root, self.controller, req)
+                try:
+                    self._confirm_dialog.attributes("-topmost", True)
+                    self._confirm_dialog.lift()
+                    self._confirm_dialog.focus_force()
+                except Exception:
+                    pass
 
     def _update_busy_ui(self, is_busy: bool) -> None:
         if is_busy:
@@ -564,7 +743,27 @@ class OrbitWindow:
 
         submitted = self.controller.submit(text)
         if not submitted:
-            self._append_chat("System: Submission rejected (busy or unattached).\n\n", ("system",))
+            pending_tool = getattr(self.controller, "pending_tool", None)
+            if not pending_tool and self._confirm_dialog and self._confirm_dialog.winfo_exists():
+                pending_tool = getattr(getattr(self._confirm_dialog, "request", None), "tool", None)
+
+            if pending_tool:
+                self._append_chat(
+                    f"System: ORBIT is still working on your previous request; it is waiting for your approval. Waiting for your approval of {pending_tool}.\n\n",
+                    ("system",),
+                )
+                if self._confirm_dialog and self._confirm_dialog.winfo_exists():
+                    try:
+                        self._confirm_dialog.attributes("-topmost", True)
+                        self._confirm_dialog.lift()
+                        self._confirm_dialog.focus_force()
+                    except Exception:
+                        pass
+            else:
+                self._append_chat(
+                    "System: ORBIT is still working on your previous request.\n\n",
+                    ("system",),
+                )
 
     def _on_stop(self) -> None:
         self.controller.cancel()
@@ -579,13 +778,26 @@ class OrbitWindow:
         store = getattr(app, "memory_store", None)
         if store is not None and hasattr(store, "list_all"):
             try:
+                seen_ids: set[str] = set()
                 for mem in store.list_all():
-                    self.memory_tree.insert(
-                        "",
-                        "end",
-                        iid=str(mem.id),
-                        values=(mem.id, mem.category, mem.content),
-                    )
+                    mem_id = getattr(mem, "id", None)
+                    iid = f"mem_{mem_id}" if mem_id is not None else None
+                    if iid and (iid in seen_ids or self.memory_tree.exists(iid)):
+                        iid = f"{iid}_{len(seen_ids)}"
+                    if iid:
+                        seen_ids.add(iid)
+                        self.memory_tree.insert(
+                            "",
+                            "end",
+                            iid=iid,
+                            values=(mem.id, mem.category, mem.content),
+                        )
+                    else:
+                        self.memory_tree.insert(
+                            "",
+                            "end",
+                            values=(mem.id, mem.category, mem.content),
+                        )
             except Exception:
                 pass
 
@@ -594,10 +806,13 @@ class OrbitWindow:
         if not selected:
             return
 
-        item_id = selected[0]
+        sel_iid = selected[0]
+        vals = self.memory_tree.item(sel_iid, "values")
+        mem_id = vals[0] if vals else sel_iid.replace("mem_", "")
+
         confirmed = messagebox.askyesno(
             "Delete Memory",
-            f"Are you sure you want to delete memory #{item_id}?",
+            f"Are you sure you want to delete memory #{mem_id}?",
             parent=self.root,
         )
         if not confirmed:
@@ -607,7 +822,7 @@ class OrbitWindow:
         store = getattr(app, "memory_store", None)
         if store is not None and hasattr(store, "delete"):
             try:
-                store.delete(int(item_id))
+                store.delete(int(mem_id))
             except Exception as exc:
                 messagebox.showerror("Error", f"Failed to delete memory: {exc}", parent=self.root)
             self._refresh_memories()
@@ -632,11 +847,12 @@ class OrbitWindow:
         if index is not None and hasattr(index, "list_documents"):
             try:
                 docs = index.list_documents()
-                for doc in docs:
+                for i, doc in enumerate(docs):
                     path, chunks, flagged, _ = doc
                     self.docs_tree.insert(
                         "",
                         "end",
+                        iid=f"doc_{i}",
                         values=(path, chunks, flagged),
                     )
             except Exception:
@@ -684,6 +900,87 @@ class OrbitWindow:
         self.last_run_text.delete("1.0", tk.END)
         self.last_run_text.insert("1.0", summary)
         self.last_run_text.configure(state="disabled")
+
+    def _on_new_conversation(self) -> None:
+        confirmed = messagebox.askyesno(
+            "New Conversation",
+            "Clear conversation history and session state to start a new conversation?",
+            parent=self.root,
+        )
+        if not confirmed:
+            return
+
+        self.history.configure(state="normal")
+        self.history.delete("1.0", tk.END)
+        self.history.configure(state="disabled")
+
+        if hasattr(self.controller, "reset"):
+            self.controller.reset()
+        else:
+            app = getattr(self.controller, "app", None)
+            agent = getattr(app, "agent", None) if app else None
+            if agent is not None:
+                if hasattr(agent, "reset"):
+                    agent.reset()
+                elif hasattr(agent, "session_state") and agent.session_state is not None:
+                    agent.session_state.clear()
+
+        self._refresh_context_tab()
+
+    def _refresh_context_tab(self) -> None:
+        app = getattr(self.controller, "app", None)
+        agent = getattr(app, "agent", None) if app else None
+        state = getattr(agent, "session_state", None) if agent else None
+
+        if state is None or (hasattr(state, "is_empty") and state.is_empty()):
+            site = "—"
+            query = "—"
+            app_name = "—"
+            folder = "—"
+            last_tool = "—"
+            age = "—"
+            status_text = ""
+        else:
+            site = getattr(state, "last_site", None) or "—"
+            query = getattr(state, "last_query", None) or "—"
+            app_name = getattr(state, "last_app", None) or "—"
+            folder = getattr(state, "last_folder", None) or "—"
+            last_tool = getattr(state, "last_tool", None) or "—"
+            age_s = getattr(state, "age_seconds", None)
+            if age_s is not None and getattr(state, "updated_at", 0) > 0:
+                age = f"{int(age_s)}s"
+            else:
+                age = "—"
+
+            parts = []
+            if getattr(state, "last_site", None):
+                parts.append(str(state.last_site))
+            if getattr(state, "last_query", None):
+                parts.append(f"'{state.last_query}'")
+            if getattr(state, "last_app", None):
+                parts.append(str(state.last_app))
+            if getattr(state, "last_folder", None):
+                parts.append(str(state.last_folder))
+            status_text = f"Context: {' · '.join(parts)}" if parts else ""
+
+        if hasattr(self, "context_vars"):
+            self.context_vars["site"].set(site)
+            self.context_vars["query"].set(query)
+            self.context_vars["app"].set(app_name)
+            self.context_vars["folder"].set(folder)
+            self.context_vars["last_tool"].set(last_tool)
+            self.context_vars["age"].set(age)
+
+        if hasattr(self, "context_lbl"):
+            if status_text:
+                self.context_lbl.configure(text=status_text)
+                if not self.context_lbl.winfo_ismapped():
+                    if hasattr(self, "notice_lbl") and self.notice_lbl.winfo_ismapped():
+                        self.context_lbl.pack(side="left", padx=(0, 10), before=self.notice_lbl)
+                    else:
+                        self.context_lbl.pack(side="left", padx=(0, 10))
+            else:
+                self.context_lbl.pack_forget()
 
     # --- Destruction Protocols ---
 

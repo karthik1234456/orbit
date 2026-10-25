@@ -102,6 +102,24 @@ def render_markdown(
         from config import settings
         rag_auto_str = "on" if getattr(settings, "RAG_AUTO", True) else "off"
     lines.append(f"- **RAG_AUTO**: {rag_auto_str}")
+    cmd_shortcuts_val = meta.get("COMMAND_SHORTCUTS")
+    if cmd_shortcuts_val is not None:
+        if isinstance(cmd_shortcuts_val, str):
+            cmd_shortcuts_str = "on" if cmd_shortcuts_val.strip().lower() in ("1", "true", "yes", "on") else "off"
+        else:
+            cmd_shortcuts_str = "on" if bool(cmd_shortcuts_val) else "off"
+    else:
+        cmd_shortcuts_str = "off"
+    lines.append(f"- **COMMAND_SHORTCUTS**: {cmd_shortcuts_str}")
+    session_context_val = meta.get("SESSION_CONTEXT")
+    if session_context_val is not None:
+        if isinstance(session_context_val, str):
+            session_context_str = "on" if session_context_val.strip().lower() in ("1", "true", "yes", "on") else "off"
+        else:
+            session_context_str = "on" if bool(session_context_val) else "off"
+    else:
+        session_context_str = "off"
+    lines.append(f"- **SESSION_CONTEXT**: {session_context_str}")
     if is_holdout:
         lines.append("- **Dataset**: Holdout")
     if provider == "ollama":

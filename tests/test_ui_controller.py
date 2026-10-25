@@ -499,3 +499,30 @@ def test_import_ui_controller_does_not_load_tkinter():
         check=True,
     )
     assert res_pkg.stdout.strip() == "False"
+
+
+def test_controller_events_carry_task_counter_and_increment():
+    """Verify every event of a task carries the same task number and the next task gets the next number."""
+    agent1 = FakeAgent(deltas=["A", "B"], reply="Reply 1")
+    controller = ChatController()
+    controller.attach(FakeApp(agent1))
+
+    assert controller.submit("First task") is True
+    controller.on_agent_event({"type": "step_start", "index": 1, "tool": "test_tool"})
+    controller.on_agent_event({"type": "step_end", "index": 1, "tool": "test_tool", "status": "success", "result": "ok"})
+    events1 = drain_all(controller)
+
+    assert len(events1) > 0
+    for e in events1:
+        assert e.data.get("task") == 1, f"Event {e.kind} missing or has wrong task id: {e.data}"
+
+    agent2 = FakeAgent(deltas=["C"], reply="Reply 2")
+    controller.attach(FakeApp(agent2))
+    assert controller.submit("Second task") is True
+    controller.on_agent_event({"type": "step_start", "index": 1, "tool": "test_tool"})
+    events2 = drain_all(controller)
+
+    assert len(events2) > 0
+    for e in events2:
+        assert e.data.get("task") == 2, f"Event {e.kind} missing or has wrong task id: {e.data}"
+

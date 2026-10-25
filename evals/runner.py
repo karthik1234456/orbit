@@ -87,6 +87,15 @@ def run_case(
             )
             return answer
 
+        # Evals measure the model directly, so disable shortcuts by default unless explicitly enabled
+        if "COMMAND_SHORTCUTS" not in os.environ:
+            os.environ["COMMAND_SHORTCUTS"] = "0"
+        shortcuts_on = os.getenv("COMMAND_SHORTCUTS", "0").lower() in ("1", "true", "yes", "on")
+
+        if "SESSION_CONTEXT" not in os.environ:
+            os.environ["SESSION_CONTEXT"] = "0"
+        context_on = os.getenv("SESSION_CONTEXT", "0").lower() in ("1", "true", "yes", "on")
+
         app = build_app(
             provider=counting_provider,
             confirm_callback=confirm_callback,
@@ -98,6 +107,8 @@ def run_case(
                 max_seconds=max_s,
             ),
         )
+        app.agent.command_shortcuts = shortcuts_on
+        app.agent.session_context = context_on
 
         recorder = Recorder()
         final_texts: list[str] = []
@@ -225,6 +236,14 @@ def run_suite(
     out_file = Path(out_path).resolve()
     done_set: set[tuple[str, int]] = set(already_done) if already_done else set()
     results: list[CaseResult] = []
+    if "COMMAND_SHORTCUTS" not in os.environ:
+        os.environ["COMMAND_SHORTCUTS"] = "0"
+    shortcuts_on = os.getenv("COMMAND_SHORTCUTS", "0").lower() in ("1", "true", "yes", "on")
+
+    if "SESSION_CONTEXT" not in os.environ:
+        os.environ["SESSION_CONTEXT"] = "0"
+    context_on = os.getenv("SESSION_CONTEXT", "0").lower() in ("1", "true", "yes", "on")
+
     meta: dict[str, Any] = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "total_cases": len(cases),
@@ -235,6 +254,8 @@ def run_suite(
         "RAG_AUTO_MIN_COVERAGE": getattr(settings, "RAG_AUTO_MIN_COVERAGE", 0.5),
         "RAG_AUTO_TOP_K": getattr(settings, "RAG_AUTO_TOP_K", 3),
         "RAG_AUTO_MAX_CHARS": getattr(settings, "RAG_AUTO_MAX_CHARS", 1500),
+        "COMMAND_SHORTCUTS": shortcuts_on,
+        "SESSION_CONTEXT": context_on,
     }
     if extra_meta:
         meta.update(extra_meta)
@@ -245,6 +266,8 @@ def run_suite(
     meta.setdefault("RAG_AUTO_MIN_COVERAGE", getattr(settings, "RAG_AUTO_MIN_COVERAGE", 0.5))
     meta.setdefault("RAG_AUTO_TOP_K", getattr(settings, "RAG_AUTO_TOP_K", 3))
     meta.setdefault("RAG_AUTO_MAX_CHARS", getattr(settings, "RAG_AUTO_MAX_CHARS", 1500))
+    meta.setdefault("COMMAND_SHORTCUTS", shortcuts_on)
+    meta.setdefault("SESSION_CONTEXT", context_on)
 
     if "cases_sha256" not in meta:
         from evals.schema import compute_cases_sha256

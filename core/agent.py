@@ -1,7 +1,8 @@
 """Agent implementation managing conversational state, tool calling, permissions, guards, and audit logging."""
 
+import os
 import time
-from typing import TYPE_CHECKING, Any, Callable, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Union
 
 if TYPE_CHECKING:
     from core.planner import Plan
@@ -9,10 +10,14 @@ if TYPE_CHECKING:
 from config import settings
 from core.guards import LoopGuard
 from core.llm import LLMProvider
+from core.session_state import SessionState
 from core.task import RunLogger, RunStatus, StepRecord, TaskRun
 from security.audit import AuditLogger
 from security.permissions import Decision, PermissionPolicy
 from tools.registry import ToolRegistry
+
+COMMAND_SHORTCUTS: bool = getattr(settings, "COMMAND_SHORTCUTS", True)
+SESSION_CONTEXT: bool = getattr(settings, "SESSION_CONTEXT", True)
 
 TAINT_WARNING = (
     "This action was requested after ORBIT read untrusted content (documents or files). "
@@ -47,6 +52,11 @@ class Agent:
         memory_store: Optional[Any] = None,
         limits: Optional[Any] = None,
         retriever: Optional[Callable[[str], Any]] = None,
+        command_shortcuts: Optional[bool] = None,
+        session_context: Optional[bool] = None,
+        session_state: Optional[SessionState] = None,
+        allowed_apps: Optional[Mapping[str, Any]] = None,
+        sites: Optional[Mapping[str, Any]] = None,
     ):
         """Initialize agent with LLM provider, tool registry, permission policy, guards, and audit logger."""
         self.provider = provider
@@ -61,6 +71,21 @@ class Agent:
         self.run_logger = run_logger or RunLogger()
         self.memory_store = memory_store
         self.retriever = retriever
+        self.command_shortcuts = command_shortcuts
+        self.session_context = session_context
+        self.session_state = session_state if session_state is not None else SessionState()
+
+        if allowed_apps is None:
+            from config.apps import ALLOWED_APPS
+            self.allowed_apps = ALLOWED_APPS
+        else:
+            self.allowed_apps = allowed_apps
+
+        if sites is None:
+            from config.sites import SITES
+            self.sites = SITES
+        else:
+            self.sites = sites
 
         if limits is not None:
             if hasattr(limits, "max_tool_calls") and max_tool_calls is None:
@@ -82,6 +107,232 @@ class Agent:
         self.last_tool_events: list[tuple[str, dict, str]] = []
         self.last_run: Optional[TaskRun] = None
         self._rejected_tools: set[str] = set()
+
+    def shortcuts_enabled(self) -> bool:
+        """Check whether deterministic command shortcuts are active."""
+        if self.command_shortcuts is not None:
+            return bool(self.command_shortcuts)
+        env_val = os.getenv("COMMAND_SHORTCUTS")
+        if env_val is not None:
+            v = env_val.strip().lower()
+            if v in ("0", "false", "no", "off"):
+                return False
+            if v in ("1", "true", "yes", "on"):
+                return True
+        return bool(getattr(settings, "COMMAND_SHORTCUTS", True))
+
+    def session_context_enabled(self) -> bool:
+        """Check whether session context tracking is active."""
+        if self.session_context is not None:
+            return bool(self.session_context)
+        env_val = os.getenv("SESSION_CONTEXT")
+        if env_val is not None:
+            v = env_val.strip().lower()
+            if v in ("0", "false", "no", "off"):
+                return False
+            if v in ("1", "true", "yes", "on"):
+                return True
+        return bool(getattr(settings, "SESSION_CONTEXT", True))
+
+    def _execute_single_tool(
+        self,
+        name: str,
+        args: dict,
+        guard: LoopGuard,
+        run: TaskRun,
+        tainted: bool,
+        is_shortcut: bool = False,
+    ) -> tuple[Optional[RunStatus], str, str, str, Optional[str], bool]:
+        """Execute a single tool call through the full validation and execution pipeline.
+
+        Returns: (stop_reason, status, outcome, result, hint, updated_tainted)
+        """
+        step_index = len(run.steps) + 1
+
+        # 1. Pre-execution guard check
+        stop_reason = guard.check_before(name, args)
+        if stop_reason is not None:
+            return stop_reason, "blocked", "blocked", "ERROR: not executed (task stopped)", None, tainted
+
+        self._emit_event({
+            "type": "step_start",
+            "tool": name,
+            "status": "start",
+            "index": step_index,
+            "args": args,
+        })
+
+        start_time = time.perf_counter()
+
+        tool = self.registry.get(name) if self.registry else None
+        tool_level = tool.permission if tool else None
+
+        if name in self._rejected_tools:
+            result = f"ERROR: BLOCKED: an earlier call to {name} was rejected in this turn; not retrying."
+            status = "blocked"
+            outcome = "blocked"
+            log_decision = "rejected_retry"
+            hint = _RECOVERY_HINTS["blocked"]
+        else:
+            # Determine security decision if policy is configured
+            if self.policy is not None:
+                decision = self.policy.decide(name, tool_level)
+            else:
+                decision = Decision.ALLOW
+
+            # Execute or prompt based on policy decision
+            if decision == Decision.ALLOW:
+                if self.registry:
+                    result = self.registry.execute(name, args)
+                else:
+                    result = f"ERROR: No tool registry configured to execute '{name}'"
+                log_decision = "allow"
+
+                if result.startswith("ERROR: REJECTED:"):
+                    status = "rejected"
+                    outcome = "rejected"
+                    hint = _RECOVERY_HINTS["rejected"]
+                    self._rejected_tools.add(name)
+                elif result.startswith("ERROR"):
+                    status = "error"
+                    outcome = "error"
+                    hint = _RECOVERY_HINTS["error"]
+                else:
+                    status = "success"
+                    outcome = "success"
+                    hint = None
+
+            elif decision == Decision.ASK:
+                # Precheck phase: run registry argument validation and tool precheck before asking user
+                precheck_err = None
+                if self.registry:
+                    precheck_err = self.registry.validate_arguments(name, args)
+
+                if precheck_err is None and tool and tool.precheck is not None:
+                    try:
+                        pre_res = tool.precheck(args)
+                        if pre_res is not None:
+                            precheck_err = str(pre_res)
+                    except Exception as exc:
+                        precheck_err = f"ERROR: Tool '{name}' precheck failed: {exc}"
+
+                if precheck_err is not None:
+                    if not precheck_err.startswith("ERROR"):
+                        precheck_err = f"ERROR: {precheck_err}"
+                    result = precheck_err
+                    if result.startswith("ERROR: REJECTED:"):
+                        status = "rejected"
+                        outcome = "rejected"
+                        hint = _RECOVERY_HINTS["rejected"]
+                        self._rejected_tools.add(name)
+                    else:
+                        status = "blocked"
+                        outcome = "blocked"
+                        log_decision = "precheck_failed"
+                        hint = _RECOVERY_HINTS["blocked"]
+                else:
+                    warning = TAINT_WARNING if tainted else None
+                    confirmed = self._ask_confirmation(name, args, warning=warning)
+                    if confirmed:
+                        if self.registry:
+                            result = self.registry.execute(name, args)
+                        else:
+                            result = f"ERROR: No tool registry configured to execute '{name}'"
+                        log_decision = "user_approved"
+
+                        if result.startswith("ERROR: REJECTED:"):
+                            status = "rejected"
+                            outcome = "rejected"
+                            hint = _RECOVERY_HINTS["rejected"]
+                            self._rejected_tools.add(name)
+                        elif result.startswith("ERROR"):
+                            status = "error"
+                            outcome = "error"
+                            hint = _RECOVERY_HINTS["error"]
+                        else:
+                            status = "success"
+                            outcome = "success"
+                            hint = None
+                    else:
+                        result = f"ERROR: user denied permission for {name}"
+                        status = "denied"
+                        outcome = "blocked"
+                        log_decision = "user_denied"
+                        hint = _RECOVERY_HINTS["denied"]
+
+            else:  # Decision.DENY or unhandled
+                result = f"ERROR: tool {name} is not permitted"
+                status = "blocked"
+                outcome = "blocked"
+                log_decision = "deny"
+                hint = _RECOVERY_HINTS["blocked"]
+
+        duration_ms = (time.perf_counter() - start_time) * 1000
+
+        # Audit every tool invocation attempt
+        if self.audit:
+            audit_decision = (
+                "user_denied"
+                if (is_shortcut and log_decision == "user_denied")
+                else ("shortcut" if is_shortcut else log_decision)
+            )
+            try:
+                self.audit.log(
+                    tool=name,
+                    args=args,
+                    decision=audit_decision,
+                    outcome=outcome,
+                    result=result,
+                    duration_ms=round(duration_ms, 2),
+                    tainted=tainted,
+                )
+            except TypeError:
+                self.audit.log(
+                    tool=name,
+                    args=args,
+                    decision=audit_decision,
+                    outcome=outcome,
+                    result=result,
+                    duration_ms=round(duration_ms, 2),
+                )
+
+        # If this tool produces untrusted output and succeeded, taint the agent for the rest of the turn
+        if status == "success" and tool and getattr(tool, "untrusted_output", False):
+            tainted = True
+
+        # Update step run record
+        step_decision = (
+            "user_denied"
+            if (is_shortcut and log_decision == "user_denied")
+            else ("shortcut" if is_shortcut else None)
+        )
+        run.add_step(
+            tool=name,
+            args=args,
+            status=status,
+            result=result,
+            duration_ms=int(round(duration_ms)),
+            decision=step_decision,
+        )
+
+        self.last_tool_events.append((name, args, result))
+
+        self._emit_event({
+            "type": "step_end",
+            "tool": name,
+            "index": step_index,
+            "status": status,
+            "result": result,
+            "duration_ms": int(round(duration_ms)),
+        })
+
+        # Update loop guard counters
+        ok = (status == "success")
+        guard.record(name, args, ok=ok)
+        if ok:
+            self.session_state.update_from_tool(name, args, status="success", sites=self.sites)
+
+        return None, status, outcome, result, hint, tainted
 
     def _ask_confirmation(
         self, tool_name: str, args: dict, warning: Optional[str] = None
@@ -171,6 +422,14 @@ class Agent:
             max_seconds=self.max_task_seconds,
         )
         run = TaskRun(goal=user_text)
+        run.context = self.session_state.to_dict()
+        _orig_finish = run.finish
+
+        def finish_with_context(st: RunStatus, txt: str = "") -> None:
+            run.context = self.session_state.to_dict()
+            _orig_finish(st, txt)
+
+        run.finish = finish_with_context  # type: ignore[assignment]
         self.last_run = run
 
         # Compute additional per-turn system text (memory, docs, etc.)
@@ -273,6 +532,11 @@ class Agent:
                             outcome="none",
                         )
 
+        if self.session_context_enabled():
+            ctx_block = self.session_state.context_block()
+            if ctx_block:
+                extra_blocks.append(ctx_block)
+
         if extra_system_text:
             if isinstance(extra_system_text, str):
                 if extra_system_text.strip():
@@ -283,6 +547,72 @@ class Agent:
                         extra_blocks.append(str(b).strip())
 
         combined_extra = "\n\n".join(extra_blocks)
+
+        # Deterministic shortcut bypass before any LLM call
+        if self.shortcuts_enabled():
+            from core.shortcuts import parse_shortcut
+
+            shortcut_spec = parse_shortcut(
+                user_text,
+                self.allowed_apps,
+                self.sites,
+                state=self.session_state,
+            )
+            if (
+                shortcut_spec is not None
+                and self.registry
+                and self.registry.get(shortcut_spec.name)
+            ):
+                if cancel_event is not None and cancel_event.is_set():
+                    cancel_reply = "(interrupted)"
+                    run.finish(RunStatus.CANCELLED, cancel_reply)
+                    if self.run_logger:
+                        self.run_logger.log(run)
+                    self.history.append({"role": "assistant", "content": cancel_reply})
+                    self._emit_event({
+                        "type": "task_end",
+                        "status": RunStatus.CANCELLED.value,
+                        "tool": None,
+                        "index": len(run.steps),
+                    })
+                    return cancel_reply
+
+                stop_reason, status, outcome, result, hint, tainted = self._execute_single_tool(
+                    shortcut_spec.name,
+                    shortcut_spec.args,
+                    guard,
+                    run,
+                    tainted,
+                    is_shortcut=True,
+                )
+                if stop_reason is not None:
+                    reply = self._build_stop_message(stop_reason, run.steps, [shortcut_spec.name])
+                    run.finish(stop_reason, reply)
+                elif status == "success":
+                    target_name = getattr(shortcut_spec, "target_name", "") or shortcut_spec.name
+                    reply = f"Opened {target_name}."
+                    run.finish(RunStatus.COMPLETED, reply)
+                else:
+                    reply = result
+                    run.finish(RunStatus.COMPLETED, reply)
+
+                stream_cb = effective_on_delta or on_delta
+                if stream_cb:
+                    try:
+                        stream_cb(reply)
+                    except Exception:
+                        pass
+
+                self.history.append({"role": "assistant", "content": reply})
+                if self.run_logger:
+                    self.run_logger.log(run)
+                self._emit_event({
+                    "type": "task_end",
+                    "status": run.status.value if run.status else RunStatus.COMPLETED.value,
+                    "tool": None,
+                    "index": len(run.steps),
+                })
+                return reply
 
         tools = self.registry.list_tools() if self.registry else None
 
@@ -327,6 +657,118 @@ class Agent:
                 if not response.tool_calls:
                     reply = response.text or ""
 
+                    # If final text of a turn with no tool calls is empty, retry once with system note
+                    if not reply.strip() and len(run.steps) == 0:
+                        empty_note = "Your previous reply was empty. Answer the user directly in one or two sentences."
+                        if self.audit:
+                            try:
+                                self.audit.log(
+                                    tool="empty_reply",
+                                    args={},
+                                    decision="empty_reply",
+                                    outcome="retried",
+                                    result=None,
+                                    tainted=tainted,
+                                )
+                            except TypeError:
+                                self.audit.log(
+                                    tool="empty_reply",
+                                    args={},
+                                    decision="empty_reply",
+                                    outcome="retried",
+                                )
+                        run.add_step(
+                            tool="empty_reply",
+                            args={},
+                            status="retried",
+                            result="",
+                            duration_ms=0,
+                        )
+
+                        if combined_extra:
+                            retry_extra = f"{combined_extra}\n\n{empty_note}"
+                            retry_sys = f"{self.system_prompt}\n\n{retry_extra}" if self.system_prompt else retry_extra
+                        else:
+                            retry_sys = f"{self.system_prompt}\n\n{empty_note}" if self.system_prompt else empty_note
+
+                        retry_messages = [{"role": "system", "content": retry_sys}] + context_messages
+
+                        run.llm_calls += 1
+                        try:
+                            retry_response = self.provider.generate(
+                                retry_messages,
+                                tools=tools,
+                                on_delta=effective_on_delta,
+                                should_stop=should_stop,
+                            )
+                        except TypeError:
+                            retry_response = self.provider.generate(retry_messages, tools=tools)
+
+                        if getattr(retry_response, "interrupted", False):
+                            cancel_reply = retry_response.text if (retry_response.text and retry_response.text.strip()) else "(interrupted)"
+                            self.history.append({"role": "assistant", "content": cancel_reply})
+                            run.finish(RunStatus.CANCELLED, cancel_reply)
+                            if self.run_logger:
+                                self.run_logger.log(run)
+                            self._emit_event({
+                                "type": "task_end",
+                                "status": RunStatus.CANCELLED.value,
+                                "tool": None,
+                                "index": len(run.steps),
+                            })
+                            return cancel_reply
+
+                        retry_text = retry_response.text or ""
+                        if not retry_response.tool_calls and not retry_text.strip():
+                            fallback_msg = "I couldn't produce an answer. Please rephrase or try again."
+                            if self.audit:
+                                try:
+                                    self.audit.log(
+                                        tool="empty_reply",
+                                        args={},
+                                        decision="empty_reply",
+                                        outcome="fallback",
+                                        result=fallback_msg,
+                                        tainted=tainted,
+                                    )
+                                except TypeError:
+                                    self.audit.log(
+                                        tool="empty_reply",
+                                        args={},
+                                        decision="empty_reply",
+                                        outcome="fallback",
+                                    )
+                            run.add_step(
+                                tool="empty_reply",
+                                args={},
+                                status="fallback",
+                                result=fallback_msg,
+                                duration_ms=0,
+                            )
+                            reply = fallback_msg
+                            stream_cb = effective_on_delta or on_delta
+                            if stream_cb:
+                                try:
+                                    stream_cb(reply)
+                                except Exception:
+                                    pass
+                            self.history.append({"role": "assistant", "content": reply})
+                            run.finish(RunStatus.COMPLETED, reply)
+                            if self.run_logger:
+                                self.run_logger.log(run)
+                            self._emit_event({
+                                "type": "task_end",
+                                "status": RunStatus.COMPLETED.value,
+                                "tool": None,
+                                "index": len(run.steps),
+                            })
+                            return reply
+                        elif not retry_response.tool_calls:
+                            reply = retry_text
+                        else:
+                            response = retry_response
+
+                if not response.tool_calls:
                     # Verify action claims against tool executions in this turn
                     try:
                         from core.claims import find_action_claims, unverified_claims
@@ -422,8 +864,14 @@ class Agent:
                         })
                         return cancel_reply
 
-                    # 1. Pre-execution guard check
-                    stop_reason = guard.check_before(tc.name, tc.args)
+                    stop_reason, status, outcome, result, hint, tainted = self._execute_single_tool(
+                        tc.name,
+                        tc.args,
+                        guard,
+                        run,
+                        tainted,
+                        is_shortcut=False,
+                    )
                     if stop_reason is not None:
                         # Append unexecuted tool messages for all remaining calls to preserve history consistency
                         pending_names = []
@@ -457,158 +905,6 @@ class Agent:
                         })
                         return final_reply
 
-                    self._emit_event({
-                        "type": "step_start",
-                        "tool": tc.name,
-                        "status": "start",
-                        "index": step_index,
-                        "args": tc.args,
-                    })
-
-                    start_time = time.perf_counter()
-
-                    tool = self.registry.get(tc.name) if self.registry else None
-                    tool_level = tool.permission if tool else None
-
-                    if tc.name in self._rejected_tools:
-                        result = f"ERROR: BLOCKED: an earlier call to {tc.name} was rejected in this turn; not retrying."
-                        status = "blocked"
-                        outcome = "blocked"
-                        log_decision = "rejected_retry"
-                        hint = _RECOVERY_HINTS["blocked"]
-                    else:
-                        # Determine security decision if policy is configured
-                        if self.policy is not None:
-                            decision = self.policy.decide(tc.name, tool_level)
-                        else:
-                            decision = Decision.ALLOW
-
-                        # Execute or prompt based on policy decision
-                        if decision == Decision.ALLOW:
-                            if self.registry:
-                                result = self.registry.execute(tc.name, tc.args)
-                            else:
-                                result = f"ERROR: No tool registry configured to execute '{tc.name}'"
-                            log_decision = "allow"
-
-                            if result.startswith("ERROR: REJECTED:"):
-                                status = "rejected"
-                                outcome = "rejected"
-                                hint = _RECOVERY_HINTS["rejected"]
-                                self._rejected_tools.add(tc.name)
-                            elif result.startswith("ERROR"):
-                                status = "error"
-                                outcome = "error"
-                                hint = _RECOVERY_HINTS["error"]
-                            else:
-                                status = "success"
-                                outcome = "success"
-                                hint = None
-
-                        elif decision == Decision.ASK:
-                            # Precheck phase: run registry argument validation and tool precheck before asking user
-                            precheck_err = None
-                            if self.registry:
-                                precheck_err = self.registry.validate_arguments(tc.name, tc.args)
-
-                            if precheck_err is None and tool and tool.precheck is not None:
-                                try:
-                                    pre_res = tool.precheck(tc.args)
-                                    if pre_res is not None:
-                                        precheck_err = str(pre_res)
-                                except Exception as exc:
-                                    precheck_err = f"ERROR: Tool '{tc.name}' precheck failed: {exc}"
-
-                            if precheck_err is not None:
-                                if not precheck_err.startswith("ERROR"):
-                                    precheck_err = f"ERROR: {precheck_err}"
-                                result = precheck_err
-                                if result.startswith("ERROR: REJECTED:"):
-                                    status = "rejected"
-                                    outcome = "rejected"
-                                    hint = _RECOVERY_HINTS["rejected"]
-                                    self._rejected_tools.add(tc.name)
-                                else:
-                                    status = "blocked"
-                                    outcome = "blocked"
-                                    log_decision = "precheck_failed"
-                                    hint = _RECOVERY_HINTS["blocked"]
-                            else:
-                                warning = TAINT_WARNING if tainted else None
-                                confirmed = self._ask_confirmation(tc.name, tc.args, warning=warning)
-                                if confirmed:
-                                    if self.registry:
-                                        result = self.registry.execute(tc.name, tc.args)
-                                    else:
-                                        result = f"ERROR: No tool registry configured to execute '{tc.name}'"
-                                    log_decision = "user_approved"
-
-                                    if result.startswith("ERROR: REJECTED:"):
-                                        status = "rejected"
-                                        outcome = "rejected"
-                                        hint = _RECOVERY_HINTS["rejected"]
-                                        self._rejected_tools.add(tc.name)
-                                    elif result.startswith("ERROR"):
-                                        status = "error"
-                                        outcome = "error"
-                                        hint = _RECOVERY_HINTS["error"]
-                                    else:
-                                        status = "success"
-                                        outcome = "success"
-                                        hint = None
-                                else:
-                                    result = f"ERROR: user denied permission for {tc.name}"
-                                    status = "denied"
-                                    outcome = "blocked"
-                                    log_decision = "user_denied"
-                                    hint = _RECOVERY_HINTS["denied"]
-
-                        else:  # Decision.DENY or unhandled
-                            result = f"ERROR: tool {tc.name} is not permitted"
-                            status = "blocked"
-                            outcome = "blocked"
-                            log_decision = "deny"
-                            hint = _RECOVERY_HINTS["blocked"]
-
-                    duration_ms = (time.perf_counter() - start_time) * 1000
-
-                    # Audit every tool invocation attempt
-                    if self.audit:
-                        try:
-                            self.audit.log(
-                                tool=tc.name,
-                                args=tc.args,
-                                decision=log_decision,
-                                outcome=outcome,
-                                result=result,
-                                duration_ms=round(duration_ms, 2),
-                                tainted=tainted,
-                            )
-                        except TypeError:
-                            self.audit.log(
-                                tool=tc.name,
-                                args=tc.args,
-                                decision=log_decision,
-                                outcome=outcome,
-                                result=result,
-                                duration_ms=round(duration_ms, 2),
-                            )
-
-                    # If this tool produces untrusted output and succeeded, taint the agent for the rest of the turn
-                    if status == "success" and tool and getattr(tool, "untrusted_output", False):
-                        tainted = True
-
-                    # Update step run record
-                    run.add_step(
-                        tool=tc.name,
-                        args=tc.args,
-                        status=status,
-                        result=result,
-                        duration_ms=int(round(duration_ms)),
-                    )
-
-                    self.last_tool_events.append((tc.name, tc.args, result))
-
                     # Append recovery hint to content sent to the LLM
                     content_for_llm = f"{result}\n{hint}" if hint else result
                     self.history.append({
@@ -616,19 +912,6 @@ class Agent:
                         "name": tc.name,
                         "content": content_for_llm,
                     })
-
-                    self._emit_event({
-                        "type": "step_end",
-                        "tool": tc.name,
-                        "index": step_index,
-                        "status": status,
-                        "result": result,
-                        "duration_ms": int(round(duration_ms)),
-                    })
-
-                    # Update loop guard counters
-                    ok = (status == "success")
-                    guard.record(tc.name, tc.args, ok=ok)
 
                     # Check for consecutive error thresholds
                     if guard.should_stop_for_errors():
@@ -728,6 +1011,7 @@ class Agent:
         self.history.clear()
         self.last_tool_events.clear()
         self.last_run = None
+        self.session_state.clear()
 
     def run_plan(self, plan: "Plan") -> str:
         """Execute a structured plan by submitting it through chat().

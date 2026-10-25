@@ -228,6 +228,22 @@ def main() -> None:
                     print("Conversation history reset.")
                     continue
 
+                if user_input.lower() == "/context":
+                    state = getattr(agent, "session_state", None)
+                    if state is None or state.is_empty():
+                        print("No session context.")
+                    else:
+                        d = state.to_dict()
+                        print(f"Site: {d.get('last_site') or 'none'}")
+                        print(f"Query: {d.get('last_query') or 'none'}")
+                        print(f"App: {d.get('last_app') or 'none'}")
+                        print(f"Folder: {d.get('last_folder') or 'none'}")
+                        print(f"URL: {d.get('last_url') or 'none'}")
+                        print(f"Last tool: {d.get('last_tool') or 'none'}")
+                        age_s = int(d.get("age_seconds", 0))
+                        print(f"Age: {age_s}s")
+                    continue
+
                 if user_input.lower() == "/last":
                     if agent.last_run:
                         print(agent.last_run.summary())
@@ -356,6 +372,20 @@ def main() -> None:
                     if speaker:
                         speaker.stop()
                     print("Speech disabled.")
+                    continue
+
+                if user_input.lower() == "/shortcuts on":
+                    agent.command_shortcuts = True
+                    print("Command shortcuts enabled.")
+                    continue
+
+                if user_input.lower() == "/shortcuts off":
+                    agent.command_shortcuts = False
+                    print("Command shortcuts disabled.")
+                    continue
+
+                if user_input.lower().startswith("/shortcuts"):
+                    print("Usage: /shortcuts on|off")
                     continue
 
                 if user_input.lower() == "/mic":

@@ -148,6 +148,9 @@ SILENCE_SECONDS: float = _parse_float(os.getenv("SILENCE_SECONDS"), 0.8)
 WAKE_COOLDOWN_SECONDS: float = _parse_float(os.getenv("WAKE_COOLDOWN_SECONDS"), 3.0)
 WAKE_LISTEN_TIMEOUT: float = _parse_float(os.getenv("WAKE_LISTEN_TIMEOUT"), 6.0)
 STREAM_REPLIES: bool = _parse_bool(os.getenv("STREAM_REPLIES"), True)
+COMMAND_SHORTCUTS: bool = _parse_bool(os.getenv("COMMAND_SHORTCUTS"), True)
+SESSION_CONTEXT: bool = _parse_bool(os.getenv("SESSION_CONTEXT"), True)
+SESSION_TTL_SECONDS: float = _parse_float(os.getenv("SESSION_TTL_SECONDS"), 1800.0)
 
 
 def require_api_key() -> str:

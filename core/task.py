@@ -29,6 +29,7 @@ class StepRecord:
     status: str  # "success" | "error" | "denied" | "blocked" | "rejected"
     result: str
     duration_ms: int
+    decision: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.result is not None:
@@ -53,6 +54,7 @@ class TaskRun:
     llm_calls: int = 0
     unverified_claims: int = 0
     auto_retrievals: list[dict] = field(default_factory=list)
+    context: Optional[dict] = None
 
     def add_step(
         self,
@@ -62,6 +64,7 @@ class TaskRun:
         result: str = "",
         duration_ms: Union[int, float] = 0,
         index: Optional[int] = None,
+        decision: Optional[str] = None,
     ) -> StepRecord:
         """Add a step record to the run."""
         if isinstance(tool, StepRecord):
@@ -75,6 +78,7 @@ class TaskRun:
                 status=status,
                 result=result,
                 duration_ms=int(round(duration_ms)),
+                decision=decision,
             )
         self.steps.append(step)
         return step
@@ -90,6 +94,20 @@ class TaskRun:
         if self.status is not None:
             status_val = self.status.value if isinstance(self.status, Enum) else str(self.status)
 
+        steps_data = []
+        for s in self.steps:
+            st = {
+                "index": s.index,
+                "tool": s.tool,
+                "args": redact_data(s.args),
+                "status": s.status,
+                "result": s.result[:200] if s.result else "",
+                "duration_ms": s.duration_ms,
+            }
+            if s.decision is not None:
+                st["decision"] = s.decision
+            steps_data.append(st)
+
         return {
             "goal": self.goal,
             "started_at": self.started_at,
@@ -98,18 +116,10 @@ class TaskRun:
             "llm_calls": self.llm_calls,
             "unverified_claims": self.unverified_claims,
             "auto_retrievals": list(self.auto_retrievals),
-            "steps": [
-                {
-                    "index": s.index,
-                    "tool": s.tool,
-                    "args": redact_data(s.args),
-                    "status": s.status,
-                    "result": s.result[:200] if s.result else "",
-                    "duration_ms": s.duration_ms,
-                }
-                for s in self.steps
-            ],
+            "context": dict(self.context) if self.context is not None else None,
+            "steps": steps_data,
         }
+
 
     def summary(self) -> str:
         """Return a short multi-line summary of each step with checkmark or cross."""

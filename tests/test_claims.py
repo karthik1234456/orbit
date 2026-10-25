@@ -286,7 +286,7 @@ def test_agent_app_claim_with_and_without_tool():
         LLMResponse(text="", tool_calls=[ToolCall(name="open_website", args={"url": "https://youtube.com"})]),
         LLMResponse(text="I've opened YouTube.", tool_calls=[]),
     ])
-    agent_with_tool = Agent(provider=p_with_tool, registry=registry)
+    agent_with_tool = Agent(provider=p_with_tool, registry=registry, command_shortcuts=False)
     reply_ok = agent_with_tool.chat("Open YouTube")
     assert "[ORBIT check]" not in reply_ok
     assert reply_ok == "I've opened YouTube."

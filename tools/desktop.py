@@ -84,6 +84,7 @@ def register_desktop_tools(
     registry: ToolRegistry,
     workspace_root: Union[str, Path],
     allowed_apps: Mapping[str, Any],
+    sites: Optional[Mapping[str, Any]] = None,
 ) -> None:
     """Create workspace directory if missing, instantiate file, app, browser, VS Code, and workspace folder tools, and register them."""
     root = Path(workspace_root).resolve()
@@ -92,9 +93,10 @@ def register_desktop_tools(
 
     file_tools = make_file_tools(root)
     app_tools = make_app_tools(allowed_apps)
-    browser_tools = make_browser_tools()
+    browser_tools = make_browser_tools(sites)
     vscode_tool = make_vscode_tool(root)
     folder_tool = make_open_workspace_folder_tool(root)
 
     for tool in file_tools + app_tools + browser_tools + [vscode_tool, folder_tool]:
         registry.register(tool)
+

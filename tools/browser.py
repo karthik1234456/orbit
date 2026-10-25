@@ -1,6 +1,6 @@
 """Web browsing and search tools for ORBIT with strict URL scheme and credential validation."""
 
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 from urllib.parse import quote_plus, urlparse
 import webbrowser
 
@@ -45,18 +45,122 @@ def validate_website_url(url: Any) -> tuple[Optional[str], Optional[str]]:
     return clean_url, None
 
 
-def make_browser_tools() -> list[Tool]:
+def make_search_site_tool(sites: Optional[Mapping[str, Any]] = None) -> Tool:
+    """Create and return the search_site tool for querying allowed sites using templates."""
+    if sites is None:
+        from config.sites import SITES
+        sites = SITES
+
+    from config.sites import resolve_site
+
+    clean_sites: dict[str, dict[str, Any]] = {}
+    for k, v in sites.items():
+        key = k.strip().lower()
+        if isinstance(v, dict):
+            clean_sites[key] = dict(v)
+        else:
+            clean_sites[key] = {"url": str(v), "search": None}
+
+    def precheck_search_site(args: dict) -> Optional[str]:
+        """Validate site name and query before attempting browser search."""
+        site = args.get("site")
+        query = args.get("query")
+        if not site or not isinstance(site, str):
+            return "ERROR: Site name must be a non-empty string."
+        resolved = resolve_site(site)
+        clean_site = resolved if resolved is not None else site.strip().lower()
+        if clean_site not in clean_sites:
+            return f"ERROR: Site '{site}' is not configured for search."
+        site_cfg = clean_sites[clean_site]
+        search_tmpl = site_cfg.get("search")
+        if not search_tmpl:
+            return f"ERROR: Site '{site}' does not have a search template configured."
+        if not query or not isinstance(query, str) or not query.strip():
+            return "ERROR: Search query cannot be empty."
+        return None
+
+    def search_site(site: str, query: str) -> str:
+        """Search a configured website using its search template in the default browser."""
+        err = precheck_search_site({"site": site, "query": query})
+        if err:
+            return err
+
+        resolved = resolve_site(site)
+        clean_site = resolved if resolved is not None else site.strip().lower()
+        clean_query = query.strip()
+        site_cfg = clean_sites[clean_site]
+        search_tmpl = site_cfg["search"]
+        encoded = quote_plus(clean_query)
+        search_url = search_tmpl.format(query=encoded)
+
+        try:
+            webbrowser.open(search_url)
+            return f"Opened search for '{clean_query}' on {clean_site} in browser."
+        except Exception as exc:
+            return f"ERROR: Failed to open browser for site search: {exc}"
+
+    return Tool(
+        name="search_site",
+        description=(
+            "Search a configured website using its search template in the default browser. "
+            "The site parameter must match an allowed site with a search template."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "site": {
+                    "type": "string",
+                    "description": "Name of the allowed website to search (e.g. 'youtube', 'google', 'github', 'wikipedia').",
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Search query terms.",
+                },
+            },
+            "required": ["site", "query"],
+        },
+        func=search_site,
+        permission=PermissionLevel.SAFE,
+        precheck=precheck_search_site,
+    )
+
+
+def make_browser_tools(sites: Optional[Mapping[str, Any]] = None) -> list[Tool]:
     """Create and return browser navigation and search tools with strict security controls."""
+    if sites is None:
+        from config.sites import SITES
+        sites = SITES
+
+    from config.sites import resolve_site
+
+    clean_sites: dict[str, dict[str, Any]] = {}
+    for k, v in sites.items():
+        key = k.strip().lower()
+        if isinstance(v, dict):
+            clean_sites[key] = dict(v)
+        else:
+            clean_sites[key] = {"url": str(v), "search": None}
+
+    def _resolve_url_candidate(url_val: Any) -> str:
+        if isinstance(url_val, str):
+            resolved = resolve_site(url_val)
+            if resolved and resolved in clean_sites:
+                target_url = clean_sites[resolved].get("url")
+                if target_url:
+                    return str(target_url)
+        return str(url_val) if url_val is not None else ""
 
     def precheck_open_website(args: dict) -> Optional[str]:
         """Validate website URL without launching a browser."""
-        url = args.get("url")
-        _, err = validate_website_url(url)
+        raw_url = args.get("url")
+        resolved_url = _resolve_url_candidate(raw_url)
+        _, err = validate_website_url(resolved_url)
         return err
 
     def open_website(url: str) -> str:
         """Open a validated website URL in the user's default browser."""
-        clean_url, err = validate_website_url(url)
+        resolved_url = _resolve_url_candidate(url)
+        clean_url, err = validate_website_url(resolved_url)
         if err:
             return err
 
@@ -125,4 +229,6 @@ def make_browser_tools() -> list[Tool]:
             func=search_web,
             permission=PermissionLevel.SAFE,
         ),
+        make_search_site_tool(sites),
     ]
+

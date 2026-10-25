@@ -18,6 +18,7 @@ from core.ollama_provider import (
     list_models,
     server_version,
 )
+from security.permissions import PermissionLevel
 from tools.registry import Tool
 
 
@@ -208,7 +209,8 @@ def check_tool_calls(provider: OllamaProvider) -> tuple[str, int]:
             },
             "required": ["city"],
         },
-        handler=lambda city: f"Sunny in {city}",
+        func=lambda city="": f"Sunny in {city}",
+        permission=PermissionLevel.SAFE,
     )
 
     passes = 0

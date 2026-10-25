@@ -271,9 +271,17 @@ class OllamaProvider(LLMProvider):
 
         url = f"{self.host.rstrip('/')}/api/chat"
 
+        from config import settings
+        effective_timeout = (
+            self.timeout_s if self.timeout_s is not None else getattr(settings, "OLLAMA_TIMEOUT_S", 180)
+        )
+        t0 = time.perf_counter()
+
         def _send(body: dict[str, Any]) -> Any:
+            elapsed = time.perf_counter() - t0
+            rem = max(0.001, effective_timeout - elapsed)
             try:
-                return self.http_post(url, json=body, stream=True, timeout=self.timeout_s)
+                return self.http_post(url, json=body, stream=True, timeout=rem)
             except (requests.exceptions.ConnectionError, OSError) as exc:
                 raise OllamaUnavailable(
                     f"Ollama is not running at {self.host}. Start it with the Ollama app or run: ollama serve"
@@ -318,6 +326,15 @@ class OllamaProvider(LLMProvider):
 
         try:
             for line in resp.iter_lines():
+                if time.perf_counter() - t0 > effective_timeout:
+                    try:
+                        resp.close()
+                    except Exception:
+                        pass
+                    raise OllamaUnavailable(
+                        f"Ollama is not running at {self.host}. Start it with the Ollama app or run: ollama serve"
+                    )
+
                 if should_stop and should_stop():
                     try:
                         resp.close()
@@ -383,6 +400,11 @@ class OllamaProvider(LLMProvider):
                 resp.close()
             except Exception:
                 pass
+
+        if time.perf_counter() - t0 > effective_timeout:
+            raise OllamaUnavailable(
+                f"Ollama is not running at {self.host}. Start it with the Ollama app or run: ollama serve"
+            )
 
         if interrupted:
             clean_text = _strip_think_tags(accumulated_text)

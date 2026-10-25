@@ -151,12 +151,35 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         default=None,
         help="Custom output filename for the retrieval markdown report.",
     )
+    parser.add_argument(
+        "--shortcuts",
+        action="store_true",
+        default=False,
+        help="Enable command shortcuts for this evaluation run (default: disabled to evaluate the model directly).",
+    )
+    parser.add_argument(
+        "--context",
+        action="store_true",
+        default=False,
+        help="Enable session context tracking for this evaluation run (default: disabled to evaluate the model directly).",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     """Main execution entry point for python -m evals."""
     args = parse_args(argv)
+
+    import os
+    if args.shortcuts:
+        os.environ["COMMAND_SHORTCUTS"] = "1"
+    else:
+        os.environ["COMMAND_SHORTCUTS"] = "0"
+
+    if args.context:
+        os.environ["SESSION_CONTEXT"] = "1"
+    else:
+        os.environ["SESSION_CONTEXT"] = "0"
 
     if args.retrieval:
         from evals.retrieval_eval import run_retrieval_eval
@@ -402,6 +425,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         "RAG_AUTO_MIN_COVERAGE": getattr(settings, "RAG_AUTO_MIN_COVERAGE", 0.5),
         "RAG_AUTO_TOP_K": getattr(settings, "RAG_AUTO_TOP_K", 3),
         "RAG_AUTO_MAX_CHARS": getattr(settings, "RAG_AUTO_MAX_CHARS", 1500),
+        "COMMAND_SHORTCUTS": bool(args.shortcuts),
+        "SESSION_CONTEXT": bool(args.context),
     }
     if rerun_not_unseen:
         extra_meta["rerun_not_unseen"] = True
