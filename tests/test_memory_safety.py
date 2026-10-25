@@ -9,6 +9,16 @@ from memory.safety import (
     sanitize_for_prompt,
     validate_memory,
 )
+from tests.helpers.fake_secrets import (
+    fake_aws_access_key,
+    fake_github_token,
+    fake_google_api_key,
+    fake_jwt_token,
+    fake_pem_header,
+    fake_sk_key,
+    fake_slack_token,
+)
+
 
 
 def test_normal_text_passes_and_is_whitespace_normalized():
@@ -40,7 +50,7 @@ def test_empty_content_rejected():
 
 def test_fake_google_api_key_rejected():
     """Verify Google API key patterns (AIzaSy...) are detected and rejected."""
-    key_text = "Here is my key: AIzaSyFAKEFAKEFAKEFAKEFAKEFAKE12345"
+    key_text = f"Here is my key: {fake_google_api_key(suffix='FAKEFAKEFAKEFAKEFAKEFAKE12345')}"
     with pytest.raises(MemoryRejected) as excinfo:
         validate_memory(key_text)
     assert "sensitive" in str(excinfo.value).lower() or "google api key" in str(excinfo.value).lower()
@@ -124,12 +134,12 @@ def test_synthetic_credentials_in_different_shapes_rejected():
         "backup access key -> AccK9823412",
         "login is SuperUser_2026",
         "my root key -> R00tK3y!Sec",
-        "AWS_KEY=AKIAIOSFODNN7EXAMPLE",
-        "ghp_1234567890abcdefghijklmnopqrstuv",
-        "xox" "b-1234567890-abcdefghijklmnop",
-        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozG6tQGeptk_example",
+        f"AWS_KEY={fake_aws_access_key(middle='IOSFODNN7', suffix='EXAMPLE')}",
+        fake_github_token(kind="p", suffix="1234567890abcdefghijklmnopqrstuv"),
+        fake_slack_token(kind="b", team="1234567890", token="abcdefghijklmnop"),
+        fake_jwt_token(signature="dozG6tQGeptk_example"),
         "d41d8cd98f00b204e9800998ecf8427e",
-        "-----BEGIN EC PRIVATE KEY-----\nMHcCAQEEI...",
+        f"{fake_pem_header(key_type='EC')}\nMHcCAQEEI...",
     ]
     for cred in credentials:
         with pytest.raises(MemoryRejected) as excinfo:
@@ -141,11 +151,11 @@ def test_additional_secret_patterns_rejected():
     """Verify sk- keys, private key headers, and token assignments are rejected."""
     # sk- style API key
     with pytest.raises(MemoryRejected):
-        validate_memory("API key is sk-1234567890abcdef1234567890")
+        validate_memory(f"API key is {fake_sk_key(suffix='1234567890abcdef1234567890')}")
 
     # Private key PEM header
     with pytest.raises(MemoryRejected):
-        validate_memory("-----BEGIN RSA PRIVATE KEY----- MIIEow...")
+        validate_memory(f"{fake_pem_header(key_type='RSA')} MIIEow...")
 
     # Token assignment with equals sign
     with pytest.raises(MemoryRejected):

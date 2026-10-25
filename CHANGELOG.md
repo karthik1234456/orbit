@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.4.0] - 2026-10-25
+
+### Added & Enhanced
+- **Centralized Version Bump (`core/version.py`)**:
+  - Centralized `VERSION = "2.4.0"` in `core/version.py`, synchronized across the CLI startup message (`main.py`), desktop UI title (`ui/app.py`), evaluation report headers (`evals/report.py`), and diagnostics (`core/diagnostics.py`).
+- **Comprehensive Documentation Grounding (`README.md`)**:
+  - Complete rewrite of `README.md` strictly grounded in verifiable repository facts and evaluation result files.
+  - Documented features across chat, desktop tool execution, three-tier permissions, audit logging, controlled browser automation, command chaining with plan preview and stop controls, session context, keyword RAG with citations, terminal voice, and local Ollama model execution.
+  - Documented empirical benchmarks across development suite, unseen holdout4, retrieval threshold sweeps, command parser splits, and intent probes, with dates, models, case counts, and source file citations on every result row.
+  - Added transparent limitations covering local 6 GB GPU performance, heuristic injection filters, keyword retrieval trade-offs, browser selector brittleness, Google automated browsing verification handling, offline process boundaries, and AI-assisted development.
+- **Evaluation Governance & Synchronized Testing (`tests/test_readme_sync.py`)**:
+  - Enforced test count synchronization in `tests/test_readme_sync.py` asserting collected and passed test metrics match `pytest --collect-only`.
+  - Enforced date formatting validation verifying that every metric line in the Results section includes an ISO date (`YYYY-MM-DD`).
+
+---
+
+## [2.3.4] - 2026-10-25
+
+### Fixed & Enhanced
+- **Runtime Test Credential Builders & Repository Hygiene**:
+  - GitHub push protection flagged a token-shaped test string; test secrets are now built at runtime and a repository scan test prevents literal tokens.
+  - Added `tests/helpers/fake_secrets.py` with dynamic builders for Slack tokens, AWS access keys and secret keys, GitHub tokens, JWT tokens, PEM private key headers, sk- style keys, and Google API keys constructed from fragmented pieces.
+  - Updated `tests/test_memory_safety.py`, `tests/test_diag.py`, `tests/test_memory_tools.py`, `tests/test_audit.py`, and `tests/test_agent_rejected.py` to use runtime builders while keeping all validation, redaction, and assertion behaviors intact.
+  - Extended `tests/test_repo_hygiene.py` with `test_no_secret_tokens_in_tracked_files`: scans every tracked text file (`git ls-files`, skipping binaries and `evals/results/`) for literal Slack tokens, AWS access keys, GitHub tokens, Google API keys, PEM private key headers, sk- style keys (20+ chars), and JWT-looking strings, reporting only file and line number on failure without printing matched secrets. The previous Google key FAKE marker exemption was removed.
+
+---
+
 ## [2.3.3] - 2026-10-25
 
 ### Added & Enhanced

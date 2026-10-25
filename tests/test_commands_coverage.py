@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 
 from config.apps import ALLOWED_APPS
 from config.sites import SITES
@@ -375,7 +374,7 @@ def test_chain_other_sites_form():
     assert plan_maps.steps[2].tool == "browser_click_result" and plan_maps.steps[2].args == {"n": 1}
 
 
-def test_near_misses_stay_none():
+def test_unsafe_chained_actions_stay_none():
     """Verify near-misses and unsafe chained actions stay None without falling through to shortcuts."""
     # Near-miss with dangerous non-command verb
     assert _parse("go to maps and delete my files") is None

@@ -8,12 +8,11 @@ Redacts credentials, secrets, tokens, and caps file size at 20 KB.
 
 from datetime import datetime, timezone
 import json
-import os
 from pathlib import Path
 import platform
 import re
 import sys
-from typing import Any, Mapping, Optional
+from typing import Any, Optional
 from urllib.parse import urlparse
 
 from browser.guards import page_type
@@ -115,6 +114,7 @@ def build_diagnostics_text(
     app: Optional[Any] = None,
     agent: Optional[Any] = None,
     chat_controller: Optional[Any] = None,
+    voice_controller: Optional[Any] = None,
     provider_label: Optional[str] = None,
     model_name: Optional[str] = None,
     recent_chat_lines: Optional[list[str]] = None,
@@ -163,6 +163,37 @@ def build_diagnostics_text(
         f"Active Model: {mod}"
     )
 
+    # 2b. Voice Subsystem Telemetry
+    voice_ctrl = voice_controller
+    if voice_ctrl is None and app is not None:
+        voice_ctrl = getattr(app, "voice_ctrl", None)
+
+    mic_available = "unknown"
+    try:
+        from voice.audio import list_input_devices
+
+        devices = list_input_devices()
+        mic_available = "yes" if devices else "no"
+    except Exception:
+        mic_available = "unavailable"
+
+    stt_model = getattr(settings, "STT_MODEL", "base.en")
+    stt_lang = getattr(settings, "STT_LANGUAGE", "en")
+    speak_flag = getattr(voice_ctrl, "speak_replies", getattr(settings, "SPEAK_REPLIES", False))
+    last_voice_err = getattr(voice_ctrl, "last_error", "") or "none"
+    last_duration = getattr(voice_ctrl, "last_transcription_duration_s", 0.0)
+    duration_str = f"{last_duration}s" if last_duration > 0 else "none"
+
+    sections.append(
+        "=== VOICE ===\n"
+        f"Microphone Available: {mic_available}\n"
+        f"Speech Model: {stt_model}\n"
+        f"Speech Language: {stt_lang}\n"
+        f"Speak Replies: {speak_flag}\n"
+        f"Last Voice Error: {last_voice_err}\n"
+        f"Last Transcription Duration: {duration_str}"
+    )
+
     # 3. Settings That Matter
     settings_lines = ["=== SETTINGS ==="]
     # BROWSER_* settings
@@ -179,6 +210,9 @@ def build_diagnostics_text(
         "PLAN_PREVIEW",
         "PLAN_MAX_STEPS",
         "PLAN_MAX_SECONDS",
+        "SPEAK_REPLIES",
+        "VOICE_IN_UI",
+    ):
         "SESSION_CONTEXT",
         "OLLAMA_NUM_CTX",
     ):
@@ -206,7 +240,7 @@ def build_diagnostics_text(
                 title = " ".join(str(raw_title).strip().split())
                 for ch in ("<", ">", "`"):
                     title = title.replace(ch, "")
-                browser_lines.append(f"Status: open")
+                browser_lines.append("Status: open")
                 browser_lines.append(f"Host: {host}")
                 browser_lines.append(f"Page Type: {pt}")
                 browser_lines.append(f"Title: {title[:120]}")
@@ -447,6 +481,7 @@ def generate_diagnostics(
     app: Optional[Any] = None,
     agent: Optional[Any] = None,
     chat_controller: Optional[Any] = None,
+    voice_controller: Optional[Any] = None,
     provider_label: Optional[str] = None,
     model_name: Optional[str] = None,
     recent_chat_lines: Optional[list[str]] = None,
@@ -464,6 +499,7 @@ def generate_diagnostics(
         app=app,
         agent=agent,
         chat_controller=chat_controller,
+        voice_controller=voice_controller,
         provider_label=provider_label,
         model_name=model_name,
         recent_chat_lines=recent_chat_lines,

@@ -7,7 +7,6 @@ import time
 from typing import Any, Optional
 from unittest.mock import patch
 
-import pytest
 
 # Ensure Tcl/Tk libraries are located reliably on Windows
 if sys.platform == "win32":
@@ -18,7 +17,6 @@ if sys.platform == "win32":
     if os.path.exists(tk_path):
         os.environ.setdefault("TK_LIBRARY", tk_path)
 
-import tkinter as tk
 
 from config import settings
 from core.diagnostics import generate_diagnostics, record_plan, render_diagnostics
@@ -31,7 +29,7 @@ from tests.conftest import check_tk_available, make_test_root
 # Note: TclError failures (e.g. "Can't find a usable init.tcl") are intermittent and environmental
 check_tk_available()
 
-from ui.app import OrbitWindow, PlanDialog
+from ui.app import OrbitWindow
 
 
 class FakeController:

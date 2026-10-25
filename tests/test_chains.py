@@ -1,6 +1,5 @@
 """Tests for command chaining, PlanStep, describe_step, and parse_chain."""
 
-import os
 import pytest
 
 from config import settings

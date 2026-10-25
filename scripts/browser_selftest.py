@@ -11,7 +11,6 @@ import http.server
 from pathlib import Path
 import sys
 import threading
-import time
 from typing import Any, Callable
 
 # Ensure project root is in sys.path when executed directly as a script
@@ -180,8 +179,6 @@ def run_all_stages() -> bool:
 
         # Stage 6: click on sign-in link ends on original page with sign-in refusal
         def stage_signin_refusal():
-            orig_url = controller.status().get("url", "")
-
             def _click_signin(backend):
                 page = backend._get_active_page()
                 signin_link = page.locator('a:has-text("Sign in"), #signin-link, a[href*="signin"]').first

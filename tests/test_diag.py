@@ -9,45 +9,63 @@ Verifies:
 """
 
 from pathlib import Path
-import pytest
 
 from core.diagnostics import build_diagnostics_text, generate_diagnostics, redact_secrets_text
-from core.session_state import SessionState
 from core.version import VERSION
+from tests.helpers.fake_secrets import (
+    fake_aws_access_key,
+    fake_github_token,
+    fake_google_api_key,
+    fake_jwt_token,
+    fake_sk_key,
+    fake_slack_token,
+)
 
 
 def test_redact_secrets_text_removes_keys_and_tokens():
     """Verify that standalone keys, tokens, and assignments are redacted from text."""
+    google_key = fake_google_api_key(suffix="SyA1234567890abcdef123456")
+    openai_key = fake_sk_key(suffix="proj-1234567890abcdef12345678")
+    aws_key = fake_aws_access_key(middle="IOSFODNN7", suffix="EXAMPLE")
+    gh_token = fake_github_token(kind="p", suffix="1234567890abcdef1234")
+    slack_token = fake_slack_token(kind="b", team="1234567890", token="abcdef1234")
+    jwt_token = fake_jwt_token(signature="abc")
+    env_google_key = fake_google_api_key(suffix="SyB9876543210zyxwvu987654")
+
     raw = (
-        "Here is my Google key: AIzaSyA1234567890abcdef123456\n"
-        "Here is OpenAI key: sk-proj-1234567890abcdef12345678\n"
-        "Here is AWS key: AKIAIOSFODNN7EXAMPLE\n"
-        "Here is GitHub token: ghp_1234567890abcdef1234\n"
-        "Here is Slack token: xoxb-1234567890-abcdef1234\n"
-        "Here is Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abc\n"
-        "Here is env assignment: GEMINI_API_KEY=AIzaSyB9876543210zyxwvu987654\n"
+        f"Here is my Google key: {google_key}\n"
+        f"Here is OpenAI key: {openai_key}\n"
+        f"Here is AWS key: {aws_key}\n"
+        f"Here is GitHub token: {gh_token}\n"
+        f"Here is Slack token: {slack_token}\n"
+        f"Here is Authorization: Bearer {jwt_token}\n"
+        f"Here is env assignment: GEMINI_API_KEY={env_google_key}\n"
         "Here is secret assignment: password: MySuperSecretPassword123\n"
         "Here is token assignment: token=my_secret_token_value_456\n"
     )
 
     sanitized = redact_secrets_text(raw)
 
-    assert "AIzaSyA1234567890abcdef123456" not in sanitized
-    assert "sk-proj-1234567890abcdef12345678" not in sanitized
-    assert "AKIAIOSFODNN7EXAMPLE" not in sanitized
-    assert "ghp_1234567890abcdef1234" not in sanitized
-    assert "xoxb-1234567890-abcdef1234" not in sanitized
+    assert google_key not in sanitized
+    assert openai_key not in sanitized
+    assert aws_key not in sanitized
+    assert gh_token not in sanitized
+    assert slack_token not in sanitized
     assert "MySuperSecretPassword123" not in sanitized
     assert "my_secret_token_value_456" not in sanitized
-    assert "AIzaSyB9876543210zyxwvu987654" not in sanitized
+    assert env_google_key not in sanitized
 
 
 def test_diagnostics_secret_redaction_in_chat_and_events():
     """Verify diagnostics generation redacts secrets passed in chat lines and events."""
+    user_api_key = fake_google_api_key(suffix="SyA1234567890abcdef123456")
+    orbit_token = fake_sk_key(suffix="proj-1234567890abcdef12345678")
+    env_key = fake_google_api_key(suffix="SyC1234567890abcdef123456")
+
     fake_chat = [
-        "User: my api key is AIzaSyA1234567890abcdef123456",
-        "ORBIT: using token sk-proj-1234567890abcdef12345678 to proceed",
-        "User: .env has GEMINI_API_KEY=AIzaSyC1234567890abcdef123456",
+        f"User: my api key is {user_api_key}",
+        f"ORBIT: using token {orbit_token} to proceed",
+        f"User: .env has GEMINI_API_KEY={env_key}",
     ]
     fake_events = [
         {
@@ -64,9 +82,9 @@ def test_diagnostics_secret_redaction_in_chat_and_events():
         activity_events=fake_events,
     )
 
-    assert "AIzaSyA1234567890abcdef123456" not in report
-    assert "sk-proj-1234567890abcdef12345678" not in report
-    assert "AIzaSyC1234567890abcdef123456" not in report
+    assert user_api_key not in report
+    assert orbit_token not in report
+    assert env_key not in report
     assert "VerySecretPassword99" not in report
 
 

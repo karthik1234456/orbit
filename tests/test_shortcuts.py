@@ -2,9 +2,7 @@
 
 import os
 from pathlib import Path
-from unittest.mock import MagicMock
 
-import pytest
 
 from config.apps import ALLOWED_APPS
 from config.sites import SITES

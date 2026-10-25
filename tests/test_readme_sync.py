@@ -80,6 +80,6 @@ def test_readme_results_dates():
                 offending_lines.append(f"Line {line_num}: {stripped}")
 
     assert not offending_lines, (
-        f"The following number line(s) in the Results section lack a date:\n"
+        "The following number line(s) in the Results section lack a date:\n"
         + "\n".join(offending_lines)
     )

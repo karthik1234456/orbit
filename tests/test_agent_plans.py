@@ -1,29 +1,23 @@
 """Comprehensive tests for Agent plan runner, preview gate, cancellation, limits, and security."""
 
-from datetime import datetime, timezone
 import os
 from pathlib import Path
 import threading
 import time
-from typing import Any, Optional
-from unittest.mock import MagicMock
+from typing import Optional
 import pytest
 
 from config import settings
 from core.agent import Agent, TAINT_WARNING
 from core.chains import (
     PlanStep,
-    describe_step,
-    extract_title_from_click_result,
-    format_cancel_reply,
-    format_plan_reply,
     format_step_text,
     redact_page_text,
     sanitize_page_title,
 )
 from core.llm import LLMProvider, LLMResponse
 from core.shortcuts import ShortcutPlan
-from core.task import RunStatus, TaskRun
+from core.task import RunStatus
 from security.audit import AuditLogger
 from security.permissions import PermissionLevel, PermissionPolicy
 from tools.registry import Tool, ToolRegistry

@@ -90,6 +90,7 @@ class ChatController:
         self._pending_plan: Optional[dict] = None
         self._task_counter: int = 0
         self._current_task: int = 0
+        self.voice_controller: Optional[Any] = None
 
     def attach(self, app: Any) -> None:
         """Attach the wired App instance to the controller."""
@@ -151,7 +152,7 @@ class ChatController:
         except Exception:
             pass
 
-    def submit(self, text: str) -> bool:
+    def submit(self, text: str, source: str = "typed") -> bool:
         """Submit user text for execution on a background worker thread.
 
         Returns False if text is empty or controller is busy.
@@ -179,7 +180,7 @@ class ChatController:
             self.cancel_event.clear()
             worker = threading.Thread(
                 target=self._worker_loop,
-                args=(clean_text, task_id),
+                args=(clean_text, task_id, source),
                 daemon=True,
                 name="ChatControllerWorker",
             )
@@ -187,7 +188,7 @@ class ChatController:
             worker.start()
             return True
 
-    def _worker_loop(self, text: str, task_id: int) -> None:
+    def _worker_loop(self, text: str, task_id: int, source: str = "typed") -> None:
         """Background worker thread executing the agent chat loop."""
         streamed_any = False
 
@@ -204,12 +205,15 @@ class ChatController:
             kwargs = {
                 "on_delta": on_delta,
                 "cancel_event": self.cancel_event,
+                "source": source,
             }
             try:
                 import inspect
                 sig = inspect.signature(self.app.agent.chat)
                 if "plan_callback" in sig.parameters or any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values()):
                     kwargs["plan_callback"] = self.plan_callback
+                if "source" not in sig.parameters and not any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values()):
+                    kwargs.pop("source", None)
             except Exception:
                 kwargs["plan_callback"] = self.plan_callback
 
@@ -432,6 +436,12 @@ class ChatController:
             pending["event"].set()
         if pending_plan is not None:
             pending_plan["event"].set()
+
+        if self.voice_controller is not None:
+            try:
+                self.voice_controller.cancel()
+            except Exception:
+                pass
 
     def reset(self) -> None:
         """Reset agent conversation history and session state."""

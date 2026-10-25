@@ -56,6 +56,7 @@ class AuditLogger:
         duration_ms: Optional[float] = None,
         tainted: bool = False,
         extra: Optional[dict] = None,
+        source: Optional[str] = "typed",
     ) -> None:
         """Append an audit record to the JSON-lines log file. Never raises exceptions."""
         try:
@@ -75,6 +76,7 @@ class AuditLogger:
                 "result": truncated_result,
                 "duration_ms": duration_ms,
                 "tainted": bool(tainted),
+                "source": source or "typed",
             }
 
             if extra:

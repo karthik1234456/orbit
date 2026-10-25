@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-import pytest
 
 from core.llm import LLMProvider, LLMResponse, ToolCall
 import scripts.local_check as local_check

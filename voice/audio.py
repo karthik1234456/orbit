@@ -64,11 +64,13 @@ class Recorder:
         sample_rate: int = 16000,
         max_seconds: int = 30,
         stream_factory: Optional[Callable[..., Any]] = None,
+        level_callback: Optional[Callable[[float], None]] = None,
     ) -> None:
         self.device = device
         self.sample_rate = sample_rate
         self.max_seconds = max_seconds
         self.stream_factory = stream_factory
+        self.level_callback = level_callback
 
     def record(self, stop_event: Optional[threading.Event] = None) -> np.ndarray:
         """Record audio until stop_event is set or max_seconds elapses.
@@ -82,6 +84,13 @@ class Recorder:
             try:
                 # Copy block to prevent sounddevice buffer reuse
                 recorded_blocks.append(indata.copy())
+                if self.level_callback is not None:
+                    try:
+                        chunk = np.asarray(indata, dtype=np.float32)
+                        rms = float(np.sqrt(np.mean(np.square(chunk))))
+                        self.level_callback(rms)
+                    except Exception:
+                        pass
             except Exception as exc:
                 callback_error.append(exc)
 
@@ -142,3 +151,30 @@ class Recorder:
         if audio_data.ndim > 1:
             audio_data = audio_data.flatten()
         return audio_data.astype(np.float32)
+
+
+class FakeRecorder:
+    """Mock audio recorder returning predefined numpy array or raising an error."""
+
+    def __init__(
+        self,
+        audio: Optional[np.ndarray] = None,
+        error: Optional[Exception] = None,
+        level_callback: Optional[Callable[[float], None]] = None,
+    ) -> None:
+        if audio is not None:
+            self.audio = audio
+        else:
+            t = np.linspace(0, 1.0, 16000, endpoint=False, dtype=np.float32)
+            self.audio = 0.5 * np.sin(2 * np.pi * 440 * t)
+        self.error = error
+        self.level_callback = level_callback
+        self.calls: int = 0
+
+    def record(self, stop_event: Optional[threading.Event] = None) -> np.ndarray:
+        self.calls += 1
+        if self.error is not None:
+            raise self.error
+        if self.level_callback is not None:
+            self.level_callback(0.2)
+        return self.audio

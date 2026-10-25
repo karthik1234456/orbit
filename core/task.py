@@ -56,6 +56,7 @@ class TaskRun:
     auto_retrievals: list[dict] = field(default_factory=list)
     context: Optional[dict] = None
     plan: Optional[dict] = None
+    source: str = "typed"
 
     def add_step(
         self,
@@ -118,6 +119,7 @@ class TaskRun:
             "unverified_claims": self.unverified_claims,
             "auto_retrievals": list(self.auto_retrievals),
             "context": dict(self.context) if self.context is not None else None,
+            "source": self.source,
             "steps": steps_data,
         }
         if self.plan is not None:

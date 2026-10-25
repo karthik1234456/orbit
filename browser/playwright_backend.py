@@ -30,7 +30,6 @@ import inspect
 from pathlib import Path
 import time
 from typing import Any, Optional
-from urllib.parse import urlparse
 
 from browser.backend import BrowserBackend
 from browser.guards import (

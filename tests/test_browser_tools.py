@@ -1,19 +1,16 @@
 """Tests for browser automation tools, fallback mechanics, taint propagation, and lifecycles."""
 
-from pathlib import Path
 import sys
 import tempfile
-from typing import Any, Optional
-from unittest.mock import MagicMock, patch
-import pytest
+from typing import Optional
+from unittest.mock import patch
 
 from browser.backend import FakeBackend
 from browser.controller import BrowserController
-from browser.guards import BrowserError
 from config.apps import ALLOWED_APPS
 from config.sites import SITES
 from core.agent import TAINT_WARNING, Agent
-from core.bootstrap import AppPaths, Limits, build_app
+from core.bootstrap import AppPaths, build_app
 from core.llm import LLMProvider, LLMResponse, ToolCall
 from core.session_state import SessionState
 from security.audit import AuditLogger
@@ -199,7 +196,7 @@ def test_browser_read_page_taints_turn_for_confirm_tools() -> None:
     )
 
     try:
-        reply = agent.chat("Read Google results and then go to Wikipedia")
+        agent.chat("Read Google results and then go to Wikipedia")
         # In turn 2, open_website (a CONFIRM tool) was invoked after browser_read_page
         assert len(confirm_warnings) == 1
         assert confirm_warnings[0] == TAINT_WARNING

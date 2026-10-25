@@ -13,8 +13,53 @@ import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 from typing import Any, Optional
 
+from config import settings
 from core.version import VERSION
 from ui.controller import ChatController, ConfirmRequest, UiEvent
+
+
+class ToolTip:
+    """Simple Tkinter tooltip displayed on hover."""
+
+    def __init__(self, widget: tk.Widget, text: str = "") -> None:
+        self.widget = widget
+        self.text = text
+        self.tip_window: Optional[tk.Toplevel] = None
+        self.widget.bind("<Enter>", self.show_tip)
+        self.widget.bind("<Leave>", self.hide_tip)
+
+    def set_text(self, text: str) -> None:
+        self.text = text
+
+    def show_tip(self, event: Optional[tk.Event] = None) -> None:
+        if not self.text or self.tip_window or not self.widget.winfo_exists():
+            return
+        try:
+            x = self.widget.winfo_rootx() + 20
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
+            self.tip_window = tw = tk.Toplevel(self.widget)
+            tw.wm_overrideredirect(True)
+            tw.wm_geometry(f"+{x}+{y}")
+            label = ttk.Label(
+                tw,
+                text=self.text,
+                justify="left",
+                relief="solid",
+                borderwidth=1,
+                font=("Segoe UI", 8),
+                padding=(4, 2),
+            )
+            label.pack()
+        except Exception:
+            self.tip_window = None
+
+    def hide_tip(self, event: Optional[tk.Event] = None) -> None:
+        if self.tip_window:
+            try:
+                self.tip_window.destroy()
+            except Exception:
+                pass
+            self.tip_window = None
 
 
 class ConfirmDialog(tk.Toplevel):

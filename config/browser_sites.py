@@ -5,7 +5,7 @@ Email and messaging portals (such as Gmail and WhatsApp Web) are deliberately
 excluded from interactive browser control to protect user privacy and sensitive data.
 """
 
-from typing import Optional, Set
+from typing import Set
 from urllib.parse import urlparse
 
 from config.sites import SITES

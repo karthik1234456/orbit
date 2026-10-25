@@ -1,9 +1,7 @@
 """Tests for browser recovery, controller guards, verification page cooldown, and shortcut enhancements."""
 
 import asyncio
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -12,7 +10,6 @@ from browser.backend import FakeBackend
 from browser.controller import BrowserController
 from browser.guards import BrowserError, BrowserRefused, page_type
 from browser.playwright_backend import PlaywrightBackend
-import config.settings as settings
 from core.diagnostics import build_diagnostics_text
 from core.session_state import SessionState
 from core.shortcuts import ShortcutPlan, ToolCallSpec, parse_shortcut
@@ -215,7 +212,6 @@ def test_google_verification_page_detection_and_cooldown():
     """Verify detecting /sorry/index triggers history back, starts cooldown, and raises BrowserRefused."""
     backend = FakeBackend()
     backend.start()
-    controller = BrowserController(backend_factory=lambda: backend)
 
     assert page_type("https://www.google.com/sorry/index?continue=https://google.com") == "google_blocked"
 

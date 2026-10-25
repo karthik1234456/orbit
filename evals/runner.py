@@ -122,7 +122,6 @@ def run_case(
 
             if "BROWSER_ENABLED" not in os.environ:
                 os.environ["BROWSER_ENABLED"] = "0"
-            browser_on = os.getenv("BROWSER_ENABLED", "0").lower() in ("1", "true", "yes", "on")
 
             app = build_app(
                 provider=counting_provider,

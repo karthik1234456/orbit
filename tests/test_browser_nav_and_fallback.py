@@ -9,13 +9,9 @@ from browser.backend import FakeBackend
 from browser.controller import BrowserController
 from browser.guards import BrowserRefused
 from browser.playwright_backend import _TAG_RESULTS_SCRIPT
-from config.browser_sites import ALLOWED_BROWSER_KEYS
 from config.sites import SITES
 from core.agent import Agent
 from core.shortcuts import (
-    BARE_BROWSER_VERBS,
-    ToolCallSpec,
-    is_bare_browser_verb,
     parse_shortcut,
 )
 from tools.browser_tools import make_browser_tools

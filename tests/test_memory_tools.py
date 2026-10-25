@@ -5,6 +5,7 @@ import pytest
 
 from memory.store import MemoryStore
 from security.permissions import PermissionLevel
+from tests.helpers.fake_secrets import fake_google_api_key
 from tools.memory_tools import make_memory_tools
 
 
@@ -60,7 +61,7 @@ def test_remember_secret_refused_with_error(memory_tools):
     assert res_pw.startswith("ERROR:")
     assert store.count() == 0
 
-    res_key = tools["remember_fact"].func(content="API key: AIzaSyFAKEFAKEFAKEFAKEFAKEFAKE12345")
+    res_key = tools["remember_fact"].func(content=f"API key: {fake_google_api_key(suffix='FAKEFAKEFAKEFAKEFAKEFAKE12345')}")
     assert res_key.startswith("ERROR:")
     assert store.count() == 0
 

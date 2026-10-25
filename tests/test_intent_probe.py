@@ -20,16 +20,13 @@ from core.llm import LLMProvider, LLMResponse, ToolCall
 from scripts.intent_probe import (
     PROBE_PHRASES,
     ProbeReport,
-    SingleRunResult,
     build_probe_registry,
-    format_markdown_report,
     get_git_info,
     main,
     run_intent_probe,
     run_single_phrase,
-    validate_tool_call,
 )
-from tools.registry import Tool, ToolRegistry
+from tools.registry import Tool
 
 
 class ScriptedFakeProvider(LLMProvider):

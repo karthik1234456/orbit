@@ -2,7 +2,6 @@
 
 import os
 from unittest.mock import MagicMock
-import pytest
 
 from core.bootstrap import default_system_prompt
 from core.session_state import SessionState, sanitize_context_value
@@ -11,7 +10,6 @@ from core.llm import LLMProvider, LLMResponse, ToolCall
 from evals.report import render_markdown
 from evals.runner import run_suite
 from evals.schema import EvalCase
-from security.audit import AuditLogger
 from security.permissions import PermissionLevel, PermissionPolicy
 from tools.registry import Tool, ToolRegistry
 
@@ -281,7 +279,6 @@ def test_prompt_contains_two_new_sentences_and_rules_unchanged():
 def test_eval_runner_session_context_off_by_default(tmp_path):
     """Verify eval runner disables SESSION_CONTEXT by default and records it in meta and report."""
     import json
-    from evals.schema import EvalCase
 
     out_file = tmp_path / "results_off.json"
     dummy_factory = lambda case: DummyProvider("test reply")

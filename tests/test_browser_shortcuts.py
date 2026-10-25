@@ -2,10 +2,8 @@
 
 from pathlib import Path
 import re
-from typing import Any, Optional
 from unittest.mock import MagicMock
 
-import pytest
 
 from browser.backend import FakeBackend
 from browser.controller import BrowserController
@@ -16,9 +14,8 @@ from core.agent import Agent, RunStatus
 from core.llm import LLMProvider, LLMResponse
 from core.shortcuts import ShortcutPlan, ToolCallSpec, parse_shortcut
 from security.audit import AuditLogger
-from security.permissions import PermissionLevel, PermissionPolicy
 from tools.browser_tools import make_browser_tools
-from tools.registry import Tool, ToolRegistry
+from tools.registry import ToolRegistry
 
 
 class ExplodingProvider(LLMProvider):

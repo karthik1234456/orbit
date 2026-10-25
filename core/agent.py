@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from core.planner import Plan
 
 from config import settings
-from core.chains import describe_step, format_cancel_reply, format_plan_reply, redact_page_text
+from core.chains import describe_step, format_cancel_reply, format_plan_reply
 from core.guards import LoopGuard
 from core.llm import LLMProvider
 from core.session_state import SessionState
@@ -296,6 +296,7 @@ class Agent:
                 if (is_shortcut and log_decision == "user_denied")
                 else ("shortcut" if is_shortcut else log_decision)
             )
+            run_source = getattr(run, "source", "typed")
             try:
                 self.audit.log(
                     tool=name,
@@ -306,6 +307,7 @@ class Agent:
                     duration_ms=round(duration_ms, 2),
                     tainted=tainted,
                     extra=extra,
+                    source=run_source,
                 )
             except TypeError:
                 try:
@@ -317,16 +319,28 @@ class Agent:
                         result=result,
                         duration_ms=round(duration_ms, 2),
                         tainted=tainted,
+                        extra=extra,
                     )
                 except TypeError:
-                    self.audit.log(
-                        tool=name,
-                        args=args,
-                        decision=audit_decision,
-                        outcome=outcome,
-                        result=result,
-                        duration_ms=round(duration_ms, 2),
-                    )
+                    try:
+                        self.audit.log(
+                            tool=name,
+                            args=args,
+                            decision=audit_decision,
+                            outcome=outcome,
+                            result=result,
+                            duration_ms=round(duration_ms, 2),
+                            tainted=tainted,
+                        )
+                    except TypeError:
+                        self.audit.log(
+                            tool=name,
+                            args=args,
+                            decision=audit_decision,
+                            outcome=outcome,
+                            result=result,
+                            duration_ms=round(duration_ms, 2),
+                        )
 
         # If this tool produces untrusted output and succeeded, taint the agent for the rest of the turn
         if status == "success" and tool and getattr(tool, "untrusted_output", False):
@@ -707,16 +721,29 @@ class Agent:
                     decision="shortcut",
                 )
                 if self.audit:
-                    self.audit.log(
-                        tool="wait",
-                        args=step_args,
-                        decision="shortcut",
-                        outcome="success",
-                        result=result,
-                        duration_ms=round(duration_ms, 2),
-                        tainted=tainted,
-                        extra=step_extra,
-                    )
+                    try:
+                        self.audit.log(
+                            tool="wait",
+                            args=step_args,
+                            decision="shortcut",
+                            outcome="success",
+                            result=result,
+                            duration_ms=round(duration_ms, 2),
+                            tainted=tainted,
+                            extra=step_extra,
+                            source=getattr(run, "source", "typed"),
+                        )
+                    except TypeError:
+                        self.audit.log(
+                            tool="wait",
+                            args=step_args,
+                            decision="shortcut",
+                            outcome="success",
+                            result=result,
+                            duration_ms=round(duration_ms, 2),
+                            tainted=tainted,
+                            extra=step_extra,
+                        )
             else:
                 s_stop_reason, status, outcome, result, hint, tainted = self._execute_single_tool(
                     tool_name,
@@ -897,6 +924,7 @@ class Agent:
         on_delta: Optional[Callable[[str], None]] = None,
         cancel_event: Optional[Any] = None,
         plan_callback: Optional[Callable[[list[str], list[str]], bool]] = None,
+        source: str = "typed",
     ) -> str:
         """Run conversational loop handling permission checks, guards, tool executions, and audit logs."""
         if callable(extra_system_text) and on_delta is None:
@@ -917,7 +945,7 @@ class Agent:
             max_consecutive_errors=self.max_consecutive_errors,
             max_seconds=self.max_task_seconds,
         )
-        run = TaskRun(goal=user_text)
+        run = TaskRun(goal=user_text, source=source)
         run.context = self.session_state.to_dict()
         _orig_finish = run.finish
 
@@ -1021,6 +1049,7 @@ class Agent:
                             outcome=retrieval_outcome,
                             result=None,
                             tainted=tainted,
+                            source=getattr(run, "source", "typed"),
                         )
                     except TypeError:
                         self.audit.log(
@@ -1051,6 +1080,7 @@ class Agent:
                             outcome="none",
                             result=None,
                             tainted=tainted,
+                            source=getattr(run, "source", "typed"),
                         )
                     except TypeError:
                         self.audit.log(
@@ -1078,7 +1108,7 @@ class Agent:
 
         # Deterministic shortcut bypass before any LLM call
         if self.shortcuts_enabled():
-            from core.shortcuts import ShortcutPlan, ToolCallSpec, parse_shortcut
+            from core.shortcuts import ShortcutPlan, parse_shortcut
 
             browser_enabled = bool(
                 getattr(self, "browser_controller", None)
@@ -1254,6 +1284,7 @@ class Agent:
                                     outcome="retried",
                                     result=None,
                                     tainted=tainted,
+                                    source=getattr(run, "source", "typed"),
                                 )
                             except TypeError:
                                 self.audit.log(
@@ -1315,6 +1346,7 @@ class Agent:
                                         outcome="fallback",
                                         result=fallback_msg,
                                         tainted=tainted,
+                                        source=getattr(run, "source", "typed"),
                                     )
                                 except TypeError:
                                     self.audit.log(
@@ -1382,6 +1414,7 @@ class Agent:
                                             decision="claim_check",
                                             outcome="flagged",
                                             result=warning_line.strip(),
+                                            source=getattr(run, "source", "typed"),
                                         )
                                     except TypeError:
                                         self.audit.log(
@@ -1414,8 +1447,6 @@ class Agent:
 
                 # Process each requested tool
                 for tc_idx, tc in enumerate(response.tool_calls):
-                    step_index = len(run.steps) + 1
-
                     # Check cancel_event before executing each tool call
                     if cancel_event is not None and cancel_event.is_set():
                         pending_names = []

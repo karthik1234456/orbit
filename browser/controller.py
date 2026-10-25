@@ -3,7 +3,7 @@
 import queue
 import threading
 import time
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import quote_plus, urlparse
 
 from browser.backend import BrowserBackend

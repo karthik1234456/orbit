@@ -2,7 +2,6 @@
 
 import os
 import sys
-import time
 
 # Ensure Tcl/Tk libraries are located reliably on Windows
 if sys.platform == "win32":
@@ -13,11 +12,9 @@ if sys.platform == "win32":
     if os.path.exists(tk_path):
         os.environ.setdefault("TK_LIBRARY", tk_path)
 
-import tkinter as tk
 from typing import Any, Optional
 from unittest.mock import patch
 
-import pytest
 
 from ui.controller import ConfirmRequest, UiEvent
 from ui.launch import make_provider

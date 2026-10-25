@@ -17,6 +17,8 @@ from security.permissions import PermissionPolicy
 from tools.builtin import register_builtin_tools
 from tools.memory_tools import make_memory_tools
 from tools.registry import ToolRegistry
+from tests.helpers.fake_secrets import fake_sk_key
+
 
 
 class ScriptedProvider(LLMProvider):
@@ -275,7 +277,7 @@ def test_rejected_audit_entries_exist(agent_environment):
             tool_calls=[
                 ToolCall(
                     name="remember_fact",
-                    args={"content": "sk-12345678901234567890"},
+                    args={"content": fake_sk_key(suffix="12345678901234567890")},
                     id="call_1",
                 )
             ],
@@ -285,7 +287,7 @@ def test_rejected_audit_entries_exist(agent_environment):
             tool_calls=[
                 ToolCall(
                     name="remember_fact",
-                    args={"content": "sk-12345678901234567890 reworded"},
+                    args={"content": f"{fake_sk_key(suffix='12345678901234567890')} reworded"},
                     id="call_2",
                 )
             ],

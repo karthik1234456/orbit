@@ -1,6 +1,5 @@
 """Unit tests for browser guards, URL validation, and BrowserController using FakeBackend."""
 
-import importlib
 import sys
 import threading
 import time
@@ -13,14 +12,11 @@ from browser.guards import (
     BrowserRefused,
     BrowserTimeout,
     check_url,
-    extract_video_id,
-    get_site_display_name,
     is_google_host,
     is_interactive,
     is_signin_url,
     page_type,
     request_allowed,
-    verify_click_result,
 )
 from config.browser_sites import INTERACTIVE_SITES, interactive_hosts
 
@@ -410,12 +406,6 @@ def test_importing_browser_leaves_playwright_out_of_sys_modules():
     sys.modules.pop("playwright", None)
 
     # Import browser modules
-    import browser
-    import browser.backend
-    import browser.controller
-    import browser.guards
-    import config.browser_sites
-    import config.settings
 
     assert "playwright" not in sys.modules
 
@@ -601,7 +591,6 @@ def test_click_result_lands_on_signin_goes_back_and_refuses():
 
 def test_click_result_refuses_on_accounts_google_com():
     """Verify clicking or typing on accounts.google.com is refused even if BROWSER_ALLOW_SIGNIN=True."""
-    from config import settings
     backend = FakeBackend()
     controller = BrowserController(backend_factory=lambda: backend, timeout_s=5.0)
     try:

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from security.audit import AuditLogger
 from security.permissions import Decision
+from tests.helpers.fake_secrets import fake_sk_key
 
 
 def test_audit_log_valid_json(tmp_path: Path):
@@ -48,7 +49,7 @@ def test_secrets_are_redacted(tmp_path: Path):
     logger = AuditLogger(path=str(log_file))
 
     sensitive_args = {
-        "api_key": "sk-12345abcdef",
+        "api_key": fake_sk_key(suffix="12345abcdef"),
         "USER_PASSWORD": "supersecretpassword",
         "auth_token": "bearer-xyz",
         "client_secret": "my-client-secret",

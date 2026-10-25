@@ -17,7 +17,7 @@ from typing import Any, Mapping, Optional
 from config import settings
 from config.sites import SITES, resolve_site
 from core.session_state import SessionState, _extract_site_key
-from core.shortcuts import ShortcutPlan, ToolCallSpec, _levenshtein_distance, parse_shortcut
+from core.shortcuts import ShortcutPlan, _levenshtein_distance, parse_shortcut
 
 
 COMMAND_VERBS = (

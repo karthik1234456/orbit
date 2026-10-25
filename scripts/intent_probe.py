@@ -18,15 +18,14 @@ import re
 import subprocess
 import sys
 import tempfile
-from typing import Any, Callable, Mapping, Optional, Sequence, Union
+from typing import Any, Callable, Optional, Sequence, Union
 
 # Ensure project root is in sys.path when executed directly
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import settings
-from config.apps import ALLOWED_APPS
 from core.bootstrap import AppPaths, build_app, default_system_prompt
-from core.llm import LLMProvider, LLMResponse, ToolCall
+from core.llm import LLMProvider, LLMResponse
 from core.ollama_provider import OllamaProvider
 from tools.registry import ToolRegistry
 
@@ -298,7 +297,7 @@ def format_markdown_report(report: ProbeReport) -> str:
     lines.append(f"- **Git Commit**: `{report.commit}`")
     lines.append(f"- **Model**: `{report.model}`")
     lines.append(f"- **Temperature**: `{report.temperature}`")
-    lines.append(f"- **RAG_AUTO**: `False`")
+    lines.append("- **RAG_AUTO**: `False`")
     lines.append(f"- **BROWSER_ENABLED**: `{'on' if report.browser_enabled else 'off'}`")
     lines.append(f"- **Seeds Evaluated**: `{report.seeds}`")
     lines.append(f"- **System Prompt Source**: `{report.system_prompt_source}`\n")

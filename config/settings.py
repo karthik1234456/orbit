@@ -134,12 +134,14 @@ RAG_AUTO_MAX_CHARS: int = _parse_int(os.getenv("RAG_AUTO_MAX_CHARS"), 1500)
 RAG_AUTO_SCORING: str = _parse_rag_auto_scoring(os.getenv("RAG_AUTO_SCORING"), "fraction")
 
 
-STT_MODEL: str = os.getenv("STT_MODEL", "base.en")
-STT_LANGUAGE: str = os.getenv("STT_LANGUAGE", "en")
+STT_MODEL: str = _parse_str(os.getenv("STT_MODEL"), "base.en")
+STT_LANGUAGE: str = _parse_str(os.getenv("STT_LANGUAGE"), "en")
 MIC_DEVICE: Optional[Union[int, str]] = _parse_mic_device(os.getenv("MIC_DEVICE"))
 MAX_RECORD_SECONDS: int = _parse_int(os.getenv("MAX_RECORD_SECONDS"), 30)
 TTS_RATE: int = _parse_int(os.getenv("TTS_RATE"), 180)
 SPEAK_MAX_CHARS: int = _parse_int(os.getenv("SPEAK_MAX_CHARS"), 500)
+SPEAK_REPLIES: bool = _parse_bool(os.getenv("SPEAK_REPLIES"), False)
+VOICE_IN_UI: bool = _parse_bool(os.getenv("VOICE_IN_UI"), True)
 
 WAKE_PHRASE: str = os.getenv("WAKE_PHRASE", "hey orbit")
 WAKE_STT_MODEL: str = os.getenv("WAKE_STT_MODEL", "tiny.en")
@@ -198,6 +200,18 @@ def __getattr__(name: str) -> Any:
         return _parse_int(os.getenv("PLAN_MAX_STEPS"), 10)
     if name == "PLAN_MAX_SECONDS":
         return _parse_float(os.getenv("PLAN_MAX_SECONDS"), 180.0)
+    if name == "SPEAK_REPLIES":
+        return _parse_bool(os.getenv("SPEAK_REPLIES"), False)
+    if name == "VOICE_IN_UI":
+        return _parse_bool(os.getenv("VOICE_IN_UI"), True)
+    if name == "STT_MODEL":
+        return _parse_str(os.getenv("STT_MODEL"), "base.en")
+    if name == "STT_LANGUAGE":
+        return _parse_str(os.getenv("STT_LANGUAGE"), "en")
+    if name == "MIC_DEVICE":
+        return _parse_mic_device(os.getenv("MIC_DEVICE"))
+    if name == "MAX_RECORD_SECONDS":
+        return _parse_int(os.getenv("MAX_RECORD_SECONDS"), 30)
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 

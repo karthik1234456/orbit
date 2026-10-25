@@ -62,14 +62,59 @@ def test_no_tracked_files_in_ignored_directories():
                 ), f"Tracked file '{file_path}' lives in forbidden folder '{prefix}' and is not .gitkeep"
 
 
-def test_no_real_looking_google_keys_in_tracked_files():
-    """Verify no tracked file contains a real Google API key without the word FAKE."""
+def _is_binary_file(path: Path) -> bool:
+    """Return True if path is a binary file based on extension or null byte detection."""
+    binary_exts = {
+        ".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".pdf",
+        ".pyc", ".pyd", ".exe", ".dll", ".so", ".dylib",
+        ".bin", ".zip", ".tar", ".gz", ".db", ".sqlite", ".woff", ".woff2",
+    }
+    if path.suffix.lower() in binary_exts:
+        return True
+    try:
+        with path.open("rb") as f:
+            chunk = f.read(4096)
+            if b"\x00" in chunk:
+                return True
+            chunk.decode("utf-8")
+            return False
+    except (UnicodeDecodeError, Exception):
+        return True
+
+
+def test_no_secret_tokens_in_tracked_files():
+    """Verify no tracked text file contains token-shaped credentials or secret literals."""
     tracked = _get_tracked_files()
-    key_pattern = re.compile(r"AIza[0-9A-Za-z_-]{35}")
+
+    xox_prefix = "x" + "ox[abprse]-"
+    aws_prefix = "AK" + "IA"
+    gh_prefix = "gh" + "[pousr]_[A-Za-z0-9]{36,}"
+    gh_pat_prefix = "github" + "_pat_[A-Za-z0-9_]{22,}"
+    google_prefix = "AI" + "za"
+    pem_prefix = "-" * 5 + "BEGIN"
+    pem_suffix = "PRIVATE" + " KEY" + "-" * 5
+    sk_prefix = "s" + "k-"
+    ey_j = "ey" + "J"
+
+    patterns = [
+        ("Slack token", re.compile(rf"{xox_prefix}[A-Za-z0-9-]+")),
+        ("AWS access key", re.compile(rf"\b{aws_prefix}[0-9A-Z]{{16}}\b")),
+        ("GitHub token", re.compile(rf"\b({gh_prefix}|{gh_pat_prefix})\b")),
+        ("Google API key", re.compile(rf"\b{google_prefix}[0-9A-Za-z_-]{{35}}\b")),
+        ("PEM private key header", re.compile(rf"{pem_prefix}[A-Z ]*{pem_suffix}")),
+        ("sk- style key", re.compile(rf"\b{sk_prefix}[A-Za-z0-9_-]{{20,}}\b")),
+        ("JWT token", re.compile(rf"\b{ey_j}[A-Za-z0-9_-]+\.{ey_j}[A-Za-z0-9_-]+")),
+    ]
+
+    aws_documented_example = "AK" + "IAIOSFODNN7EXAMPLE"
+    violations: list[str] = []
 
     for file_path_str in tracked:
+        if file_path_str.startswith("evals/results/"):
+            continue
+
         file_path = Path(file_path_str)
-        if not file_path.is_file():
+        if not file_path.is_file() or _is_binary_file(file_path):
             continue
 
         try:
@@ -78,10 +123,18 @@ def test_no_real_looking_google_keys_in_tracked_files():
             continue
 
         for line_no, line in enumerate(content.splitlines(), start=1):
-            if key_pattern.search(line):
-                assert (
-                    "FAKE" in line
-                ), f"Potential real Google key found in {file_path_str}:{line_no} without 'FAKE': {line.strip()}"
+            for name, pattern in patterns:
+                match = pattern.search(line)
+                if match:
+                    if name == "AWS access key" and match.group(0) == aws_documented_example:
+                        continue
+                    # Report file and line number only; never print the matched secret value
+                    violations.append(f"{file_path_str}:{line_no} ({name})")
+
+    assert not violations, (
+        "Credential pattern(s) found in tracked file(s):\n"
+        + "\n".join(violations)
+    )
 
 
 def test_env_example_contains_only_placeholder_values():
