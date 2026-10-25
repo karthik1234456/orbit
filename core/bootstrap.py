@@ -133,6 +133,7 @@ class App:
 def build_app(
     provider: Any,
     confirm_callback: Optional[Callable[..., bool]] = None,
+    plan_callback: Optional[Callable[..., bool]] = None,
     paths: Optional[AppPaths] = None,
     allowed_apps: Optional[Mapping[str, Any]] = None,
     limits: Optional[Limits] = None,
@@ -213,6 +214,7 @@ def build_app(
         policy=policy,
         audit=audit,
         confirm_callback=confirm_callback,
+        plan_callback=plan_callback,
         on_event=on_event,
         run_logger=run_logger,
         memory_store=memory_store,

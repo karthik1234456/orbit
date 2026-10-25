@@ -245,14 +245,17 @@ def make_browser_tools(
         n = args.get("n")
         if not isinstance(n, int) or isinstance(n, bool) or n < 1 or n > 10:
             return "ERROR: Result index n must be an integer between 1 and 10."
+        next_vid = args.get("next_video")
+        if next_vid is not None and not isinstance(next_vid, bool):
+            return "ERROR: next_video parameter must be a boolean."
         return None
 
-    def browser_click_result(n: int) -> str:
-        err = precheck_click_result({"n": n})
+    def browser_click_result(n: int, next_video: bool = False) -> str:
+        err = precheck_click_result({"n": n, "next_video": next_video})
         if err:
             return err
         try:
-            return controller.click_result(n)
+            return controller.click_result(n, next_video=next_video)
         except (BrowserRefused, BrowserError) as exc:
             return f"ERROR: {exc}"
 
@@ -268,7 +271,11 @@ def make_browser_tools(
                 "n": {
                     "type": "integer",
                     "description": "1-based result index (1 to 10) to click.",
-                }
+                },
+                "next_video": {
+                    "type": "boolean",
+                    "description": "If true, clicks the first recommended video on a YouTube watch page.",
+                },
             },
             "required": ["n"],
         },
@@ -473,6 +480,46 @@ def make_browser_tools(
         permission=PermissionLevel.SAFE,
     )
 
+    # --- 10. browser_key ---
+
+    def precheck_key(args: dict) -> Optional[str]:
+        from config.browser_sites import ALLOWED_BROWSER_KEYS
+        name = args.get("name")
+        if not isinstance(name, str) or name not in ALLOWED_BROWSER_KEYS:
+            return f"ERROR: Key '{name}' is not allowed. Permitted keys: {sorted(ALLOWED_BROWSER_KEYS)}"
+        return None
+
+    def browser_key(name: str) -> str:
+        err = precheck_key({"name": name})
+        if err:
+            return err
+        try:
+            return controller.key(name)
+        except (BrowserRefused, BrowserError) as exc:
+            return f"ERROR: {exc}"
+
+    browser_key_tool = Tool(
+        name="browser_key",
+        description=(
+            "Press an allowed keyboard key (ArrowDown, ArrowUp, k, space) on the active page. "
+            "Used for navigating Shorts (ArrowDown/ArrowUp) or controlling playback."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "enum": ["ArrowDown", "ArrowUp", "k", "space"],
+                    "description": "Name of the key to press.",
+                }
+            },
+            "required": ["name"],
+        },
+        func=browser_key,
+        permission=PermissionLevel.SAFE,
+        precheck=precheck_key,
+    )
+
     return [
         open_website_tool,
         search_web_tool,
@@ -481,6 +528,7 @@ def make_browser_tools(
         browser_media_tool,
         browser_scroll_tool,
         browser_history_tool,
+        browser_key_tool,
         browser_read_page_tool,
         browser_close_tool,
     ]

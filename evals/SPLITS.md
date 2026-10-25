@@ -22,6 +22,8 @@ This document defines the status and governance of the evaluation dataset splits
 | `retrieval_hard/test` | `evals/retrieval_hard/test.json` | **reserved** | Hard retrieval benchmark: reserved and unused. Untouched until a method is chosen. |
 | `retrieval_guard/dev` | `evals/retrieval_guard/dev.json` | **dev** | Guard retrieval benchmark: tuned against during development. |
 | `retrieval_guard/test` | `evals/retrieval_guard/test.json` | **reserved** | Guard retrieval benchmark: reserved and unused. Untouched until a method is chosen. |
+| `commands/dev` | `evals/commands/dev.json` | **dev** | Command shortcut and chain benchmark: tuned against during development. |
+| `commands/test` | `evals/commands/test.json` | **reserved** | Command shortcut and chain benchmark: reserved, run once. |
 
 ## Retrieval Splits Governance
 
@@ -33,6 +35,11 @@ The retrieval evaluation benchmark (`evals/retrieval`, `evals/retrieval_hard`, a
 - `evals/retrieval_guard/dev.json` (`guard-dev`): Guard retrieval benchmark split tuned against during development. Evaluates false-injection rates on conversational and general queries using the hard corpus index. Parameter sweeps (`--sweep`, `--sweep-methods`) are permitted.
 - `evals/retrieval_guard/test.json` (`guard-test`): Guard retrieval benchmark split reserved and unused. Untouched until a method is chosen. Parameter sweeps (`--sweep`, `--sweep-methods`) are strictly prohibited and refused by the runner.
 
+## Commands Splits Governance
+
+The command evaluation benchmark (`evals/commands/dev.json` and `evals/commands/test.json`) tests typed desktop commands across apps, websites, and browser actions:
+- `evals/commands/dev.json` (`commands dev`): **dev** split, tuned against during active development. Dev runs are unlimited.
+- `evals/commands/test.json` (`commands test`): **reserved**, run once. A marker file (`evals/commands/.ran`) records date, commit hash, and dirty flag. Any second run is refused unless `--force` is provided, which prints that the split is now a dev set and marks the report "RERUN: NOT UNSEEN".
 
 ## Inspection Notes: holdout3 (2026-10-12)
 

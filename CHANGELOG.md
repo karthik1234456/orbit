@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.3.1] - 2026-10-24
+
+### Fixed & Enhanced
+- **Command Parser Swallowed Tail Fix**:
+  - Prioritized `parse_chain` before `parse_shortcut` whenever input contains an explicit sequencing separator (`then`, `and then`, `after that`, `afterwards`, or `,`).
+  - Added query boundary validation disallowing search queries that start or end with conjunctions/sequencing words (`and`, `then`, `also`, `after`, etc.) or command verbs (`open`, `search`, `click`, `read`, etc.).
+  - Plain ordinal clicks without query (e.g. `click the 1st result`, `open the second one`, `play the 5th video`) stay direct clicks instead of attempting invalid search plans.
+- **Phrase Coverage Expansion**:
+  - Leading fillers: stripped `hey`, `hi`, `ok`, `okay`, `now`, `just`, `please`, `can you`, `could you`, `can u`, `would you`.
+  - Trailing fillers: stripped `please`, `for me`, `now`.
+  - Open verbs: added `open`, `launch`, `start`, `run` (apps only), `fire up`, `bring up`, `pull up`, and `show me` (sites only).
+  - Navigation verbs: mapped `go to <site>` and `take me to <site>` to `open_website` for allowlisted sites (never apps).
+  - Media phrases: mapped `play it`, `play that`, `play the video`, `pause it`, `mute it`.
+  - Read page phrases: mapped `read page`, `read the page`, `read page content`, `read the page content`, `what's on the page`, `what is on this page`.
+  - Edit-distance-1 typo tolerance for supported command verbs (`open`, `launch`, `start`, `search`, `close`, `play`, `scroll`) when remainder matches pattern exactly; strictly rejects real dictionary non-verbs (e.g. `oven`, `stop`, `plan`).
+  - Follow-up chained actions (e.g. `now click number two and play it`) resolve through simulated session state.
+- **Evaluation & Test Governance**:
+  - Tuned and verified using the `dev` benchmark split (`evals/commands/dev.json`).
+  - Strict evaluation governance maintained: `test` split was NOT touched or executed.
+  - Added comprehensive test suite `tests/test_commands_coverage.py` with verified test isolation from `dev.json`.
+
+---
+
+## [2.3.0] - 2026-10-24
+
+### Added
+- **Command Parser Benchmark Harness**:
+  - Deterministic evaluation runner (`evals/commands_eval.py`) invoked via `python -m evals --commands dev|test`.
+  - Benchmarks shortcut parsing and multi-step command chaining across `evals/commands/dev.json` (40 cases) and `evals/commands/test.json` (40 cases).
+  - Evaluates single commands (`kind: single`), chained commands (`kind: chain`), and unsupported fallbacks (`kind: none`).
+  - Verifies exact tool calls and parameters: `app`, `site`, `query`, `n`, `action`, `direction`, and `seconds`.
+- **Test Split Governance & Rerun Protection**:
+  - Defined commands dataset governance in `evals/SPLITS.md`.
+  - Enforced one-run rule for `evals/commands/test.json`: creates `evals/commands/.ran` marker recording date, commit hash, and git dirty status.
+  - Refuses subsequent runs without explicit `--force` flag, which labels the report "RERUN: NOT UNSEEN".
+- **Commands Evaluation Test Suite**:
+  - Unit tests in `tests/test_commands_eval.py` verifying state construction, argument matching, reporting, and marker validation.
+
+---
+
+## [2.2.0] - 2026-10-21
+
+### Added
+- **Command Chaining & Plan Runner**:
+  - Deterministic command chain parsing (`core/chains.py`) supporting app launches, URLs, site searches, wait intervals (`wait N seconds`), and single-level conjunctions (`and`, `then`, `&&`, commas).
+  - All-or-nothing parser rule: all sub-commands must parse to supported actions, otherwise the entire prompt falls back to standard LLM agent reasoning.
+  - Unified `PlanRunner` (`core/plan_runner.py`) executing multi-step plans with status tracking, step limits (`PLAN_MAX_STEPS=6`), and execution deadlines (`PLAN_MAX_SECONDS=60`).
+- **Plan Preview Modal & Safety Gate**:
+  - `PlanDialog` modal in `ui/app.py`: topmost window, read-only numbered steps annotated with `(asks for approval)` when confirmation is required, countdown auto-cancel timer, 800 ms Run button delay, and Cancel as default focus.
+  - Fail-closed keyboard controls: Esc, dialog close, countdown expiry, and Enter resolve to Cancel/Deny; Enter never resolves to Run.
+  - `ChatController.plan_callback` in `ui/controller.py`: emits `plan_preview` event, blocks worker thread for up to 60s, and denies on timeout, cancel, shutdown, or stale IDs.
+  - Immediate preview denial on Stop button press (`controller.cancel()`).
+- **Activity Tab & Live Status**:
+  - Activity tab adds header row `Plan <id>: n steps` and individual step rows updated from `plan_step` and `plan_end` events.
+  - Tolerates missing fields in plan events to ensure UI resilience.
+  - Status bar displays `Running plan: step k of n` during execution, supporting immediate mid-plan and wait cancellation.
+- **Terminal CLI Controls**:
+  - Interactive CLI plan confirmation printing numbered steps and prompt `Run this plan? (y/n): ` (defaulting to no).
+  - `/plan on|off|always` command to configure preview policy (`on` = auto-preview for multi-step / confirmable actions).
+  - `/chains on|off` command to enable or disable chain detection.
+  - `/help` command listing session controls and example chained commands.
+- **Diagnostics & Privacy**:
+  - Diagnostics `/diag` and "Copy diagnostics" include `=== LAST PLAN ===` with plan ID, source, outcome, and per-step labels/statuses.
+  - Strict privacy: absolutely zero untrusted page text, DOM contents, or scraped text in diagnostics.
+  - Plan settings (`CHAINS_ENABLED`, `PLAN_PREVIEW`, `PLAN_MAX_STEPS`, `PLAN_MAX_SECONDS`) tracked under `=== SETTINGS ===`.
+- **Security & Threat Model**:
+  - Added Threat 13 ("Chained actions run without per-step review") and command chaining residual risks in `docs/THREAT_MODEL.md`.
+
+---
+
 ## [2.1.2] - 2026-10-20
 
 ### Fixed & Hardened
@@ -76,6 +146,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Optional Browser Requirements**: Defined `requirements-browser.txt` for optional Playwright dependencies without polluting core `requirements.txt`.
 - **Manual Verification Utility**: `scripts/browser_check.py` for manual end-to-end diagnostic verification of browser automation flows.
 - **Threat Model Update**: Documented Threat 12 ("Model-Driven Browser Control") covering URL validation, private network blocking, interactive site allowlisting, script immutability, and residual risks.
+
+---
+
+## [2.0.0] - 2026-10-19
+
+### Added
+- **Session Context & State Tracking**:
+  - `SessionState` (`core/session_state.py`) tracking conversational state across turns (`last_site`, `last_query`, `last_app`, `last_files`).
+  - Configurable session expiration via `SESSION_TTL_SECONDS=1800.0` and toggle `SESSION_CONTEXT=True`.
+  - Context carryover enabling natural follow-up instructions (e.g. "play the 2nd one", "search for lofi instead", "open it in vscode").
+- **Deterministic Command Shortcuts**:
+  - Fast-path regex parser (`core/shortcuts.py`) matching high-frequency user intents (app opening, website launching, site searches, follow-up ordinal selections) without model inference.
+  - Configured via `COMMAND_SHORTCUTS=True`.
+- **Structured Site Registry**:
+  - Site catalog in `config/sites.py` standardizing home URLs, search query templates, and aliases for YouTube, Google, Gmail, GitHub, Wikipedia, and Google Maps.
+- **Intent Probe Benchmark**:
+  - Evaluation tool in `scripts/intent_probe.py` benchmarking intent routing and tool argument validation across 28 phrases (84 total runs across 3 random seeds).
+  - Measures action tool routing accuracy (87.0%) and conversational no-tool handling (100.0%) under low temperature (`temperature=0.2`).
+- **UI Session Integration**:
+  - Context tab in desktop GUI (`ui/app.py`) displaying live session state.
+  - UI controller (`ui/controller.py`) updated to thread session state across conversational turns.
 
 ---
 

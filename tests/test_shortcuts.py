@@ -195,7 +195,7 @@ def test_near_misses_return_none():
         "search youtube for one two three four five six seven eight nine",  # 9 words (max 8)
         "one two three four five six seven eight nine on youtube",  # 9 words
         "can you please also open youtube",  # extra words
-        "open youtube now",  # extra word
+        "open youtube later",  # extra word
         "launch notepad quickly",  # extra word
     ]
 

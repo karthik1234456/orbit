@@ -193,6 +193,203 @@ class ConfirmDialog(tk.Toplevel):
                 pass
 
 
+class PlanDialog(tk.Toplevel):
+    """Modal dialog prompting the user to preview and authorize execution of a plan.
+
+    Security guarantees:
+    - Cancel is focused and default.
+    - Run button is disabled for the first 800ms to prevent accidental click-throughs.
+    - Closing the window, Escape, or timeout triggers automatic Cancel (DENY).
+    - Enter key never approves (triggers safe default: Cancel).
+    - Resolves confirmation via ChatController strictly once.
+    """
+
+    def __init__(
+        self,
+        parent: tk.Tk,
+        controller: ChatController,
+        plan_id: Any,
+        labels: list[str],
+        permissions: list[str],
+        timeout_s: float = 60.0,
+    ) -> None:
+        super().__init__(parent)
+        self.controller = controller
+        self.plan_id = plan_id
+        self.labels = list(labels or [])
+        self.permissions = list(permissions or [])
+        self._resolved = False
+        self._countdown_timer: Optional[str] = None
+        self._remaining_s = float(timeout_s)
+
+        self.title("Plan Preview Required")
+        self.transient(parent)
+        self.resizable(False, False)
+        try:
+            self.attributes("-topmost", True)
+        except Exception:
+            pass
+
+        self._build_ui()
+        self.text_area = self.steps_text
+        self.grab_set()
+
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.bind("<Escape>", lambda e: self._on_cancel())
+        self.bind("<Destroy>", self._on_dialog_destroy)
+        self.bind("<Return>", lambda e: self._on_enter())
+        self.bind("<KP_Enter>", lambda e: self._on_enter())
+
+        self.run_btn.configure(state="disabled")
+        self.after(800, self._enable_run)
+
+        self._initial_focus = self.cancel_btn
+        self.cancel_btn.focus_set()
+
+        self._tick_countdown()
+
+    def _on_close(self) -> None:
+        self._resolve(False)
+
+    def _on_cancel(self) -> None:
+        self._resolve(False)
+
+    @property
+    def _remaining(self) -> float:
+        return self._remaining_s
+
+    @_remaining.setter
+    def _remaining(self, val: float) -> None:
+        self._remaining_s = float(val)
+
+    def _tick(self) -> None:
+        self._tick_countdown()
+
+    def focus_get(self) -> Any:
+        """Return the currently focused widget, falling back to initial focus when withdrawn."""
+        focused = super().focus_get()
+        if focused is not None:
+            return focused
+        return getattr(self, "_initial_focus", None)
+
+    def _build_ui(self) -> None:
+        frame = ttk.Frame(self, padding=16)
+        frame.pack(fill="both", expand=True)
+
+        header_lbl = ttk.Label(
+            frame,
+            text=f"ORBIT requests permission to run a plan ({len(self.labels)} steps):",
+            font=("Segoe UI", 11, "bold"),
+        )
+        header_lbl.pack(anchor="w", pady=(0, 8))
+
+        steps_lines = []
+        for idx, lbl in enumerate(self.labels, 1):
+            perm = self.permissions[idx - 1] if idx - 1 < len(self.permissions) else "SAFE"
+            note = " (asks for approval)" if perm in ("asks for approval", "confirm", True) else ""
+            steps_lines.append(f"{idx}. {lbl}{note}")
+
+        steps_lines.append("")
+        steps_lines.append("Each step that opens apps or sites may still ask for its own approval")
+
+        steps_text_content = "\n".join(steps_lines)
+
+        self.steps_text = tk.Text(
+            frame,
+            height=min(8, max(3, len(self.labels) + 2)),
+            width=55,
+            wrap=tk.WORD,
+            font=("Consolas", 9),
+        )
+        self.steps_text.pack(fill="both", expand=True, pady=(0, 6))
+        self.steps_text.insert("1.0", steps_text_content)
+        self.steps_text.configure(state="disabled")
+
+        note_lbl = ttk.Label(
+            frame,
+            text="Each step that opens apps or sites may still ask for its own approval",
+            font=("Segoe UI", 9, "italic"),
+            wraplength=450,
+            justify="left",
+        )
+        note_lbl.pack(anchor="w", pady=(0, 8))
+
+        self.countdown_lbl = ttk.Label(
+            frame,
+            text=f"auto-cancel in {int(self._remaining_s)} s",
+            font=("Segoe UI", 9, "italic"),
+        )
+        self.countdown_lbl.pack(anchor="w", pady=(0, 12))
+
+        # Button bar
+        btn_bar = ttk.Frame(frame)
+        btn_bar.pack(fill="x", side="bottom")
+
+        self.cancel_btn = ttk.Button(
+            btn_bar,
+            text="Cancel (Esc)",
+            default="active",
+            command=lambda: self._resolve(False),
+        )
+        self.cancel_btn.pack(side="right", padx=(6, 0))
+
+        self.run_btn = ttk.Button(
+            btn_bar,
+            text="Run",
+            command=lambda: self._resolve(True),
+        )
+        self.run_btn.pack(side="right")
+
+    def _enable_run(self) -> None:
+        if not self._resolved and self.winfo_exists():
+            self.run_btn.configure(state="normal")
+
+    def _tick_countdown(self) -> None:
+        if self._resolved or not self.winfo_exists():
+            return
+        if self._remaining_s <= 0:
+            self._resolve(False)
+            return
+
+        self.countdown_lbl.configure(text=f"auto-cancel in {int(self._remaining_s)} s")
+        self._remaining_s -= 1.0
+        self._countdown_timer = self.after(1000, self._tick_countdown)
+
+    def _on_enter(self) -> str:
+        # Enter triggers safe default (Cancel)
+        self._resolve(False)
+        return "break"
+
+    def _on_dialog_destroy(self, event: Optional[tk.Event] = None) -> None:
+        if event is None or getattr(event, "widget", None) == self:
+            if not self._resolved:
+                self._resolve(False)
+
+    def _resolve(self, allowed: bool) -> None:
+        if self._resolved:
+            return
+        self._resolved = True
+
+        if self._countdown_timer is not None:
+            try:
+                self.after_cancel(self._countdown_timer)
+            except Exception:
+                pass
+            self._countdown_timer = None
+
+        try:
+            self.controller.resolve_plan(self.plan_id, allowed)
+        finally:
+            try:
+                self.grab_release()
+            except Exception:
+                pass
+            try:
+                self.destroy()
+            except Exception:
+                pass
+
+
 class OrbitWindow:
     """Main application window for ORBIT desktop assistant."""
 
@@ -212,6 +409,8 @@ class OrbitWindow:
         self._shutdown_called = False
         self._streaming = False
         self._confirm_dialog: Optional[ConfirmDialog] = None
+        self._plan_dialog: Optional[PlanDialog] = None
+        self._plan_total_steps: int = 0
         self._view_task_counter: int = 0
         self._current_view_task: int = 0
         self._last_activity_task: Optional[int] = None
@@ -324,6 +523,7 @@ class OrbitWindow:
             show="headings",
             selectmode="browse",
         )
+        self.tree = self.activity_tree
         self.activity_tree.heading("task", text="Task")
         self.activity_tree.heading("step", text="#")
         self.activity_tree.heading("tool", text="Tool")
@@ -511,6 +711,15 @@ class OrbitWindow:
             font=("Segoe UI", 9),
         )
 
+        # Plan progress indicator
+        self.plan_status_lbl = tk.Label(
+            status_bar,
+            text="",
+            fg="#2980b9",
+            font=("Segoe UI", 9, "bold"),
+        )
+        self.plan_status_lbl.pack(side="left", padx=(0, 10))
+
         # Notice banner
         if self.notice:
             self.notice_lbl = tk.Label(
@@ -620,6 +829,12 @@ class OrbitWindow:
         elif kind == "busy":
             pass
 
+        elif kind == "status":
+            text = data.get("text", "")
+            if hasattr(self, "plan_status_lbl"):
+                self.plan_status_lbl.configure(text=text)
+            self.busy_lbl.configure(text=text)
+
         elif kind == "task_done":
             self._mark_running_steps_interrupted()
             self._refresh_last_run()
@@ -714,14 +929,139 @@ class OrbitWindow:
                 except Exception:
                     pass
 
+        elif kind == "plan_preview":
+            plan_id = data.get("id")
+            labels = data.get("labels", [])
+            permissions = data.get("permissions", [])
+            timeout_s = data.get("timeout_s", 60.0)
+            try:
+                self.root.lift()
+            except Exception:
+                pass
+            try:
+                self.root.bell()
+            except Exception:
+                pass
+            self._plan_dialog = PlanDialog(
+                self.root,
+                self.controller,
+                plan_id=plan_id,
+                labels=labels,
+                permissions=permissions,
+                timeout_s=timeout_s,
+            )
+            try:
+                self._plan_dialog.attributes("-topmost", True)
+                self._plan_dialog.lift()
+                self._plan_dialog.focus_force()
+            except Exception:
+                pass
+
+        elif kind == "plan_start":
+            try:
+                plan_id = data.get("id", "")
+                raw_steps = data.get("steps") or data.get("labels") or []
+                total = len(raw_steps) if raw_steps else int(data.get("total", 0) or 0)
+                self._plan_total_steps = total
+                task = data.get("task", data.get("task_id"))
+                if task is None:
+                    if self._view_task_counter == 0:
+                        self._view_task_counter = 1
+                    task = self._view_task_counter
+                self._current_view_task = task
+
+                if self._last_activity_task is not None and task != self._last_activity_task:
+                    sep_id = f"sep_t{task}"
+                    if not self.activity_tree.exists(sep_id):
+                        self.activity_tree.insert("", "end", iid=sep_id, values=("—", "—", "—", "—", "—"))
+                self._last_activity_task = task
+
+                header_text = f"Plan {plan_id}: {total} steps" if plan_id else f"Plan: {total} steps"
+                header_id = f"t{task}_plan_{plan_id}" if plan_id else f"t{task}_plan_hdr"
+                if self.activity_tree.exists(header_id):
+                    self.activity_tree.item(header_id, values=(task, "—", header_text, "running...", ""))
+                else:
+                    self.activity_tree.insert("", "end", iid=header_id, values=(task, "—", header_text, "running...", ""))
+
+                for s_idx, s in enumerate(raw_steps):
+                    s_label = s.get("label", s.get("tool", "")) if isinstance(s, dict) else str(s)
+                    item_id = f"t{task}_s{s_idx}"
+                    if not self.activity_tree.exists(item_id):
+                        self.activity_tree.insert("", "end", iid=item_id, values=(task, s_idx, s_label, "pending", ""))
+                self.activity_tree.yview_moveto(1.0)
+            except Exception:
+                pass
+
+        elif kind == "plan_step":
+            try:
+                idx_val = data.get("step", data.get("index", data.get("idx", 0)))
+                try:
+                    idx = int(idx_val)
+                except Exception:
+                    idx = 0
+                label = data.get("label", data.get("tool", ""))
+                status = data.get("status", "")
+                task = data.get("task", data.get("task_id"))
+                if task is None:
+                    if self._view_task_counter == 0:
+                        self._view_task_counter = 1
+                    task = self._view_task_counter
+                self._current_view_task = task
+
+                if self._last_activity_task is not None and task != self._last_activity_task:
+                    sep_id = f"sep_t{task}"
+                    if not self.activity_tree.exists(sep_id):
+                        self.activity_tree.insert("", "end", iid=sep_id, values=("—", "—", "—", "—", "—"))
+                self._last_activity_task = task
+
+                symbol = "✓" if status in ("success", "done") else ("✗" if status and status not in ("running", "pending") else "")
+                display_tool = f"{symbol} {label}".strip() if symbol else str(label)
+
+                item_id = f"t{task}_s{idx}"
+                if self.activity_tree.exists(item_id):
+                    self.activity_tree.item(item_id, values=(task, idx, display_tool, status, ""))
+                else:
+                    self.activity_tree.insert("", "end", iid=item_id, values=(task, idx, display_tool, status, ""))
+                self.activity_tree.yview_moveto(1.0)
+
+                total = self._plan_total_steps or int(data.get("total", 0) or idx + 1)
+                k = idx + 1 if (total and idx < total) else idx
+                status_text = f"Running plan: step {k} of {total}"
+                if hasattr(self, "plan_status_lbl"):
+                    self.plan_status_lbl.configure(text=status_text)
+                self.busy_lbl.configure(text=f"● {status_text}")
+            except Exception:
+                pass
+
+        elif kind == "plan_end":
+            try:
+                outcome = data.get("outcome", data.get("status", "")) if isinstance(data, dict) else ""
+                task = data.get("task", data.get("task_id", self._current_view_task)) if isinstance(data, dict) else self._current_view_task
+                if task is not None:
+                    for item_id in self.activity_tree.get_children():
+                        if item_id.startswith(f"t{task}_plan"):
+                            vals = list(self.activity_tree.item(item_id, "values"))
+                            if len(vals) >= 4:
+                                vals[3] = outcome or "completed"
+                                self.activity_tree.item(item_id, values=vals)
+                if hasattr(self, "plan_status_lbl"):
+                    self.plan_status_lbl.configure(text="")
+                self._plan_total_steps = 0
+            except Exception:
+                pass
+
     def _update_busy_ui(self, is_busy: bool) -> None:
         if is_busy:
-            self.busy_lbl.configure(text="● Busy", fg="#1976d2")
+            if not self._plan_total_steps:
+                self.busy_lbl.configure(text="● Busy", fg="#1976d2")
             self.send_btn.configure(state="disabled")
             self.input_text.configure(state="disabled")
             self.stop_btn.configure(state="normal")
         else:
-            self.busy_lbl.configure(text="● Idle", fg="gray")
+            if not self._plan_total_steps:
+                self.busy_lbl.configure(text="● Idle", fg="gray")
+                if hasattr(self, "plan_status_lbl"):
+                    self.plan_status_lbl.configure(text="")
             self.send_btn.configure(state="normal")
             self.input_text.configure(state="normal")
             self.stop_btn.configure(state="disabled")
@@ -755,6 +1095,8 @@ class OrbitWindow:
             pending_tool = getattr(self.controller, "pending_tool", None)
             if not pending_tool and self._confirm_dialog and self._confirm_dialog.winfo_exists():
                 pending_tool = getattr(getattr(self._confirm_dialog, "request", None), "tool", None)
+            if not pending_tool and self._plan_dialog and self._plan_dialog.winfo_exists():
+                pending_tool = "plan"
 
             if pending_tool:
                 self._append_chat(
@@ -766,6 +1108,13 @@ class OrbitWindow:
                         self._confirm_dialog.attributes("-topmost", True)
                         self._confirm_dialog.lift()
                         self._confirm_dialog.focus_force()
+                    except Exception:
+                        pass
+                if self._plan_dialog and self._plan_dialog.winfo_exists():
+                    try:
+                        self._plan_dialog.attributes("-topmost", True)
+                        self._plan_dialog.lift()
+                        self._plan_dialog.focus_force()
                     except Exception:
                         pass
             else:

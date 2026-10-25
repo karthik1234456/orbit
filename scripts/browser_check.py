@@ -17,9 +17,15 @@ Stages executed:
 10. Close browser
 """
 
+from pathlib import Path
 import sys
 import time
 from typing import Any, Callable
+
+# Ensure project root is in sys.path when executed directly as a script
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from browser.controller import BrowserController
 from browser.guards import BrowserRefused, check_url
@@ -168,5 +174,9 @@ def run_all_stages() -> None:
     print("=" * 60)
 
 
-if __name__ == "__main__":
+def main() -> None:
     run_all_stages()
+
+
+if __name__ == "__main__":
+    main()

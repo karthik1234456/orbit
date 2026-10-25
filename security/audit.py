@@ -55,6 +55,7 @@ class AuditLogger:
         result: Optional[Any] = None,
         duration_ms: Optional[float] = None,
         tainted: bool = False,
+        extra: Optional[dict] = None,
     ) -> None:
         """Append an audit record to the JSON-lines log file. Never raises exceptions."""
         try:
@@ -75,6 +76,12 @@ class AuditLogger:
                 "duration_ms": duration_ms,
                 "tainted": bool(tainted),
             }
+
+            if extra:
+                redacted_extra = self._redact_data(extra)
+                if isinstance(redacted_extra, dict):
+                    entry.update(redacted_extra)
+                    entry["extra"] = redacted_extra
 
             # Ensure parent exists in case directory was removed or initialized lazily
             if self.path.parent and not self.path.parent.exists():

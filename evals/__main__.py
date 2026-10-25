@@ -134,6 +134,13 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="Execute retrieval evaluation on the specified split ('dev', 'test', 'hard-dev', 'hard-test', 'guard-dev', or 'guard-test').",
     )
     parser.add_argument(
+        "--commands",
+        type=str,
+        choices=["dev", "test"],
+        default=None,
+        help="Execute command benchmark evaluation on the specified split ('dev' or 'test').",
+    )
+    parser.add_argument(
         "--sweep",
         action="store_true",
         default=False,
@@ -188,6 +195,16 @@ def main(argv: Optional[list[str]] = None) -> int:
             split=args.retrieval,
             sweep=args.sweep,
             sweep_methods=args.sweep_methods,
+            out_dir=args.out,
+            report_filename=args.report_name,
+        )
+
+    if args.commands:
+        from evals.commands_eval import run_commands_eval
+
+        return run_commands_eval(
+            split=args.commands,
+            force=args.force,
             out_dir=args.out,
             report_filename=args.report_name,
         )

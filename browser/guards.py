@@ -289,6 +289,8 @@ def page_type(url: Any, allow_loopback: bool = False) -> str:
             return "youtube_results"
         if norm_path == "/watch" or norm_path.startswith("/watch/"):
             return "youtube_watch"
+        if norm_path == "/shorts" or norm_path.startswith("/shorts/"):
+            return "youtube_shorts"
         return "youtube_other"
 
     # YouTube
@@ -300,6 +302,8 @@ def page_type(url: Any, allow_loopback: bool = False) -> str:
             return "youtube_results"
         if norm_path == "/watch" or norm_path.startswith("/watch/"):
             return "youtube_watch"
+        if norm_path == "/shorts" or norm_path.startswith("/shorts/"):
+            return "youtube_shorts"
         return "youtube_other"
 
     # Google
@@ -440,14 +444,20 @@ def verify_click_result(
 
     # YouTube: youtube_home, youtube_results, youtube_watch
     if pt_before in ("youtube_home", "youtube_results", "youtube_watch"):
-        if pt_after != "youtube_watch":
+        if pt_after not in ("youtube_watch", "youtube_shorts"):
             return False, "wrong_page_type"
-        if pt_before == "youtube_watch":
+        if pt_before == "youtube_watch" and pt_after == "youtube_watch":
             vid_before = extract_video_id(url_before)
             vid_after = extract_video_id(url_after)
             if not vid_after or vid_after == vid_before:
                 return False, "same_video"
         return True, ""
+
+    # YouTube Shorts
+    if pt_before == "youtube_shorts":
+        if pt_after in ("youtube_shorts", "youtube_watch"):
+            return True, ""
+        return False, "wrong_page_type"
 
     # Google: google_results, google_other
     if pt_before.startswith("google_"):

@@ -149,6 +149,7 @@ WAKE_COOLDOWN_SECONDS: float = _parse_float(os.getenv("WAKE_COOLDOWN_SECONDS"), 
 WAKE_LISTEN_TIMEOUT: float = _parse_float(os.getenv("WAKE_LISTEN_TIMEOUT"), 6.0)
 STREAM_REPLIES: bool = _parse_bool(os.getenv("STREAM_REPLIES"), True)
 COMMAND_SHORTCUTS: bool = _parse_bool(os.getenv("COMMAND_SHORTCUTS"), True)
+CHAINS_ENABLED: bool = _parse_bool(os.getenv("CHAINS_ENABLED"), True)
 SESSION_CONTEXT: bool = _parse_bool(os.getenv("SESSION_CONTEXT"), True)
 SESSION_TTL_SECONDS: float = _parse_float(os.getenv("SESSION_TTL_SECONDS"), 1800.0)
 
@@ -172,9 +173,31 @@ def browser_enabled() -> bool:
     return _parse_browser_enabled(os.getenv("BROWSER_ENABLED"))
 
 
+def _parse_plan_preview(val: Optional[str], default: str = "auto") -> str:
+    if val is None or not val.strip():
+        return default
+    v = val.strip().lower()
+    if v in ("auto", "always", "never"):
+        return v
+    return default
+
+
+PLAN_PREVIEW: str = _parse_plan_preview(os.getenv("PLAN_PREVIEW"), "auto")
+PLAN_MAX_STEPS: int = _parse_int(os.getenv("PLAN_MAX_STEPS"), 10)
+PLAN_MAX_SECONDS: float = _parse_float(os.getenv("PLAN_MAX_SECONDS"), 180.0)
+
+
 def __getattr__(name: str) -> Any:
     if name == "BROWSER_ENABLED":
         return browser_enabled()
+    if name == "CHAINS_ENABLED":
+        return _parse_bool(os.getenv("CHAINS_ENABLED"), True)
+    if name == "PLAN_PREVIEW":
+        return _parse_plan_preview(os.getenv("PLAN_PREVIEW"), "auto")
+    if name == "PLAN_MAX_STEPS":
+        return _parse_int(os.getenv("PLAN_MAX_STEPS"), 10)
+    if name == "PLAN_MAX_SECONDS":
+        return _parse_float(os.getenv("PLAN_MAX_SECONDS"), 180.0)
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 

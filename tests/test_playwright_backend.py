@@ -15,6 +15,7 @@ Verifies:
 import sys
 import types
 from typing import Any, Callable, Optional
+import time
 import pytest
 
 from browser.guards import BrowserError, BrowserRefused, BrowserTimeout
@@ -88,6 +89,9 @@ class FakeLocatorItem:
     def locator(self, sel: str) -> "FakeLocator":
         return FakeLocator([])
 
+    def scroll_into_view_if_needed(self) -> None:
+        pass
+
     def click(self) -> None:
         self.clicked = True
         if self.on_click:
@@ -109,6 +113,13 @@ class FakeLocator:
     @property
     def first(self) -> "FakeLocator":
         return FakeLocator(self.items[:1])
+
+    def scroll_into_view_if_needed(self) -> None:
+        pass
+
+    def click(self) -> None:
+        if self.items:
+            self.items[0].click()
 
 
 class FakeMouse:
@@ -193,7 +204,7 @@ class FakePage:
     def locator(self, selector: str) -> FakeLocator:
         if selector in self.locators:
             return FakeLocator(self.locators[selector])
-        if selector == "[data-orbit-result]":
+        if selector == "[data-orbit-result]" or selector.startswith("[data-orbit-result"):
             tag_data = self.tag_results_override or {
                 "count": 2,
                 "items": [
@@ -210,6 +221,14 @@ class FakePage:
                             self.url = target
                     return _click
                 items.append(FakeLocatorItem(visible=True, href=h, on_click=_make_click(h)))
+            if "='" in selector:
+                import re
+                m = re.search(r"=\s*['\"]?(\d+)['\"]?", selector)
+                if m:
+                    idx = int(m.group(1)) - 1
+                    if 0 <= idx < len(items):
+                        return FakeLocator([items[idx]])
+                    return FakeLocator([])
             return FakeLocator(items)
         return FakeLocator([])
 
@@ -704,6 +723,47 @@ def test_route_handler_aborts_signin_urls_unless_allowed(fake_playwright_stub, t
     backend.close()
 
 
+def test_route_handler_loopback_signin_permitted_in_test_mode(fake_playwright_stub, tmp_path):
+    """Route handler allows loopback sign-in navigation in test mode (allow_loopback=True), but aborts it in production (allow_loopback=False)."""
+    # 1. In production mode (allow_loopback=False)
+    backend_prod = PlaywrightBackend(profile_dir=str(tmp_path / "prof_prod"), allow_loopback=False)
+    backend_prod.start()
+    ctx_prod = fake_playwright_stub.chromium.last_context
+    _, handler_prod = ctx_prod.route_handlers[0]
+
+    # External sign-in URL aborted in production
+    route_ext = FakeRoute("https://accounts.google.com/signin", resource_type="document", is_navigation=True)
+    handler_prod(route_ext)
+    assert route_ext.aborted is True
+    assert route_ext.continued is False
+
+    # Loopback sign-in URL aborted in production
+    route_loop_prod = FakeRoute("http://127.0.0.1:8080/signin", resource_type="document", is_navigation=True)
+    handler_prod(route_loop_prod)
+    assert route_loop_prod.aborted is True
+    assert route_loop_prod.continued is False
+    backend_prod.close()
+
+    # 2. In test mode (allow_loopback=True)
+    backend_test = PlaywrightBackend(profile_dir=str(tmp_path / "prof_test"), allow_loopback=True)
+    backend_test.start()
+    ctx_test = fake_playwright_stub.chromium.last_context
+    _, handler_test = ctx_test.route_handlers[0]
+
+    # External sign-in URL is STILL aborted even when allow_loopback=True
+    route_ext_test = FakeRoute("https://accounts.google.com/signin", resource_type="document", is_navigation=True)
+    handler_test(route_ext_test)
+    assert route_ext_test.aborted is True
+    assert route_ext_test.continued is False
+
+    # Loopback sign-in URL is permitted to continue in test mode (so _check_signin_guard can inspect it)
+    route_loop_test = FakeRoute("http://127.0.0.1:8080/signin", resource_type="document", is_navigation=True)
+    handler_test(route_loop_test)
+    assert route_loop_test.continued is True
+    assert route_loop_test.aborted is False
+    backend_test.close()
+
+
 # --- Test 12: Shorts, Ads, and Current Video Exclusions in Tag Script ---
 
 def test_tag_results_script_excludes_shorts_ads_and_current_video():
@@ -799,4 +859,89 @@ def test_scroll_already_at_bottom_and_top(fake_playwright_stub, tmp_path):
     assert backend.scroll("up", 1.0) == "Already at the top."
 
     backend.close()
+
+
+# --- Test 16: Polling for Delayed Results (1s) ---
+
+def test_delayed_results_polling(fake_playwright_stub, tmp_path):
+    """PlaywrightBackend.click_result polls until results appear if they are delayed."""
+    backend = PlaywrightBackend(profile_dir=str(tmp_path / "prof"))
+    backend.start()
+
+    ctx = fake_playwright_stub.chromium.last_context
+    page = ctx.pages[0]
+    page.url = "https://www.youtube.com/results?search_query=lofi"
+
+    start_t = time.time()
+
+    orig_evaluate = page.evaluate
+
+    def delayed_evaluate(script, *args):
+        if script == _TAG_RESULTS_SCRIPT:
+            # First 0.3s returns 0 results, then returns 2 results
+            if (time.time() - start_t) < 0.3:
+                return {"count": 0, "items": []}
+            return {
+                "count": 2,
+                "items": [
+                    {"index": 1, "title": "Delayed Video 1", "href": "https://www.youtube.com/watch?v=vid1"},
+                    {"index": 2, "title": "Delayed Video 2", "href": "https://www.youtube.com/watch?v=vid2"},
+                ],
+            }
+        return orig_evaluate(script, *args)
+
+    page.evaluate = delayed_evaluate
+
+    res = backend.click_result(1)
+    assert res == "Opened result 1: Delayed Video 1"
+    assert page.url == "https://www.youtube.com/watch?v=vid1"
+
+    backend.close()
+
+
+# --- Test 17: Shorts Isolation and Zero-Count Error ---
+
+def test_shorts_isolation_and_zero_count_error(fake_playwright_stub, tmp_path):
+    """A page with only shorts anchors returns zero results on normal click, raising clear message."""
+    backend = PlaywrightBackend(profile_dir=str(tmp_path / "prof"))
+    backend.start()
+
+    ctx = fake_playwright_stub.chromium.last_context
+    page = ctx.pages[0]
+    page.url = "https://www.youtube.com/shorts"
+
+    page.tag_results_override = {
+        "count": 0,
+        "items": [],
+        "diag": {
+            "url_host": "www.youtube.com",
+            "url_path": "/shorts",
+            "anchors_per_selector": {},
+            "exclusions": {"shorts_excluded": 3},
+            "viewport_size": {"width": 1280, "height": 720},
+        },
+    }
+
+    with pytest.raises(BrowserRefused) as exc_info:
+        backend.click_result(1, for_shorts=False)
+
+    msg = str(exc_info.value)
+    assert "No videos found on this page (youtube_shorts). Try scrolling down or searching first." in msg
+    assert backend.last_failure is not None
+    assert backend.last_failure["page_type"] == "youtube_shorts"
+    assert backend.last_failure["exclusions"]["shorts_excluded"] == 3
+
+    # But when for_shorts=True, shorts are returned
+    page.tag_results_override = {
+        "count": 2,
+        "items": [
+            {"index": 1, "title": "Short 1", "href": "https://www.youtube.com/shorts/s1"},
+            {"index": 2, "title": "Short 2", "href": "https://www.youtube.com/shorts/s2"},
+        ],
+    }
+    res_shorts = backend.click_result(1, for_shorts=True)
+    assert "Short 1" in res_shorts
+
+    backend.close()
+
 

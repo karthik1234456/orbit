@@ -138,3 +138,38 @@ def test_generate_diagnostics_writes_file_to_disk(tmp_path: Path):
     assert f"ORBIT Version: {VERSION}" in content
     assert "Provider: MOCK" in content
     assert "Active Model: mock-model" in content
+
+
+def test_diagnostics_includes_browser_failure_and_selectors():
+    """Verify diagnostics includes LAST BROWSER FAILURE and BROWSER SELECTORS sections."""
+    class FakeBrowserController:
+        def __init__(self):
+            self.last_failure = {
+                "page_type": "youtube_home",
+                "url_host": "www.youtube.com",
+                "url_path": "/",
+                "viewport_size": {"width": 1920, "height": 1080},
+                "anchors_per_selector": {"ytd-rich-item-renderer a#video-title-link": 0},
+                "exclusions": {"shorts_shelf": 2, "ads": 1},
+            }
+
+        def status(self):
+            return {"alive": True, "url": "https://www.youtube.com/", "title": "YouTube"}
+
+    class FakeApp:
+        def __init__(self):
+            self.browser_controller = FakeBrowserController()
+
+    app = FakeApp()
+    report = build_diagnostics_text(app=app)
+
+    assert "=== LAST BROWSER FAILURE ===" in report
+    assert "Page Type: youtube_home" in report
+    assert "Host: www.youtube.com" in report
+    assert "Viewport: 1920x1080" in report
+    assert "ytd-rich-item-renderer a#video-title-link: 0" in report
+    assert "shorts_shelf: 2" in report
+    assert "=== BROWSER SELECTORS ===" in report
+    assert "YouTube Containers:" in report
+    assert "YouTube Watch Anchors:" in report
+

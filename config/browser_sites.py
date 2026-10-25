@@ -31,6 +31,9 @@ SELECTORS: dict[str, list[str]] = {
         "a#video-title",
         "ytd-video-renderer a.ytd-video-renderer",
         "ytd-compact-video-renderer a#video-title",
+        ".video-card a",
+        ".video-item a",
+        ".rec-item a",
     ],
     "google": [
         "#search .g a[href]:has(h3)",
@@ -51,6 +54,49 @@ SELECTORS: dict[str, list[str]] = {
         "a.v-align-middle",
     ],
 }
+
+# YouTube container selectors by page context
+YOUTUBE_CONTAINER_SELECTORS: dict[str, str] = {
+    "watch": "#secondary, #related, ytd-watch-next-secondary-results-renderer",
+    "results": "ytd-search #contents, ytd-section-list-renderer, #contents",
+    "home": "ytd-browse #contents, ytd-rich-grid-renderer, #contents",
+}
+
+# YouTube candidate anchor selectors in strict evaluation order:
+# (a) anchors whose href path is /watch with a v= id
+YOUTUBE_WATCH_ANCHOR_SELECTORS: list[str] = [
+    "a[href*='/watch?v=']",
+    "a[href*='/watch/']",
+]
+
+# (b) anchors in video renderer elements
+YOUTUBE_RENDERER_ANCHOR_SELECTORS: list[str] = [
+    "ytd-video-renderer a#video-title",
+    "ytd-video-renderer a#video-title-link",
+    "ytd-rich-item-renderer a#video-title-link",
+    "a#video-title",
+    "ytd-video-renderer a.ytd-video-renderer",
+    "ytd-compact-video-renderer a#video-title",
+    ".video-card a",
+    ".video-item a",
+    ".rec-item a",
+]
+
+# (c) for Shorts pages: /shorts/ anchors ONLY when shorts are requested
+YOUTUBE_SHORTS_ANCHOR_SELECTORS: list[str] = [
+    "a[href*='/shorts/']",
+]
+
+# Selectors identifying elements and anchors that must always be excluded from results
+YOUTUBE_EXCLUSION_SELECTORS: dict[str, str] = {
+    "navigation_guide": "#guide, ytd-guide-renderer, ytd-mini-guide-renderer, nav, #masthead, ytd-masthead",
+    "ads_promoted": "ytd-promoted-video-renderer, ytd-ad-slot-renderer, [class*='ad-'], [class*='promoted']",
+    "shorts_shelves": "ytd-reel-shelf-renderer, ytd-shorts, [is-shorts]",
+    "mix_playlist": "ytd-radio-renderer, ytd-playlist-renderer, ytd-mix-renderer",
+}
+
+# Strict allowlist of keyboard key names permitted via controller.key()
+ALLOWED_BROWSER_KEYS: set[str] = {"ArrowDown", "ArrowUp", "k", "space"}
 
 
 def interactive_hosts() -> Set[str]:

@@ -48,6 +48,36 @@ _SECRET_PATTERNS = [
 
 MAX_DIAG_BYTES: int = 20 * 1024  # 20 KB cap
 
+_LAST_RECORDED_PLAN: Optional[dict] = None
+
+
+def record_plan(
+    plan_id: Any,
+    source: str = "chain",
+    steps: Optional[list[dict]] = None,
+    outcome: str = "done",
+) -> None:
+    """Record a plan execution summary for diagnostics."""
+    global _LAST_RECORDED_PLAN
+    _LAST_RECORDED_PLAN = {
+        "id": plan_id,
+        "source": source,
+        "steps": steps or [],
+        "outcome": outcome,
+    }
+
+
+def get_last_plan() -> Optional[dict]:
+    """Retrieve the last recorded plan execution summary."""
+    return _LAST_RECORDED_PLAN
+
+
+def render_diagnostics(diag_result: Any) -> str:
+    """Helper returning report text string whether passed a (path, text) tuple or text string."""
+    if isinstance(diag_result, tuple) and len(diag_result) >= 2:
+        return str(diag_result[1])
+    return str(diag_result)
+
 
 def _get_git_commit() -> str:
     """Retrieve short git commit hash and dirty marker if git is available."""
@@ -91,6 +121,7 @@ def build_diagnostics_text(
     activity_events: Optional[list[dict]] = None,
     audit_logger: Optional[AuditLogger] = None,
     git_commit_override: Optional[str] = None,
+    last_plan: Optional[dict] = None,
 ) -> str:
     """Gather diagnostic info and construct the sanitized report string."""
     sections: list[str] = []
@@ -141,7 +172,16 @@ def build_diagnostics_text(
             settings_lines.append(f"{key}: {val}")
 
     # Specific requested settings
-    for key in ("RAG_AUTO", "COMMAND_SHORTCUTS", "SESSION_CONTEXT", "OLLAMA_NUM_CTX"):
+    for key in (
+        "RAG_AUTO",
+        "COMMAND_SHORTCUTS",
+        "CHAINS_ENABLED",
+        "PLAN_PREVIEW",
+        "PLAN_MAX_STEPS",
+        "PLAN_MAX_SECONDS",
+        "SESSION_CONTEXT",
+        "OLLAMA_NUM_CTX",
+    ):
         val = getattr(settings, key, "not_configured")
         settings_lines.append(f"{key}: {val}")
 
@@ -178,6 +218,75 @@ def build_diagnostics_text(
         browser_lines.append("Status: not configured")
     sections.append("\n".join(browser_lines))
 
+    # 4b. Last Browser Failure
+    last_fail_lines = ["=== LAST BROWSER FAILURE ==="]
+    last_fail = getattr(browser_ctrl, "last_failure", None) if browser_ctrl else None
+    if not last_fail and browser_ctrl and getattr(browser_ctrl, "_backend", None):
+        last_fail = getattr(browser_ctrl._backend, "last_failure", None)
+
+    if last_fail and isinstance(last_fail, dict):
+        pt = last_fail.get("page_type", "unknown")
+        host = last_fail.get("url_host", "unknown")
+        path = last_fail.get("url_path", "")
+        vp = last_fail.get("viewport_size", {})
+        vp_str = f"{vp.get('width', '?')}x{vp.get('height', '?')}" if isinstance(vp, dict) else str(vp)
+        last_fail_lines.append(f"Page Type: {pt}")
+        last_fail_lines.append(f"Host: {host}")
+        last_fail_lines.append(f"Path: {path}")
+        last_fail_lines.append(f"Viewport: {vp_str}")
+
+        per_sel = last_fail.get("anchors_per_selector", {})
+        last_fail_lines.append("Anchors per selector:")
+        if per_sel and isinstance(per_sel, dict):
+            for sel, cnt in per_sel.items():
+                last_fail_lines.append(f"  {sel}: {cnt}")
+        else:
+            last_fail_lines.append("  none")
+
+        excl = last_fail.get("exclusions", {})
+        last_fail_lines.append("Exclusions:")
+        if excl and isinstance(excl, dict):
+            for k, cnt in excl.items():
+                last_fail_lines.append(f"  {k}: {cnt}")
+        else:
+            last_fail_lines.append("  none")
+    else:
+        last_fail_lines.append("No browser failure recorded.")
+    sections.append("\n".join(last_fail_lines))
+
+    # 4c. Browser Selectors
+    selectors_lines = ["=== BROWSER SELECTORS ==="]
+    try:
+        from config.browser_sites import (
+            SELECTORS,
+            YOUTUBE_CONTAINER_SELECTORS,
+            YOUTUBE_WATCH_ANCHOR_SELECTORS,
+            YOUTUBE_RENDERER_ANCHOR_SELECTORS,
+            YOUTUBE_SHORTS_ANCHOR_SELECTORS,
+            YOUTUBE_EXCLUSION_SELECTORS,
+        )
+        selectors_lines.append("General Selectors:")
+        for site, sels in SELECTORS.items():
+            selectors_lines.append(f"  {site}: {', '.join(sels)}")
+        selectors_lines.append("YouTube Containers:")
+        for c_key, c_sel in YOUTUBE_CONTAINER_SELECTORS.items():
+            selectors_lines.append(f"  {c_key}: {c_sel}")
+        selectors_lines.append("YouTube Watch Anchors:")
+        for w_sel in YOUTUBE_WATCH_ANCHOR_SELECTORS:
+            selectors_lines.append(f"  {w_sel}")
+        selectors_lines.append("YouTube Renderer Anchors:")
+        for r_sel in YOUTUBE_RENDERER_ANCHOR_SELECTORS:
+            selectors_lines.append(f"  {r_sel}")
+        selectors_lines.append("YouTube Shorts Anchors:")
+        for s_sel in YOUTUBE_SHORTS_ANCHOR_SELECTORS:
+            selectors_lines.append(f"  {s_sel}")
+        selectors_lines.append("YouTube Exclusions:")
+        for e_key, e_sel in YOUTUBE_EXCLUSION_SELECTORS.items():
+            selectors_lines.append(f"  {e_key}: {e_sel}")
+    except Exception as exc:
+        selectors_lines.append(f"Error loading browser selectors: {exc}")
+    sections.append("\n".join(selectors_lines))
+
     # 5. Session Context Block
     sess_state = getattr(agent, "session_state", None) if agent else None
     ctx_lines = ["=== SESSION CONTEXT ==="]
@@ -190,6 +299,36 @@ def build_diagnostics_text(
     else:
         ctx_lines.append("No active session context.")
     sections.append("\n".join(ctx_lines))
+
+    # 5b. Last Plan
+    plan_lines = ["=== LAST PLAN ==="]
+    lp = last_plan
+    if lp is None and agent and getattr(agent, "last_run", None):
+        lp = getattr(agent.last_run, "plan", None)
+    if lp is None and app and getattr(app, "agent", None) and getattr(app.agent, "last_run", None):
+        lp = getattr(app.agent.last_run, "plan", None)
+    if lp is None:
+        lp = _LAST_RECORDED_PLAN
+
+    if lp and isinstance(lp, dict):
+        p_id = lp.get("id", "—")
+        p_source = lp.get("source", "—")
+        p_outcome = lp.get("outcome", "—")
+        plan_lines.append(f"Plan ID: {p_id}")
+        plan_lines.append(f"Source: {p_source}")
+        plan_lines.append(f"Outcome: {p_outcome}")
+        p_steps = lp.get("steps", [])
+        if p_steps:
+            plan_lines.append("Steps:")
+            for s_idx, s in enumerate(p_steps, 1):
+                s_lbl = s.get("label", s.get("tool", f"step {s_idx}"))
+                s_status = s.get("status", "unknown")
+                plan_lines.append(f"  {s_idx}. {s_lbl}: {s_status}")
+        else:
+            plan_lines.append("Steps: none")
+    else:
+        plan_lines.append("No plan recorded.")
+    sections.append("\n".join(plan_lines))
 
     # 6. Recent Activity Events
     act_lines = ["=== RECENT ACTIVITY EVENTS ==="]
@@ -292,6 +431,7 @@ def generate_diagnostics(
     audit_logger: Optional[AuditLogger] = None,
     output_dir: str = "logs",
     git_commit_override: Optional[str] = None,
+    last_plan: Optional[dict] = None,
 ) -> tuple[Path, str]:
     """Generate and write sanitized diagnostics report to logs/diag-<timestamp>.txt.
 
@@ -307,6 +447,7 @@ def generate_diagnostics(
         activity_events=activity_events,
         audit_logger=audit_logger,
         git_commit_override=git_commit_override,
+        last_plan=last_plan,
     )
 
     out_dir = Path(output_dir)

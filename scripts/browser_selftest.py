@@ -14,6 +14,11 @@ import threading
 import time
 from typing import Any, Callable
 
+# Ensure project root is in sys.path when executed directly as a script
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 from browser.controller import BrowserController
 from browser.guards import BrowserRefused, check_url
 from browser.playwright_backend import PlaywrightBackend
@@ -156,15 +161,19 @@ def run_all_stages() -> bool:
 
         # Stage 5: scroll reports a change then 'Already at the bottom.'
         def stage_scroll_verification():
-            res_down = controller.scroll("down", 1.0)
-            assert "Scrolled down" in res_down, f"Scroll did not report change: {res_down}"
-
-            # Scroll to end of document
-            controller.scroll("bottom", 1.0)
-            res_bottom = controller.scroll("down", 1.0)
+            scrolled_first = False
+            res_bottom = ""
+            for _ in range(10):
+                res = controller.scroll("down", 1.0)
+                if "Scrolled down" in res:
+                    scrolled_first = True
+                elif res == "Already at the bottom.":
+                    res_bottom = res
+                    break
+            assert scrolled_first, "Scroll did not report a change before reaching bottom"
             assert res_bottom == "Already at the bottom.", f"Expected bottom notice: {res_bottom}"
 
-            return f"{res_down} -> {res_bottom}"
+            return f"Scrolled first: {scrolled_first} -> {res_bottom}"
 
         if run_stage("5. scroll reports a change then 'Already at the bottom.'", stage_scroll_verification):
             passed += 1
@@ -234,6 +243,10 @@ def run_all_stages() -> bool:
     return passed == total
 
 
-if __name__ == "__main__":
+def main() -> int:
     success = run_all_stages()
-    sys.exit(0 if success else 1)
+    return 0 if success else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

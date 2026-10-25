@@ -528,12 +528,13 @@ def test_single_browser_shortcuts_execution(tmp_path: Path):
 
 def test_ui_context_tab_browser_field():
     """Verify UI Context tab contains Browser field showing host and title when open."""
-    import tkinter as tk
+    # Use the shared Tk-availability helper; skips on TclError.
+    # Note: The TclError failure ("Can't find a usable init.tcl") was intermittent and environmental.
+    from tests.conftest import make_test_root
     from ui.app import OrbitWindow
     from ui.controller import ChatController
 
-    root = tk.Tk()
-    root.withdraw()
+    root = make_test_root()
     try:
         ctrl = ChatController()
         backend = FakeBackend()

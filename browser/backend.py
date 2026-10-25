@@ -50,6 +50,11 @@ class BrowserBackend(ABC):
         pass
 
     @abstractmethod
+    def key(self, name: str) -> str:
+        """Send a keyboard key press (e.g. ArrowDown, ArrowUp, k, space)."""
+        pass
+
+    @abstractmethod
     def read_page(self) -> dict[str, Any]:
         """Extract title, current URL, and high-level readable items/links from the page."""
         pass
@@ -95,6 +100,11 @@ class FakeBackend(BrowserBackend):
         self._autoplay_attempts: int = 0
         self._scroll_y: int = 0
         self._max_scroll_y: int = 1000
+        self.last_failure: Optional[dict[str, Any]] = None
+
+    def key(self, name: str) -> str:
+        self._record("key", name=name)
+        return f"Pressed {name}."
 
     def _record(self, method: str, **kwargs: Any) -> None:
         """Record method invocation along with thread metadata and simulate sleep/crash."""
@@ -164,9 +174,57 @@ class FakeBackend(BrowserBackend):
         from browser.guards import page_type
         return self._has_video or page_type(self._current_url) in ("youtube_watch", "youtube_home")
 
-    def click_result(self, n: int) -> str:
-        self._record("click_result", n=n)
+    def click_result(self, n: int, next_video: bool = False, for_shorts: bool = False) -> str:
+        self._record("click_result", n=n, next_video=next_video, for_shorts=for_shorts)
         from browser.guards import BrowserRefused, page_type
+        from urllib.parse import urlparse
+
+        # If items appear after navigation (e.g. 1 second delay), poll up to 4.0s
+        start_wait = time.time()
+        while (time.time() - start_wait) < 4.0:
+            if callable(getattr(self, "_items_provider", None)):
+                self._items = list(self._items_provider())
+            elif hasattr(self, "_items_appear_at") and time.time() >= self._items_appear_at:
+                if hasattr(self, "_delayed_items"):
+                    self._items = list(self._delayed_items)
+            if len(self._items) > 0:
+                break
+            time.sleep(0.05)
+
+        if for_shorts:
+            # Filter for shorts items only
+            filtered = []
+            for it in self._items:
+                href = it.get("url") or it.get("href") if isinstance(it, dict) else (it if isinstance(it, str) else "")
+                if "/shorts/" in href:
+                    filtered.append(it)
+            self._items = filtered
+        else:
+            # Normal clicks: exclude any /shorts/ items
+            filtered = []
+            for it in self._items:
+                href = it.get("url") or it.get("href") if isinstance(it, dict) else (it if isinstance(it, str) else "")
+                if "/shorts/" in href:
+                    continue
+                filtered.append(it)
+            self._items = filtered
+
+        if len(self._items) == 0:
+            allow_lb = getattr(self, "allow_loopback", False)
+            pt = page_type(self._current_url, allow_loopback=allow_lb)
+            parsed = urlparse(self._current_url)
+            diag = {
+                "page_type": pt,
+                "url_host": parsed.netloc or parsed.hostname or "",
+                "url_path": parsed.path or "",
+                "anchors_per_selector": getattr(self, "_anchors_per_selector", {}),
+                "exclusions": getattr(self, "_exclusions", {}),
+                "viewport_size": {"width": 1280, "height": 720},
+            }
+            self.last_failure = diag
+            exc = BrowserRefused(f"No videos found on this page ({pt}). Try scrolling down or searching first.")
+            exc.diag = diag
+            raise exc
 
         if n > len(self._items) or n < 1:
             raise BrowserRefused(f"I only found {len(self._items)} results on this page.")

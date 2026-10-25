@@ -23,6 +23,7 @@ SUPPORTED_CLICK_RESULT_PAGE_TYPES = {
     "youtube_home",
     "youtube_results",
     "youtube_watch",
+    "youtube_shorts",
     "google_results",
     "wikipedia_results",
     "github_results",
@@ -87,6 +88,7 @@ class BrowserController:
         self._suspect: bool = False
         self._shutdown: bool = False
         self._respawn_count: int = 0
+        self.last_failure: Optional[dict[str, Any]] = None
 
     def _ensure_worker(self) -> None:
         """Start or respawn the dedicated daemon thread if not already running."""
@@ -247,7 +249,7 @@ class BrowserController:
 
         return self._dispatch(_do)
 
-    def click_result(self, n: int) -> Any:
+    def click_result(self, n: int, next_video: bool = False, for_shorts: bool = False) -> Any:
         """Click the nth search result or interactive item on an interactive page."""
         if not isinstance(n, int) or n < 1 or n > 10:
             raise BrowserRefused(f"Result index must be between 1 and 10, got {n}.")
@@ -262,12 +264,30 @@ class BrowserController:
 
             allow_lb = getattr(backend, "allow_loopback", False)
             pt = page_type(curr, allow_loopback=allow_lb)
+
+            if next_video and pt != "youtube_watch":
+                raise BrowserRefused("Next video is only available on YouTube watch pages.")
+
             if pt not in SUPPORTED_CLICK_RESULT_PAGE_TYPES:
                 raise BrowserRefused("I can't pick a result on this page. Search for something first.")
 
-            res = backend.click_result(n)
-            self._check_signin_guard(backend)
-            return res
+            try:
+                import inspect
+                sig = inspect.signature(backend.click_result)
+                kwargs: dict[str, Any] = {}
+                if "next_video" in sig.parameters:
+                    kwargs["next_video"] = next_video
+                if "for_shorts" in sig.parameters:
+                    kwargs["for_shorts"] = for_shorts
+                res = backend.click_result(n, **kwargs)
+                self._check_signin_guard(backend)
+                return res
+            except Exception as exc:
+                if hasattr(exc, "diag") and exc.diag:
+                    self.last_failure = exc.diag
+                elif getattr(backend, "last_failure", None):
+                    self.last_failure = backend.last_failure
+                raise
 
         return self._dispatch(_do)
 
@@ -336,6 +356,20 @@ class BrowserController:
             res = backend.history(act)
             self._check_signin_guard(backend)
             return res
+
+        return self._dispatch(_do)
+
+    def key(self, name: str) -> str:
+        """Send a keyboard key press on an interactive page."""
+        from config.browser_sites import ALLOWED_BROWSER_KEYS
+        if not name or not isinstance(name, str) or name not in ALLOWED_BROWSER_KEYS:
+            raise BrowserRefused(
+                f"Key '{name}' is not allowed. Permitted keys: {sorted(ALLOWED_BROWSER_KEYS)}"
+            )
+
+        def _do(backend: BrowserBackend) -> str:
+            self._ensure_interactive(backend)
+            return backend.key(name)
 
         return self._dispatch(_do)
 

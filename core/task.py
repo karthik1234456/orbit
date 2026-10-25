@@ -55,6 +55,7 @@ class TaskRun:
     unverified_claims: int = 0
     auto_retrievals: list[dict] = field(default_factory=list)
     context: Optional[dict] = None
+    plan: Optional[dict] = None
 
     def add_step(
         self,
@@ -108,7 +109,7 @@ class TaskRun:
                 st["decision"] = s.decision
             steps_data.append(st)
 
-        return {
+        res = {
             "goal": self.goal,
             "started_at": self.started_at,
             "status": status_val,
@@ -119,6 +120,9 @@ class TaskRun:
             "context": dict(self.context) if self.context is not None else None,
             "steps": steps_data,
         }
+        if self.plan is not None:
+            res["plan"] = self.plan
+        return res
 
 
     def summary(self) -> str:

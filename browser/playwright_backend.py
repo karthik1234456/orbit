@@ -129,7 +129,7 @@ _GET_SCROLL_POS_SCRIPT = """() => {
 
 _SCROLL_BY_SCRIPT = "(deltaY) => { window.scrollBy(0, deltaY); }"
 
-_TAG_RESULTS_SCRIPT = """() => {
+_TAG_RESULTS_SCRIPT = """(forShorts) => {
     const prev = document.querySelectorAll('[data-orbit-result]');
     for (const el of prev) {
         el.removeAttribute('data-orbit-result');
@@ -140,13 +140,23 @@ _TAG_RESULTS_SCRIPT = """() => {
     try {
         parsedUrl = new URL(url);
     } catch (e) {
-        return { count: 0, items: [] };
+        return { count: 0, items: [], diag: {} };
     }
     const host = parsedUrl.hostname.toLowerCase();
     const path = parsedUrl.pathname;
 
     const results = [];
     const seen = new Set();
+    const anchorsPerSelector = {};
+    const exclusions = {
+        navigation_guide: 0,
+        ads_promoted: 0,
+        shorts_shelves: 0,
+        mix_playlist: 0,
+        current_video: 0,
+        hidden_or_zero_size: 0,
+        shorts_excluded: 0,
+    };
 
     function isVisible(el) {
         if (!el) return false;
@@ -167,58 +177,67 @@ _TAG_RESULTS_SCRIPT = """() => {
             currentVideoId = parsedUrl.searchParams.get('v');
         } else if (path.startsWith('/results')) {
             container = document.querySelector('ytd-search #contents, ytd-section-list-renderer, #contents');
+        } else if (path.startsWith('/shorts')) {
+            container = document.querySelector('#contents, ytd-shorts, #shorts-container');
         } else {
             container = document.querySelector('ytd-browse #contents, ytd-rich-grid-renderer, #contents');
         }
-        if (!container) {
-            container = document.body;
+
+        // If container selector matches nothing, fall back to whole document
+        if (!container || !container.querySelector('a[href]')) {
+            container = document.body || document.documentElement || document;
         }
 
-        const anchors = container.querySelectorAll('a[href]');
-        for (const a of anchors) {
+        function checkExclusion(a, aUrl) {
             if (a.closest('#guide, ytd-guide-renderer, ytd-mini-guide-renderer, nav, #masthead, ytd-masthead')) {
-                continue;
+                exclusions.navigation_guide++;
+                return true;
             }
             if (a.closest('ytd-promoted-video-renderer, ytd-ad-slot-renderer, [class*="ad-"], [class*="promoted"]')) {
-                continue;
+                exclusions.ads_promoted++;
+                return true;
             }
-            if (a.closest('ytd-reel-shelf-renderer, ytd-shorts, ytd-radio-renderer, ytd-playlist-renderer, ytd-mix-renderer')) {
-                continue;
+            if (a.closest('ytd-reel-shelf-renderer, ytd-shorts, [is-shorts]')) {
+                if (!forShorts) {
+                    exclusions.shorts_shelves++;
+                    return true;
+                }
             }
-            if (a.href && (a.href.includes('/shorts/') || a.href.includes('start_radio=1') || a.href.includes('list=RD') || a.href.includes('/playlist'))) {
-                continue;
+            if (a.closest('ytd-radio-renderer, ytd-playlist-renderer, ytd-mix-renderer')) {
+                exclusions.mix_playlist++;
+                return true;
             }
-
-            let aUrl;
-            try {
-                aUrl = new URL(a.href, window.location.href);
-            } catch (e) {
-                continue;
-            }
-
-            if (!aUrl.pathname.startsWith('/watch')) {
-                continue;
-            }
-            if (aUrl.searchParams.get('start_radio') === '1' || (aUrl.searchParams.get('list') || '').startsWith('RD') || aUrl.pathname.startsWith('/playlist') || aUrl.pathname.startsWith('/shorts')) {
-                continue;
-            }
-            const vId = aUrl.searchParams.get('v');
-            if (!vId) {
-                continue;
-            }
-            if (currentVideoId && vId === currentVideoId) {
-                continue;
-            }
-            if (seen.has(vId)) {
-                continue;
+            if (aUrl) {
+                if (aUrl.searchParams.get('start_radio') === '1' || (aUrl.searchParams.get('list') || '').startsWith('RD') || aUrl.pathname.startsWith('/playlist')) {
+                    exclusions.mix_playlist++;
+                    return true;
+                }
+                if (forShorts) {
+                    if (!aUrl.pathname.startsWith('/shorts/')) {
+                        return true;
+                    }
+                } else {
+                    if (aUrl.pathname.startsWith('/shorts/')) {
+                        exclusions.shorts_excluded++;
+                        return true;
+                    }
+                }
+                const vId = aUrl.searchParams.get('v');
+                if (currentVideoId && vId && vId === currentVideoId) {
+                    exclusions.current_video++;
+                    return true;
+                }
             }
             if (!isVisible(a)) {
-                continue;
+                exclusions.hidden_or_zero_size++;
+                return true;
             }
+            return false;
+        }
 
-            const card = a.closest('ytd-video-renderer, ytd-rich-item-renderer, ytd-compact-video-renderer, .video-card, .video-item, .rec-item') || a;
+        function extractTitle(a) {
+            const card = a.closest('ytd-video-renderer, ytd-rich-item-renderer, ytd-compact-video-renderer, .video-card, .video-item, .rec-item, .shorts-item') || a;
             const titleEl = card.querySelector('#video-title, #video-title-link, a[title]') || a;
-
             let rawTitle = titleEl.getAttribute('title') || titleEl.getAttribute('aria-label') || a.getAttribute('title') || a.getAttribute('aria-label') || '';
             if (!rawTitle) {
                 rawTitle = a.innerText || a.textContent || '';
@@ -226,14 +245,78 @@ _TAG_RESULTS_SCRIPT = """() => {
                 rawTitle = rawTitle.replace(/\\b(now playing|live)\\b/gi, '');
             }
             let title = rawTitle.replace(/\\s+/g, ' ').replace(/[<>`]/g, '').trim();
-            title = title.slice(0, 100).trim();
-            if (!title) {
-                continue;
+            return title.slice(0, 100).trim();
+        }
+
+        if (forShorts) {
+            // (c) for Shorts pages: /shorts/ anchors ONLY when user asks for shorts
+            const shortsSelectors = ["a[href*='/shorts/']"];
+            for (const sel of shortsSelectors) {
+                const els = container.querySelectorAll(sel);
+                anchorsPerSelector[sel] = els.length;
+                for (const a of els) {
+                    if (results.length >= 10) break;
+                    let aUrl;
+                    try { aUrl = new URL(a.href, window.location.href); } catch (e) { continue; }
+                    if (checkExclusion(a, aUrl)) continue;
+                    const key = aUrl.pathname;
+                    if (seen.has(key)) continue;
+                    const title = extractTitle(a) || 'Short Video';
+                    seen.add(key);
+                    results.push({ el: a, title: title, href: a.href });
+                }
+            }
+        } else {
+            // (a) anchors whose href path is /watch with a v= id
+            const watchSelectors = ["a[href*='/watch?v=']", "a[href*='/watch/']"];
+            for (const sel of watchSelectors) {
+                const els = container.querySelectorAll(sel);
+                anchorsPerSelector[sel] = els.length;
+                for (const a of els) {
+                    if (results.length >= 10) break;
+                    let aUrl;
+                    try { aUrl = new URL(a.href, window.location.href); } catch (e) { continue; }
+                    if (checkExclusion(a, aUrl)) continue;
+                    const vId = aUrl.searchParams.get('v');
+                    if (!vId) continue;
+                    if (seen.has(vId)) continue;
+                    const title = extractTitle(a);
+                    if (!title) continue;
+                    seen.add(vId);
+                    results.push({ el: a, title: title, href: a.href });
+                }
             }
 
-            seen.add(vId);
-            results.push({ el: a, title: title, href: a.href });
-            if (results.length >= 10) break;
+            // (b) anchors in video renderer elements
+            if (results.length < 10) {
+                const rendererSelectors = [
+                    "ytd-video-renderer a#video-title",
+                    "ytd-video-renderer a#video-title-link",
+                    "ytd-rich-item-renderer a#video-title-link",
+                    "a#video-title",
+                    "ytd-video-renderer a.ytd-video-renderer",
+                    "ytd-compact-video-renderer a#video-title",
+                    ".video-card a",
+                    ".video-item a",
+                    ".rec-item a"
+                ];
+                for (const sel of rendererSelectors) {
+                    const els = container.querySelectorAll(sel);
+                    anchorsPerSelector[sel] = els.length;
+                    for (const a of els) {
+                        if (results.length >= 10) break;
+                        let aUrl;
+                        try { aUrl = new URL(a.href, window.location.href); } catch (e) { continue; }
+                        if (checkExclusion(a, aUrl)) continue;
+                        const vId = aUrl.searchParams.get('v') || aUrl.href;
+                        if (seen.has(vId)) continue;
+                        const title = extractTitle(a);
+                        if (!title) continue;
+                        seen.add(vId);
+                        results.push({ el: a, title: title, href: a.href });
+                    }
+                }
+            }
         }
 
     } else if (host === 'google.com' || host.endsWith('.google.com') || /^(www\\.)?google\\.(com|co\\.[a-z]{2}|com\\.[a-z]{2}|[a-z]{2})$/i.test(host)) {
@@ -316,7 +399,17 @@ _TAG_RESULTS_SCRIPT = """() => {
         });
     }
 
-    return { count: out.length, items: out };
+    return {
+        count: out.length,
+        items: out,
+        diag: {
+            url_host: host,
+            url_path: path,
+            anchors_per_selector: anchorsPerSelector,
+            exclusions: exclusions,
+            viewport_size: { width: window.innerWidth, height: window.innerHeight }
+        }
+    };
 }"""
 
 _READ_PAGE_SCRIPT = """() => {
@@ -458,6 +551,7 @@ class PlaywrightBackend(BrowserBackend):
         self._context: Any = None
         self._pages: list[Any] = []
         self._active_page: Any = None
+        self.last_failure: Optional[dict[str, Any]] = None
 
     def _map_error(self, exc: Exception) -> Exception:
         """Map Playwright-specific exceptions to friendly ORBIT BrowserErrors."""
@@ -590,7 +684,12 @@ class PlaywrightBackend(BrowserBackend):
 
                 try:
                     if not getattr(settings, "BROWSER_ALLOW_SIGNIN", False):
-                        if is_nav and is_signin_url(url, allow_loopback=self.allow_loopback):
+                        # In production (allow_loopback=False), navigation requests to sign-in / consent URLs
+                        # are strictly aborted at the network route level.
+                        # In test-only loopback mode (self.allow_loopback=True), allow local mock sign-in fixtures
+                        # (e.g. http://127.0.0.1/signin) through the network layer so _check_signin_guard can
+                        # inspect and refuse them via browser history rollback.
+                        if is_nav and is_signin_url(url, allow_loopback=False):
                             route.abort()
                             return
 
@@ -668,7 +767,7 @@ class PlaywrightBackend(BrowserBackend):
         except Exception:
             return False
 
-    def click_result(self, n: int) -> str:
+    def click_result(self, n: int, next_video: bool = False, for_shorts: bool = False) -> str:
         """Click the Nth search result or link on the active page (1-indexed)."""
         if not isinstance(n, int) or n < 1 or n > 10:
             raise BrowserRefused(f"Result index must be between 1 and 10, got {n}.")
@@ -679,14 +778,49 @@ class PlaywrightBackend(BrowserBackend):
         curr_url = self.current_url()
         pt_before = page_type(curr_url, allow_loopback=self.allow_loopback)
 
-        assert _TAG_RESULTS_SCRIPT in _ALLOWED_EVALUATE_SCRIPTS
-        try:
-            eval_res = page.evaluate(_TAG_RESULTS_SCRIPT)
-        except Exception as exc:
-            raise self._map_error(exc) from exc
+        # Polling wait loop up to 4s (every 200 ms) until at least one candidate anchor exists or page stops changing
+        # on YouTube also wait for main content container
+        start_wait = time.time()
+        eval_res: dict[str, Any] = {}
+        last_count = -1
+        unchanged_cycles = 0
+
+        while (time.time() - start_wait) < 4.0:
+            try:
+                assert _TAG_RESULTS_SCRIPT in _ALLOWED_EVALUATE_SCRIPTS
+                eval_res = page.evaluate(_TAG_RESULTS_SCRIPT, for_shorts) or {}
+                count = int(eval_res.get("count", 0))
+                if count > 0:
+                    break
+                if count == last_count:
+                    unchanged_cycles += 1
+                    if unchanged_cycles >= 3 and (time.time() - start_wait) >= 1.0:
+                        break
+                else:
+                    unchanged_cycles = 0
+                    last_count = count
+            except Exception:
+                pass
+            time.sleep(0.2)
+
+        if not eval_res:
+            try:
+                assert _TAG_RESULTS_SCRIPT in _ALLOWED_EVALUATE_SCRIPTS
+                eval_res = page.evaluate(_TAG_RESULTS_SCRIPT, for_shorts) or {}
+            except Exception as exc:
+                raise self._map_error(exc) from exc
 
         count = int(eval_res.get("count", 0)) if isinstance(eval_res, dict) else 0
         items = list(eval_res.get("items", [])) if isinstance(eval_res, dict) else []
+        diag = eval_res.get("diag", {}) if isinstance(eval_res, dict) else {}
+        if diag:
+            diag["page_type"] = pt_before
+
+        if count == 0:
+            self.last_failure = diag
+            exc = BrowserRefused(f"No videos found on this page ({pt_before}). Try scrolling down or searching first.")
+            exc.diag = diag
+            raise exc
 
         if n > count or not items:
             raise BrowserRefused(f"I only found {count} results on this page.")
@@ -697,9 +831,11 @@ class PlaywrightBackend(BrowserBackend):
 
         check_url(chosen_href, allow_loopback=self.allow_loopback)
 
-        locator = page.locator('[data-orbit-result]')
+        target_locator = page.locator(f"[data-orbit-result='{n}']").first
         try:
-            locator.nth(n - 1).click()
+            if hasattr(target_locator, "scroll_into_view_if_needed"):
+                target_locator.scroll_into_view_if_needed()
+            target_locator.click()
             try:
                 page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
             except Exception:
@@ -726,6 +862,15 @@ class PlaywrightBackend(BrowserBackend):
         clean_title = clean_title[:100].strip()
 
         return f"Opened result {n}: {clean_title}"
+
+    def key(self, name: str) -> str:
+        """Send a keyboard key press on the active page."""
+        page = self._get_active_page()
+        try:
+            page.keyboard.press(name)
+            return f"Pressed {name}."
+        except Exception as exc:
+            raise self._map_error(exc) from exc
 
     def media(self, action: str) -> str:
         """Execute a media playback action on the first <video> element."""

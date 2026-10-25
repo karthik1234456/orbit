@@ -23,26 +23,11 @@ from ui.controller import ConfirmRequest, UiEvent
 from ui.launch import make_provider
 
 
-def make_test_root() -> tk.Tk:
-    """Create a withdrawn Tk instance with retry to handle Windows file lock delays."""
-    for _ in range(5):
-        try:
-            r = tk.Tk()
-            r.withdraw()
-            return r
-        except Exception:
-            time.sleep(0.05)
-    r = tk.Tk()
-    r.withdraw()
-    return r
-
+from tests.conftest import check_tk_available, make_test_root
 
 # Skip entire test module if Tkinter display is unavailable
-try:
-    _test_root = make_test_root()
-    _test_root.destroy()
-except Exception as exc:
-    pytest.skip(f"Tkinter unavailable in environment: {exc}", allow_module_level=True)
+# Note: TclError failures (e.g. "Can't find a usable init.tcl") are intermittent and environmental
+check_tk_available()
 
 from ui.app import OrbitWindow
 
@@ -58,6 +43,7 @@ class FakeController:
         self.shutdown_called: bool = False
         self.reset_called: bool = False
         self.resolutions: list[tuple[int, bool]] = []
+        self.plan_resolutions: list[tuple[int, bool]] = []
         self.app: Optional[Any] = None
         self.pending_tool: Optional[str] = None
 
@@ -81,6 +67,9 @@ class FakeController:
 
     def resolve_confirmation(self, request_id: int, allowed: bool) -> None:
         self.resolutions.append((request_id, allowed))
+
+    def resolve_plan(self, plan_id: int, allowed: bool) -> None:
+        self.plan_resolutions.append((plan_id, allowed))
 
     def drain(self, max_items: int = 100) -> list[UiEvent]:
         res = self.events[:max_items]

@@ -114,6 +114,25 @@ def format_status(info: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def confirm_plan(labels: list[str], permissions: list[str], monitor: Any = None) -> bool:
+    """Prompt the user in the terminal to preview and authorize a multi-step plan."""
+    try:
+        print(f"\nORBIT wants to run this plan ({len(labels)} steps):")
+        for idx, (lbl, perm) in enumerate(zip(labels, permissions), 1):
+            note = " (asks for approval)" if perm in ("asks for approval", "confirm", True) else ""
+            print(f"  {idx}. {lbl}{note}")
+        print("Each step that opens apps or sites may still ask for its own approval.")
+        prompt = "Run this plan? (y/n): "
+        if monitor and hasattr(monitor, "paused"):
+            with monitor.paused():
+                answer = input(prompt).strip().lower()
+        else:
+            answer = input(prompt).strip().lower()
+        return answer == "y"
+    except (KeyboardInterrupt, EOFError):
+        return False
+
+
 def main() -> None:
     """Terminal chat loop managing user input, permissions, tool execution, and responses."""
     speaker = None
@@ -157,6 +176,7 @@ def main() -> None:
         app = build_app(
             provider=provider,
             confirm_callback=confirm_tool,
+            plan_callback=lambda labels, permissions: confirm_plan(labels, permissions, monitor=monitor),
             on_event=print_event,
         )
 
@@ -332,7 +352,22 @@ def main() -> None:
                 if user_input.startswith("/plan"):
                     task = user_input[len("/plan"):].strip()
                     if not task:
-                        print("Usage: /plan <task>")
+                        print("Usage: /plan on|off|always (or /plan <task>)")
+                        continue
+
+                    if task.lower() in ("on", "auto"):
+                        settings.PLAN_PREVIEW = "auto"
+                        print("Plan preview set to auto.")
+                        continue
+
+                    if task.lower() in ("off", "never"):
+                        settings.PLAN_PREVIEW = "never"
+                        print("Plan preview set to never.")
+                        continue
+
+                    if task.lower() == "always":
+                        settings.PLAN_PREVIEW = "always"
+                        print("Plan preview set to always.")
                         continue
 
                     try:
@@ -435,6 +470,46 @@ def main() -> None:
 
                 if user_input.lower().startswith("/shortcuts"):
                     print("Usage: /shortcuts on|off")
+                    continue
+
+                if user_input.lower() == "/chains on":
+                    settings.CHAINS_ENABLED = True
+                    print("Command chaining enabled.")
+                    continue
+
+                if user_input.lower() == "/chains off":
+                    settings.CHAINS_ENABLED = False
+                    print("Command chaining disabled.")
+                    continue
+
+                if user_input.lower().startswith("/chains"):
+                    print("Usage: /chains on|off")
+                    continue
+
+                if user_input.lower() in ("/help", "help", "/?"):
+                    print("Available commands:")
+                    print("  /help              - Show this help guide")
+                    print("  /diag              - Save and view diagnostic report")
+                    print("  /status            - Show provider and local Ollama model reachability")
+                    print("  /context           - Inspect active session context (last site, app, query)")
+                    print("  /plan on|off|always- Configure plan preview gate ('on' means auto)")
+                    print("  /plan <task>       - Plan and execute a multi-step task with the model")
+                    print("  /chains on|off     - Enable or disable command shortcut chaining")
+                    print("  /shortcuts on|off  - Enable or disable single command shortcuts")
+                    print("  /browser [close]   - Inspect browser status or close browser")
+                    print("  /last              - Show summary of the most recent task run")
+                    print("  /memories          - List long-term memory entries")
+                    print("  /forget <id>       - Delete a stored memory by ID")
+                    print("  /docs, /ask <q>    - Search and query local indexed documents")
+                    print("  /index             - Re-index documents in workspace/docs/")
+                    print("  /speak on|off      - Toggle speech synthesis")
+                    print("  /listen, /voice    - Voice interaction modes")
+                    print("  /reset             - Reset conversation history")
+                    print("  quit               - Exit ORBIT")
+                    print("\nExample command chains:")
+                    print("  open youtube and search for lofi and click result 1 and pause")
+                    print("  search google for python documentation and click result 1")
+                    print("  open notepad, wait 2 seconds, and close notepad")
                     continue
 
                 if user_input.lower() == "/mic":

@@ -87,6 +87,7 @@ class ChatController:
 
         self._request_counter: int = 0
         self._pending_confirmation: Optional[dict] = None
+        self._pending_plan: Optional[dict] = None
         self._task_counter: int = 0
         self._current_task: int = 0
 
@@ -134,7 +135,15 @@ class ChatController:
             if not isinstance(event, dict):
                 return
             etype = event.get("type")
-            if etype in ("step_start", "step_end", "task_end", "auto_retrieval"):
+            if etype in (
+                "step_start",
+                "step_end",
+                "task_end",
+                "auto_retrieval",
+                "plan_start",
+                "plan_step",
+                "plan_end",
+            ):
                 data = dict(event)
                 if "task" not in data and self._current_task:
                     data["task"] = self._current_task
@@ -192,11 +201,19 @@ class ChatController:
             if self.app is None or not hasattr(self.app, "agent"):
                 raise RuntimeError("ChatController has no attached App or Agent.")
 
-            final_text = self.app.agent.chat(
-                text,
-                on_delta=on_delta,
-                cancel_event=self.cancel_event,
-            )
+            kwargs = {
+                "on_delta": on_delta,
+                "cancel_event": self.cancel_event,
+            }
+            try:
+                import inspect
+                sig = inspect.signature(self.app.agent.chat)
+                if "plan_callback" in sig.parameters or any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values()):
+                    kwargs["plan_callback"] = self.plan_callback
+            except Exception:
+                kwargs["plan_callback"] = self.plan_callback
+
+            final_text = self.app.agent.chat(text, **kwargs)
 
             had_denial = False
             agent = getattr(self.app, "agent", None)
@@ -313,6 +330,53 @@ class ChatController:
 
         return bool(pending["allowed"])
 
+    def plan_callback(self, labels: list[str], permissions: list[str]) -> bool:
+        """Prompt user for plan preview and approval from the worker thread.
+
+        Blocks the worker thread for up to confirm_timeout_s (default 60s). Returns False
+        on timeout, cancel, shutdown, or user denial.
+        """
+        # Fail closed immediately if already cancelled or shutting down
+        if self._shutdown or self.cancel_event.is_set():
+            return False
+
+        with self._lock:
+            self._request_counter += 1
+            req_id = self._request_counter
+            plan_event = threading.Event()
+            pending = {
+                "id": req_id,
+                "labels": list(labels),
+                "permissions": list(permissions),
+                "event": plan_event,
+                "allowed": False,
+            }
+            self._pending_plan = pending
+
+        self._emit("plan_preview", {
+            "id": req_id,
+            "labels": list(labels),
+            "permissions": list(permissions),
+            "timeout_s": self.confirm_timeout_s,
+            "task": self._current_task,
+        })
+
+        signaled = plan_event.wait(timeout=self.confirm_timeout_s)
+
+        with self._lock:
+            if self._pending_plan is pending:
+                self._pending_plan = None
+
+        if not signaled:
+            # Timed out waiting for plan confirmation
+            return False
+
+        if self.cancel_event.is_set() or self._shutdown:
+            # Cancelled or shut down while waiting
+            return False
+
+        return bool(pending["allowed"])
+
     def resolve_confirmation(self, request_id: int, allowed: bool) -> None:
         """Resolve an active confirmation request from the UI thread.
 
@@ -331,18 +395,43 @@ class ChatController:
 
         pending["event"].set()
 
+    def resolve_plan(self, plan_id: int, allowed: bool) -> None:
+        """Resolve an active plan preview request from the UI thread.
+
+        Stale answers (plan_id not matching currently pending request)
+        are ignored to prevent approving subsequent or different requests.
+        """
+        with self._lock:
+            if self._pending_plan is None:
+                return
+            if self._pending_plan["id"] != plan_id:
+                return
+
+            pending = self._pending_plan
+            pending["allowed"] = bool(allowed)
+            self._pending_plan = None
+
+        pending["event"].set()
+
     def cancel(self) -> None:
-        """Set the cancel event and deny any active confirmation request."""
+        """Set the cancel event and deny any active confirmation or plan preview request."""
         self.cancel_event.set()
         pending = None
+        pending_plan = None
         with self._lock:
             if self._pending_confirmation is not None:
                 pending = self._pending_confirmation
                 pending["allowed"] = False
                 self._pending_confirmation = None
+            if self._pending_plan is not None:
+                pending_plan = self._pending_plan
+                pending_plan["allowed"] = False
+                self._pending_plan = None
 
         if pending is not None:
             pending["event"].set()
+        if pending_plan is not None:
+            pending_plan["event"].set()
 
     def reset(self) -> None:
         """Reset agent conversation history and session state."""

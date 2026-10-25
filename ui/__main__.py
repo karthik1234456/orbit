@@ -20,6 +20,7 @@ def main() -> None:
     app = build_app(
         provider=provider,
         confirm_callback=controller.confirm_callback,
+        plan_callback=controller.plan_callback,
         on_event=controller.on_agent_event,
     )
 

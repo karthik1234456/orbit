@@ -1,6 +1,7 @@
 """Agent implementation managing conversational state, tool calling, permissions, guards, and audit logging."""
 
 import os
+import secrets
 import time
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Union
 
@@ -8,12 +9,13 @@ if TYPE_CHECKING:
     from core.planner import Plan
 
 from config import settings
+from core.chains import describe_step, format_cancel_reply, format_plan_reply, redact_page_text
 from core.guards import LoopGuard
 from core.llm import LLMProvider
 from core.session_state import SessionState
 from core.task import RunLogger, RunStatus, StepRecord, TaskRun
 from security.audit import AuditLogger
-from security.permissions import Decision, PermissionPolicy
+from security.permissions import Decision, PermissionLevel, PermissionPolicy
 from tools.registry import ToolRegistry
 
 COMMAND_SHORTCUTS: bool = getattr(settings, "COMMAND_SHORTCUTS", True)
@@ -58,6 +60,7 @@ class Agent:
         allowed_apps: Optional[Mapping[str, Any]] = None,
         sites: Optional[Mapping[str, Any]] = None,
         browser_controller: Optional[Any] = None,
+        plan_callback: Optional[Callable[[list[str], list[str]], bool]] = None,
     ):
         """Initialize agent with LLM provider, tool registry, permission policy, guards, and audit logger."""
         self.provider = provider
@@ -76,6 +79,7 @@ class Agent:
         self.session_context = session_context
         self.session_state = session_state if session_state is not None else SessionState()
         self.browser_controller = browser_controller
+        self.plan_callback = plan_callback
 
         if allowed_apps is None:
             from config.apps import ALLOWED_APPS
@@ -136,6 +140,19 @@ class Agent:
                 return True
         return bool(getattr(settings, "SESSION_CONTEXT", True))
 
+    def chains_enabled(self) -> bool:
+        """Check whether chained command shortcuts are active."""
+        if not self.shortcuts_enabled():
+            return False
+        env_val = os.getenv("CHAINS_ENABLED")
+        if env_val is not None:
+            v = env_val.strip().lower()
+            if v in ("0", "false", "no", "off"):
+                return False
+            if v in ("1", "true", "yes", "on"):
+                return True
+        return bool(getattr(settings, "CHAINS_ENABLED", True))
+
     def _execute_single_tool(
         self,
         name: str,
@@ -144,6 +161,7 @@ class Agent:
         run: TaskRun,
         tainted: bool,
         is_shortcut: bool = False,
+        extra: Optional[dict] = None,
     ) -> tuple[Optional[RunStatus], str, str, str, Optional[str], bool]:
         """Execute a single tool call through the full validation and execution pipeline.
 
@@ -287,16 +305,28 @@ class Agent:
                     result=result,
                     duration_ms=round(duration_ms, 2),
                     tainted=tainted,
+                    extra=extra,
                 )
             except TypeError:
-                self.audit.log(
-                    tool=name,
-                    args=args,
-                    decision=audit_decision,
-                    outcome=outcome,
-                    result=result,
-                    duration_ms=round(duration_ms, 2),
-                )
+                try:
+                    self.audit.log(
+                        tool=name,
+                        args=args,
+                        decision=audit_decision,
+                        outcome=outcome,
+                        result=result,
+                        duration_ms=round(duration_ms, 2),
+                        tainted=tainted,
+                    )
+                except TypeError:
+                    self.audit.log(
+                        tool=name,
+                        args=args,
+                        decision=audit_decision,
+                        outcome=outcome,
+                        result=result,
+                        duration_ms=round(duration_ms, 2),
+                    )
 
         # If this tool produces untrusted output and succeeded, taint the agent for the rest of the turn
         if status == "success" and tool and getattr(tool, "untrusted_output", False):
@@ -397,12 +427,476 @@ class Agent:
 
         return " ".join(parts)
 
+    def _run_shortcut_plan(
+        self,
+        plan: Any,
+        run: TaskRun,
+        guard: LoopGuard,
+        cancel_event: Optional[Any],
+        stream_cb: Optional[Callable[[str], None]],
+        plan_callback: Optional[Callable[[list[str], list[str]], bool]] = None,
+    ) -> str:
+        """Execute a ShortcutPlan (built-in or chain) through the standard tool pipeline."""
+        plan_id = secrets.token_hex(4)
+        labels = [
+            getattr(s, "label", None)
+            or describe_step(
+                getattr(s, "name", getattr(s, "tool", "")),
+                getattr(s, "args", {}),
+            )
+            for s in plan.steps
+        ]
+
+        # 1. Check PLAN_MAX_STEPS limit
+        max_plan_steps = getattr(settings, "PLAN_MAX_STEPS", 10)
+        if len(plan.steps) > max_plan_steps:
+            reply = f"Plan exceeds maximum limit of {max_plan_steps} steps."
+            run.finish(RunStatus.STEP_LIMIT, reply)
+            run.plan = {"id": plan_id, "source": getattr(plan, "source", "chain"), "steps": [], "outcome": "stopped"}
+            self._emit_event({"type": "plan_start", "id": plan_id, "labels": labels})
+            self._emit_event({"type": "plan_end", "outcome": "stopped"})
+            self.history.append({"role": "assistant", "content": reply})
+            if self.run_logger:
+                self.run_logger.log(run)
+            self._emit_event({
+                "type": "task_end",
+                "status": RunStatus.STEP_LIMIT.value,
+                "tool": None,
+                "index": 0,
+            })
+            if stream_cb:
+                try:
+                    stream_cb(reply)
+                except Exception:
+                    pass
+            return reply
+
+        # 2. Check PLAN_PREVIEW setting and evaluate preview gate
+        mode = getattr(settings, "PLAN_PREVIEW", "auto")
+        if mode == "never":
+            preview_required = False
+        elif mode == "always":
+            preview_required = len(plan.steps) >= 2
+        elif mode == "auto":
+            preview_required = getattr(plan, "source", "") == "chain" and len(plan.steps) >= 3
+        else:
+            preview_required = False
+
+        if preview_required:
+            permissions: list[str] = []
+            for s in plan.steps:
+                tool_name = getattr(s, "name", getattr(s, "tool", ""))
+                if tool_name == "wait":
+                    permissions.append("SAFE")
+                else:
+                    tool_obj = self.registry.get(tool_name) if self.registry else None
+                    if tool_obj and tool_obj.permission == PermissionLevel.SAFE:
+                        permissions.append("SAFE")
+                    else:
+                        permissions.append("asks for approval")
+
+            if plan_callback is None:
+                reply = "I need your approval for this plan, but no approval screen is available."
+                run.finish(RunStatus.COMPLETED, reply)
+                run.plan = {"id": plan_id, "source": getattr(plan, "source", "chain"), "steps": [], "outcome": "denied"}
+                self._emit_event({"type": "plan_start", "id": plan_id, "labels": labels})
+                self._emit_event({"type": "plan_end", "outcome": "denied"})
+                self.history.append({"role": "assistant", "content": reply})
+                if self.run_logger:
+                    self.run_logger.log(run)
+                self._emit_event({
+                    "type": "task_end",
+                    "status": RunStatus.COMPLETED.value,
+                    "tool": None,
+                    "index": 0,
+                })
+                if stream_cb:
+                    try:
+                        stream_cb(reply)
+                    except Exception:
+                        pass
+                return reply
+
+            try:
+                approved = bool(plan_callback(labels, permissions))
+            except Exception:
+                approved = False
+
+            if not approved:
+                reply = "Okay, I didn't run that plan."
+                run.finish(RunStatus.COMPLETED, reply)
+                run.plan = {"id": plan_id, "source": getattr(plan, "source", "chain"), "steps": [], "outcome": "denied"}
+                self._emit_event({"type": "plan_start", "id": plan_id, "labels": labels})
+                self._emit_event({"type": "plan_end", "outcome": "denied"})
+                self.history.append({"role": "assistant", "content": reply})
+                if self.run_logger:
+                    self.run_logger.log(run)
+                self._emit_event({
+                    "type": "task_end",
+                    "status": RunStatus.COMPLETED.value,
+                    "tool": None,
+                    "index": 0,
+                })
+                if stream_cb:
+                    try:
+                        stream_cb(reply)
+                    except Exception:
+                        pass
+                return reply
+
+        # 3. Emit plan_start event
+        self._emit_event({"type": "plan_start", "id": plan_id, "labels": labels})
+
+        # 4. Check cancellation before any step
+        if cancel_event is not None and cancel_event.is_set():
+            reply = format_cancel_reply([], len(plan.steps), redact=False)
+            history_reply = format_cancel_reply([], len(plan.steps), redact=True)
+            run.finish(RunStatus.CANCELLED, reply)
+            run.plan = {"id": plan_id, "source": getattr(plan, "source", "chain"), "steps": [], "outcome": "cancelled"}
+            self._emit_event({"type": "plan_end", "outcome": "cancelled"})
+            self.history.append({"role": "assistant", "content": history_reply})
+            if self.run_logger:
+                self.run_logger.log(run)
+            self._emit_event({
+                "type": "task_end",
+                "status": RunStatus.CANCELLED.value,
+                "tool": None,
+                "index": 0,
+            })
+            if stream_cb:
+                try:
+                    stream_cb(reply)
+                except Exception:
+                    pass
+            return reply
+
+        max_plan_seconds = getattr(settings, "PLAN_MAX_SECONDS", 180.0)
+        plan_start_time = time.perf_counter()
+        tainted = False
+        failed_step_idx: Optional[int] = None
+        failed_reason = ""
+        stop_reason: Optional[RunStatus] = None
+        completed_steps: list[tuple[str, dict, Any]] = []
+        executed_steps: list[tuple[str, dict, Any]] = []
+        step_records: list[dict] = []
+
+        for idx, step in enumerate(plan.steps):
+            # Cancellation check before step
+            if cancel_event is not None and cancel_event.is_set():
+                reply = format_cancel_reply(completed_steps, len(plan.steps), redact=False)
+                history_reply = format_cancel_reply(completed_steps, len(plan.steps), redact=True)
+                run.finish(RunStatus.CANCELLED, reply)
+                run.plan = {"id": plan_id, "source": getattr(plan, "source", "chain"), "steps": step_records, "outcome": "cancelled"}
+                self._emit_event({"type": "plan_end", "outcome": "cancelled"})
+                self.history.append({"role": "assistant", "content": history_reply})
+                if self.run_logger:
+                    self.run_logger.log(run)
+                self._emit_event({
+                    "type": "task_end",
+                    "status": RunStatus.CANCELLED.value,
+                    "tool": None,
+                    "index": len(run.steps),
+                })
+                if stream_cb:
+                    try:
+                        stream_cb(reply)
+                    except Exception:
+                        pass
+                return reply
+
+            # Time limit check before step
+            if (time.perf_counter() - plan_start_time) > max_plan_seconds:
+                reply = f"Plan stopped: exceeded time limit of {max_plan_seconds} seconds."
+                run.finish(RunStatus.STEP_LIMIT, reply)
+                run.plan = {"id": plan_id, "source": getattr(plan, "source", "chain"), "steps": step_records, "outcome": "stopped"}
+                self._emit_event({"type": "plan_end", "outcome": "stopped"})
+                self.history.append({"role": "assistant", "content": reply})
+                if self.run_logger:
+                    self.run_logger.log(run)
+                self._emit_event({
+                    "type": "task_end",
+                    "status": RunStatus.STEP_LIMIT.value,
+                    "tool": None,
+                    "index": len(run.steps),
+                })
+                if stream_cb:
+                    try:
+                        stream_cb(reply)
+                    except Exception:
+                        pass
+                return reply
+
+            tool_name = getattr(step, "name", getattr(step, "tool", ""))
+            step_args = getattr(step, "args", {})
+            step_label = labels[idx]
+            step_extra = {"plan_id": plan_id, "step_index": idx + 1}
+
+            if tool_name == "wait":
+                secs = float(step_args.get("seconds", 1.0))
+                wait_start = time.perf_counter()
+                remaining = secs
+                was_cancelled = False
+                time_limit_hit = False
+
+                while remaining > 0:
+                    if cancel_event is not None and cancel_event.is_set():
+                        was_cancelled = True
+                        break
+                    if (time.perf_counter() - plan_start_time) > max_plan_seconds:
+                        time_limit_hit = True
+                        break
+                    chunk = min(0.1, remaining)
+                    time.sleep(chunk)
+                    remaining -= chunk
+
+                if was_cancelled:
+                    reply = format_cancel_reply(completed_steps, len(plan.steps), redact=False)
+                    history_reply = format_cancel_reply(completed_steps, len(plan.steps), redact=True)
+                    run.finish(RunStatus.CANCELLED, reply)
+                    run.plan = {"id": plan_id, "source": getattr(plan, "source", "chain"), "steps": step_records, "outcome": "cancelled"}
+                    self._emit_event({"type": "plan_end", "outcome": "cancelled"})
+                    self.history.append({"role": "assistant", "content": history_reply})
+                    if self.run_logger:
+                        self.run_logger.log(run)
+                    self._emit_event({
+                        "type": "task_end",
+                        "status": RunStatus.CANCELLED.value,
+                        "tool": None,
+                        "index": len(run.steps),
+                    })
+                    if stream_cb:
+                        try:
+                            stream_cb(reply)
+                        except Exception:
+                            pass
+                    return reply
+
+                if time_limit_hit:
+                    reply = f"Plan stopped: exceeded time limit of {max_plan_seconds} seconds."
+                    run.finish(RunStatus.STEP_LIMIT, reply)
+                    run.plan = {"id": plan_id, "source": getattr(plan, "source", "chain"), "steps": step_records, "outcome": "stopped"}
+                    self._emit_event({"type": "plan_end", "outcome": "stopped"})
+                    self.history.append({"role": "assistant", "content": reply})
+                    if self.run_logger:
+                        self.run_logger.log(run)
+                    self._emit_event({
+                        "type": "task_end",
+                        "status": RunStatus.STEP_LIMIT.value,
+                        "tool": None,
+                        "index": len(run.steps),
+                    })
+                    if stream_cb:
+                        try:
+                            stream_cb(reply)
+                        except Exception:
+                            pass
+                    return reply
+
+                duration_ms = (time.perf_counter() - wait_start) * 1000
+                s_val = int(secs) if secs.is_integer() else secs
+                result = f"Waited {s_val} second{'s' if s_val != 1 else ''}."
+                status = "success"
+                outcome = "success"
+                s_stop_reason = None
+                run.add_step(
+                    tool="wait",
+                    args=step_args,
+                    status="success",
+                    result=result,
+                    duration_ms=int(round(duration_ms)),
+                    decision="shortcut",
+                )
+                if self.audit:
+                    self.audit.log(
+                        tool="wait",
+                        args=step_args,
+                        decision="shortcut",
+                        outcome="success",
+                        result=result,
+                        duration_ms=round(duration_ms, 2),
+                        tainted=tainted,
+                        extra=step_extra,
+                    )
+            else:
+                s_stop_reason, status, outcome, result, hint, tainted = self._execute_single_tool(
+                    tool_name,
+                    step_args,
+                    guard,
+                    run,
+                    tainted,
+                    is_shortcut=True,
+                    extra=step_extra,
+                )
+
+            self._emit_event({
+                "type": "plan_step",
+                "index": idx + 1,
+                "label": step_label,
+                "status": status,
+            })
+            step_records.append({"label": step_label, "status": status})
+            executed_steps.append((tool_name, step_args, result))
+
+            is_final_builtin_play = (
+                getattr(plan, "source", "") == "builtin"
+                and idx == len(plan.steps) - 1
+                and tool_name == "browser_media"
+                and step_args.get("action") == "play"
+            )
+
+            if status == "success":
+                completed_steps.append((tool_name, step_args, result))
+            elif is_final_builtin_play:
+                failed_step_idx = idx + 1
+                break
+            else:
+                failed_step_idx = idx + 1
+                stop_reason = s_stop_reason
+                if s_stop_reason is not None:
+                    failed_reason = self._build_stop_message(s_stop_reason, run.steps, [tool_name])
+                else:
+                    clean_msg = result
+                    for pfx in ("ERROR: REJECTED:", "ERROR: BLOCKED:", "ERROR:"):
+                        if clean_msg.startswith(pfx):
+                            clean_msg = clean_msg[len(pfx):].strip()
+                            break
+                    failed_reason = clean_msg
+                break
+
+            # Cancellation check after step
+            if cancel_event is not None and cancel_event.is_set():
+                reply = format_cancel_reply(completed_steps, len(plan.steps), redact=False)
+                history_reply = format_cancel_reply(completed_steps, len(plan.steps), redact=True)
+                run.finish(RunStatus.CANCELLED, reply)
+                run.plan = {"id": plan_id, "source": getattr(plan, "source", "chain"), "steps": step_records, "outcome": "cancelled"}
+                self._emit_event({"type": "plan_end", "outcome": "cancelled"})
+                self.history.append({"role": "assistant", "content": history_reply})
+                if self.run_logger:
+                    self.run_logger.log(run)
+                self._emit_event({
+                    "type": "task_end",
+                    "status": RunStatus.CANCELLED.value,
+                    "tool": None,
+                    "index": len(run.steps),
+                })
+                if stream_cb:
+                    try:
+                        stream_cb(reply)
+                    except Exception:
+                        pass
+                return reply
+
+        is_builtin_play_fallback = (
+            getattr(plan, "source", "") == "builtin"
+            and failed_step_idx == len(plan.steps)
+            and getattr(plan.steps[-1], "name", getattr(plan.steps[-1], "tool", "")) == "browser_media"
+            and getattr(plan.steps[-1], "args", {}).get("action") == "play"
+        )
+        final_outcome = "success" if (failed_step_idx is None or is_builtin_play_fallback) else "stopped"
+        self._emit_event({"type": "plan_end", "outcome": final_outcome})
+        run.plan = {
+            "id": plan_id,
+            "source": getattr(plan, "source", "chain"),
+            "steps": step_records,
+            "outcome": final_outcome,
+        }
+
+        if getattr(plan, "source", "") == "builtin":
+            site_display = {
+                "youtube": "YouTube",
+                "google": "Google",
+                "github": "GitHub",
+                "wikipedia": "Wikipedia",
+            }.get(getattr(plan, "site", "").lower(), getattr(plan, "site", "").title() or "YouTube")
+
+            if getattr(plan, "style", "") == "ordinal":
+                ordinal_num = getattr(plan, "ordinal", 1)
+                step1_res = run.steps[1].result if len(run.steps) > 1 else ""
+                prefix = f"Opened result {ordinal_num}: "
+                if step1_res.startswith(prefix):
+                    title = step1_res[len(prefix):].strip()
+                elif step1_res.startswith("Opened result"):
+                    title = step1_res.split(":", 1)[-1].strip() if ":" in step1_res else step1_res.strip()
+                else:
+                    title = step1_res.strip()
+
+                if failed_step_idx is None:
+                    step2_res = run.steps[2].result if len(run.steps) > 2 else "Playing."
+                    if step2_res.strip() == "Playing.":
+                        reply = f"Opened result {ordinal_num}: {title}. Playing."
+                    elif "didn't start" in step2_res or "press play" in step2_res:
+                        reply = f"Opened result {ordinal_num}: {title}. The video is open but didn't start; press play."
+                    else:
+                        reply = f"Opened result {ordinal_num}: {title}. {step2_res}"
+                    history_reply = f"Opened result {ordinal_num}. Playing."
+                    run.finish(RunStatus.COMPLETED, reply)
+                elif failed_step_idx == 3:
+                    reply = f"Opened result {ordinal_num}: {title}. The video is open but didn't start; press play."
+                    history_reply = f"Opened result {ordinal_num}. The video is open but didn't start; press play."
+                    run.finish(RunStatus.COMPLETED, reply)
+                elif failed_step_idx == 2:
+                    clean_r = failed_reason.rstrip(".")
+                    reply = f"Searched {site_display} for {plan.query}, but I couldn't open result {ordinal_num}: {clean_r}."
+                    history_reply = reply
+                    run.finish(stop_reason if stop_reason is not None else RunStatus.COMPLETED, reply)
+                else:
+                    clean_r = failed_reason.rstrip(".")
+                    reply = f"Searched {site_display} for {plan.query}, but search failed: {clean_r}."
+                    history_reply = reply
+                    run.finish(stop_reason if stop_reason is not None else RunStatus.COMPLETED, reply)
+            elif getattr(plan, "is_play", False):
+                if failed_step_idx is None:
+                    reply = f"Searched {site_display} for {plan.query} and started the first result."
+                    history_reply = reply
+                    run.finish(RunStatus.COMPLETED, reply)
+                elif failed_step_idx == 3:
+                    reply = f"Searched {site_display} for {plan.query} and opened the first result; press play if it didn't start."
+                    history_reply = reply
+                    run.finish(RunStatus.COMPLETED, reply)
+                else:
+                    clean_r = failed_reason.rstrip(".")
+                    reply = f"Searched {site_display} for {plan.query}, but I couldn't start a video: {clean_r}."
+                    history_reply = reply
+                    run.finish(stop_reason if stop_reason is not None else RunStatus.COMPLETED, reply)
+            else:
+                if failed_step_idx is None:
+                    reply = f"Searched {site_display} for {plan.query}."
+                    history_reply = reply
+                    run.finish(RunStatus.COMPLETED, reply)
+                else:
+                    clean_r = failed_reason.rstrip(".")
+                    reply = f"Searched {site_display} for {plan.query}, but failed: {clean_r}."
+                    history_reply = reply
+                    run.finish(stop_reason if stop_reason is not None else RunStatus.COMPLETED, reply)
+        else:
+            reply = format_plan_reply(executed_steps, stopped_at=failed_step_idx, stop_reason=failed_reason, redact=False)
+            history_reply = format_plan_reply(executed_steps, stopped_at=failed_step_idx, stop_reason=failed_reason, redact=True)
+            run.finish(RunStatus.COMPLETED if failed_step_idx is None else (stop_reason if stop_reason is not None else RunStatus.FAILED), reply)
+
+        if stream_cb:
+            try:
+                stream_cb(reply)
+            except Exception:
+                pass
+
+        self.history.append({"role": "assistant", "content": history_reply})
+        if self.run_logger:
+            self.run_logger.log(run)
+        self._emit_event({
+            "type": "task_end",
+            "status": run.status.value if run.status else RunStatus.COMPLETED.value,
+            "tool": None,
+            "index": len(run.steps),
+        })
+        return reply
+
     def chat(
         self,
         user_text: str,
         extra_system_text: Optional[Union[str, list[str], Callable[[str], None]]] = None,
         on_delta: Optional[Callable[[str], None]] = None,
         cancel_event: Optional[Any] = None,
+        plan_callback: Optional[Callable[[list[str], list[str]], bool]] = None,
     ) -> str:
         """Run conversational loop handling permission checks, guards, tool executions, and audit logs."""
         if callable(extra_system_text) and on_delta is None:
@@ -433,6 +927,38 @@ class Agent:
 
         run.finish = finish_with_context  # type: ignore[assignment]
         self.last_run = run
+
+        # Check for bare browser verb when browser is not running
+        from core.shortcuts import is_bare_browser_verb
+        if is_bare_browser_verb(user_text):
+            browser_ctrl = getattr(self, "browser_controller", None)
+            is_running = False
+            if browser_ctrl is not None:
+                try:
+                    stat = browser_ctrl.status()
+                    is_running = bool(stat and stat.get("alive"))
+                except Exception:
+                    is_running = False
+
+            if not is_running:
+                no_browser_reply = "No browser is open yet. Try 'open youtube'."
+                run.finish(RunStatus.COMPLETED, no_browser_reply)
+                self.history.append({"role": "assistant", "content": no_browser_reply})
+                if self.run_logger:
+                    self.run_logger.log(run)
+                self._emit_event({
+                    "type": "task_end",
+                    "status": RunStatus.COMPLETED.value,
+                    "tool": None,
+                    "index": 0,
+                })
+                stream_cb = effective_on_delta or on_delta
+                if stream_cb:
+                    try:
+                        stream_cb(no_browser_reply)
+                    except Exception:
+                        pass
+                return no_browser_reply
 
         # Compute additional per-turn system text (memory, docs, etc.)
         extra_blocks: list[str] = []
@@ -559,152 +1085,52 @@ class Agent:
                 or (self.registry and (bool(self.registry.get("browser_click_result")) or bool(self.registry.get("browser_scroll"))))
             )
 
-            shortcut_spec = parse_shortcut(
-                user_text,
-                self.allowed_apps,
-                self.sites,
-                state=self.session_state,
-                browser_enabled=browser_enabled,
-            )
+            from core.chains import has_explicit_sequencing_separator, parse_chain
+
+            shortcut_spec = None
+            if self.chains_enabled() and has_explicit_sequencing_separator(user_text):
+                shortcut_spec = parse_chain(
+                    user_text,
+                    self.allowed_apps,
+                    self.sites,
+                    state=self.session_state,
+                    browser_enabled=browser_enabled,
+                )
+                if shortcut_spec is None:
+                    shortcut_spec = parse_shortcut(
+                        user_text,
+                        self.allowed_apps,
+                        self.sites,
+                        state=self.session_state,
+                        browser_enabled=browser_enabled,
+                    )
+            else:
+                shortcut_spec = parse_shortcut(
+                    user_text,
+                    self.allowed_apps,
+                    self.sites,
+                    state=self.session_state,
+                    browser_enabled=browser_enabled,
+                )
+                if shortcut_spec is None and self.chains_enabled():
+                    shortcut_spec = parse_chain(
+                        user_text,
+                        self.allowed_apps,
+                        self.sites,
+                        state=self.session_state,
+                        browser_enabled=browser_enabled,
+                    )
 
             if isinstance(shortcut_spec, ShortcutPlan):
-                if not all(self.registry and self.registry.get(s.name) for s in shortcut_spec.steps):
-                    pass
-                else:
-                    if cancel_event is not None and cancel_event.is_set():
-                        cancel_reply = "(interrupted)"
-                        run.finish(RunStatus.CANCELLED, cancel_reply)
-                        if self.run_logger:
-                            self.run_logger.log(run)
-                        self.history.append({"role": "assistant", "content": cancel_reply})
-                        self._emit_event({
-                            "type": "task_end",
-                            "status": RunStatus.CANCELLED.value,
-                            "tool": None,
-                            "index": len(run.steps),
-                        })
-                        return cancel_reply
-
-                    site_display = {
-                        "youtube": "YouTube",
-                        "google": "Google",
-                        "github": "GitHub",
-                        "wikipedia": "Wikipedia",
-                    }.get(shortcut_spec.site.lower(), shortcut_spec.site.title())
-
-                    failed_step_index = None
-                    failed_reason = ""
-                    stop_reason = None
-
-                    for idx, step in enumerate(shortcut_spec.steps):
-                        if cancel_event is not None and cancel_event.is_set():
-                            cancel_reply = "(interrupted)"
-                            run.finish(RunStatus.CANCELLED, cancel_reply)
-                            if self.run_logger:
-                                self.run_logger.log(run)
-                            self.history.append({"role": "assistant", "content": cancel_reply})
-                            self._emit_event({
-                                "type": "task_end",
-                                "status": RunStatus.CANCELLED.value,
-                                "tool": None,
-                                "index": len(run.steps),
-                            })
-                            return cancel_reply
-
-                        s_stop_reason, status, outcome, result, hint, tainted = self._execute_single_tool(
-                            step.name,
-                            step.args,
-                            guard,
-                            run,
-                            tainted,
-                            is_shortcut=True,
-                        )
-
-                        if s_stop_reason is not None:
-                            failed_step_index = idx
-                            stop_reason = s_stop_reason
-                            failed_reason = self._build_stop_message(s_stop_reason, run.steps, [step.name])
-                            break
-
-                        if status != "success":
-                            failed_step_index = idx
-                            clean_msg = result
-                            for pfx in ("ERROR: REJECTED:", "ERROR: BLOCKED:", "ERROR:"):
-                                if clean_msg.startswith(pfx):
-                                    clean_msg = clean_msg[len(pfx):].strip()
-                                    break
-                            failed_reason = clean_msg
-                            break
-
-                    if getattr(shortcut_spec, "style", "") == "ordinal":
-                        ordinal_num = getattr(shortcut_spec, "ordinal", 1)
-                        step1_res = run.steps[1].result if len(run.steps) > 1 else ""
-                        prefix = f"Opened result {ordinal_num}: "
-                        if step1_res.startswith(prefix):
-                            title = step1_res[len(prefix):].strip()
-                        elif step1_res.startswith("Opened result"):
-                            title = step1_res.split(":", 1)[-1].strip() if ":" in step1_res else step1_res.strip()
-                        else:
-                            title = step1_res.strip()
-
-                        if failed_step_index is None:
-                            step2_res = run.steps[2].result if len(run.steps) > 2 else "Playing."
-                            if step2_res.strip() == "Playing.":
-                                reply = f"Opened result {ordinal_num}: {title}. Playing."
-                            elif "didn't start" in step2_res or "press play" in step2_res:
-                                reply = f"Opened result {ordinal_num}: {title}. The video is open but didn't start; press play."
-                            else:
-                                reply = f"Opened result {ordinal_num}: {title}. {step2_res}"
-                            run.finish(RunStatus.COMPLETED, reply)
-                        elif failed_step_index == 2:
-                            reply = f"Opened result {ordinal_num}: {title}. The video is open but didn't start; press play."
-                            run.finish(RunStatus.COMPLETED, reply)
-                        elif failed_step_index == 1:
-                            clean_r = failed_reason.rstrip(".")
-                            reply = f"Searched {site_display} for {shortcut_spec.query}, but I couldn't open result {ordinal_num}: {clean_r}."
-                            run.finish(stop_reason if stop_reason is not None else RunStatus.COMPLETED, reply)
-                        else:
-                            clean_r = failed_reason.rstrip(".")
-                            reply = f"Searched {site_display} for {shortcut_spec.query}, but search failed: {clean_r}."
-                            run.finish(stop_reason if stop_reason is not None else RunStatus.COMPLETED, reply)
-                    elif shortcut_spec.is_play:
-                        if failed_step_index is None:
-                            reply = f"Searched {site_display} for {shortcut_spec.query} and started the first result."
-                            run.finish(RunStatus.COMPLETED, reply)
-                        elif failed_step_index == 2:
-                            # Final media(play) step failure is not fatal
-                            reply = f"Searched {site_display} for {shortcut_spec.query} and opened the first result; press play if it didn't start."
-                            run.finish(RunStatus.COMPLETED, reply)
-                        else:
-                            clean_r = failed_reason.rstrip(".")
-                            reply = f"Searched {site_display} for {shortcut_spec.query}, but I couldn't start a video: {clean_r}."
-                            run.finish(stop_reason if stop_reason is not None else RunStatus.COMPLETED, reply)
-                    else:
-                        if failed_step_index is None:
-                            reply = f"Searched {site_display} for {shortcut_spec.query}."
-                            run.finish(RunStatus.COMPLETED, reply)
-                        else:
-                            clean_r = failed_reason.rstrip(".")
-                            reply = f"Searched {site_display} for {shortcut_spec.query}, but failed: {clean_r}."
-                            run.finish(stop_reason if stop_reason is not None else RunStatus.COMPLETED, reply)
-
-                    stream_cb = effective_on_delta or on_delta
-                    if stream_cb:
-                        try:
-                            stream_cb(reply)
-                        except Exception:
-                            pass
-
-                    self.history.append({"role": "assistant", "content": reply})
-                    if self.run_logger:
-                        self.run_logger.log(run)
-                    self._emit_event({
-                        "type": "task_end",
-                        "status": run.status.value if run.status else RunStatus.COMPLETED.value,
-                        "tool": None,
-                        "index": len(run.steps),
-                    })
-                    return reply
+                effective_plan_cb = plan_callback if plan_callback is not None else self.plan_callback
+                return self._run_shortcut_plan(
+                    shortcut_spec,
+                    run,
+                    guard,
+                    cancel_event,
+                    effective_on_delta or on_delta,
+                    plan_callback=effective_plan_cb,
+                )
 
             elif (
                 shortcut_spec is not None
@@ -744,7 +1170,12 @@ class Agent:
                         reply = f"Opened {target_name}."
                     run.finish(RunStatus.COMPLETED, reply)
                 else:
-                    if result.startswith("ERROR: I can only control"):
+                    if (
+                        shortcut_spec.name.startswith("browser_")
+                        and ("No videos found" in result or "0 results" in result or "couldn't find any videos" in result)
+                    ):
+                        reply = "I couldn't find any videos on this page. Try 'scroll down' or search for something first."
+                    elif result.startswith("ERROR: I can only control"):
                         reply = result[len("ERROR:"):].strip()
                     else:
                         reply = result
