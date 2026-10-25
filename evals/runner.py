@@ -91,6 +91,7 @@ def run_case(
             provider=counting_provider,
             confirm_callback=confirm_callback,
             paths=sandbox.paths,
+            doc_index=getattr(sandbox, "doc_index", None),
             limits=Limits(
                 max_tool_calls=settings.MAX_TOOL_CALLS,
                 max_consecutive_errors=settings.MAX_CONSECUTIVE_ERRORS,
@@ -101,6 +102,7 @@ def run_case(
         recorder = Recorder()
         final_texts: list[str] = []
         events: list[ToolEvent] = []
+        all_auto_retrievals: list[dict] = []
         last_run_status: Optional[str] = None
         error_msg: Optional[str] = None
         unverified_claims_count: int = 0
@@ -124,6 +126,8 @@ def run_case(
                     if app.agent.last_run.status:
                         last_run_status = app.agent.last_run.status.value
                     unverified_claims_count += getattr(app.agent.last_run, "unverified_claims", 0)
+                    for ar in getattr(app.agent.last_run, "auto_retrievals", []):
+                        all_auto_retrievals.append(ar)
                     for step in app.agent.last_run.steps:
                         events.append(
                             ToolEvent(
@@ -157,6 +161,7 @@ def run_case(
             memory_texts=memory_texts,
             confirmations=confirmations,
             unverified_claims=unverified_claims_count,
+            auto_retrievals=all_auto_retrievals,
         )
 
         failed_checks = run_checks(case, obs)
@@ -186,6 +191,7 @@ def run_case(
             final_text=final_text,
             error=error_msg,
             unverified_claims=obs.unverified_claims,
+            auto_retrievals=all_auto_retrievals,
         )
     finally:
         sandbox.cleanup()
@@ -223,12 +229,22 @@ def run_suite(
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "total_cases": len(cases),
         "repeats": repeats,
-        "cases_version": 3,
+        "cases_version": 4,
+        "RAG_AUTO": getattr(settings, "RAG_AUTO", True),
+        "RAG_AUTO_MIN_TERMS": getattr(settings, "RAG_AUTO_MIN_TERMS", 2),
+        "RAG_AUTO_MIN_COVERAGE": getattr(settings, "RAG_AUTO_MIN_COVERAGE", 0.5),
+        "RAG_AUTO_TOP_K": getattr(settings, "RAG_AUTO_TOP_K", 3),
+        "RAG_AUTO_MAX_CHARS": getattr(settings, "RAG_AUTO_MAX_CHARS", 1500),
     }
     if extra_meta:
         meta.update(extra_meta)
 
-    meta.setdefault("cases_version", 3)
+    meta.setdefault("cases_version", 4)
+    meta.setdefault("RAG_AUTO", getattr(settings, "RAG_AUTO", True))
+    meta.setdefault("RAG_AUTO_MIN_TERMS", getattr(settings, "RAG_AUTO_MIN_TERMS", 2))
+    meta.setdefault("RAG_AUTO_MIN_COVERAGE", getattr(settings, "RAG_AUTO_MIN_COVERAGE", 0.5))
+    meta.setdefault("RAG_AUTO_TOP_K", getattr(settings, "RAG_AUTO_TOP_K", 3))
+    meta.setdefault("RAG_AUTO_MAX_CHARS", getattr(settings, "RAG_AUTO_MAX_CHARS", 1500))
 
     if "cases_sha256" not in meta:
         from evals.schema import compute_cases_sha256

@@ -52,6 +52,7 @@ class TaskRun:
     final_text: str = ""
     llm_calls: int = 0
     unverified_claims: int = 0
+    auto_retrievals: list[dict] = field(default_factory=list)
 
     def add_step(
         self,
@@ -96,6 +97,7 @@ class TaskRun:
             "final_text": self.final_text,
             "llm_calls": self.llm_calls,
             "unverified_claims": self.unverified_claims,
+            "auto_retrievals": list(self.auto_retrievals),
             "steps": [
                 {
                     "index": s.index,

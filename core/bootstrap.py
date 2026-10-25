@@ -116,6 +116,7 @@ class App:
     doc_index: Optional[DocumentIndex]
     paths: AppPaths
     provider: Any
+    retriever: Optional[Callable[[str], Any]] = None
 
 
 def build_app(
@@ -126,6 +127,8 @@ def build_app(
     limits: Optional[Limits] = None,
     on_event: Optional[Callable[[dict], None]] = None,
     system_prompt: Optional[str] = None,
+    doc_index: Optional[DocumentIndex] = None,
+    retriever: Optional[Callable[[str], Any]] = None,
 ) -> App:
     """Build and wire an ORBIT application instance with configured tools, policy, and logging."""
     if paths is None:
@@ -157,13 +160,21 @@ def build_app(
         registry.register(tool)
 
     # Initialize RAG document index and doc tools if FTS5 available
-    doc_index: Optional[DocumentIndex] = None
-    try:
-        doc_index = DocumentIndex(path=paths.rag_db)
+    if doc_index is None:
+        try:
+            doc_index = DocumentIndex(path=paths.rag_db)
+            for tool in make_doc_tools(doc_index, paths.docs):
+                registry.register(tool)
+        except IndexUnavailable:
+            doc_index = None
+    else:
         for tool in make_doc_tools(doc_index, paths.docs):
             registry.register(tool)
-    except IndexUnavailable:
-        doc_index = None
+
+    # Build automatic retriever if enabled
+    if retriever is None and getattr(settings, "RAG_AUTO", True) and doc_index is not None:
+        from rag.retrieval import auto_retrieve
+        retriever = lambda text: auto_retrieve(doc_index, text)
 
     # Initialize security policy and logging
     policy = PermissionPolicy()
@@ -183,6 +194,7 @@ def build_app(
         max_tool_calls=limits.max_tool_calls,
         max_consecutive_errors=limits.max_consecutive_errors,
         max_task_seconds=limits.max_seconds,
+        retriever=retriever,
     )
 
     return App(
@@ -194,4 +206,5 @@ def build_app(
         doc_index=doc_index,
         paths=paths,
         provider=provider,
+        retriever=retriever,
     )

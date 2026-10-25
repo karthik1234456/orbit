@@ -22,6 +22,7 @@ class CaseResult:
     final_text: str = ""
     error: Optional[str] = None
     unverified_claims: int = 0
+    auto_retrievals: list[dict] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.final_text:
@@ -37,7 +38,9 @@ class CaseResult:
         d = dict(data)
         if "final_text" in d and d["final_text"] is not None:
             d["final_text"] = str(d["final_text"])[:500]
-        return cls(**d)
+        valid_fields = {f for f in cls.__dataclass_fields__}
+        filtered = {k: v for k, v in d.items() if k in valid_fields}
+        return cls(**filtered)
 
 
 def wilson_interval(passed: int, total: int, z: float = 1.96) -> tuple[float, float]:
@@ -241,6 +244,37 @@ def aggregate(
         if refusal_cases_count > 0
         else "n/a"
     )
+
+    # 7. Auto-retrieval headline
+    all_auto_retrievals: list[dict] = []
+    for r in evaluated_results:
+        all_auto_retrievals.extend(getattr(r, "auto_retrievals", []) or [])
+
+    turns_searched = sum(1 for ar in all_auto_retrievals if ar.get("searched") is True)
+    total_injected = sum(int(ar.get("injected", 0) or 0) for ar in all_auto_retrievals)
+    not_found_notes = sum(1 for ar in all_auto_retrievals if bool(ar.get("note")))
+
+    total_turns_from_cases = sum(
+        len(getattr(case_map[r.id], "turns", []))
+        for r in evaluated_results
+        if r.id in case_map and getattr(case_map[r.id], "turns", None)
+    )
+    if total_turns_from_cases > 0:
+        total_eval_turns = max(total_turns_from_cases, len(all_auto_retrievals))
+    elif all_auto_retrievals:
+        total_eval_turns = len(all_auto_retrievals)
+    else:
+        total_eval_turns = len(evaluated_results)
+
+    auto_retrieval_headline = (
+        f"{turns_searched} of {total_eval_turns} turns searched, "
+        f"{total_injected} injected, {not_found_notes} not-found notes"
+    )
+    overall_stats["auto_retrieval_headline"] = auto_retrieval_headline
+    overall_stats["auto_retrieval_searched"] = turns_searched
+    overall_stats["auto_retrieval_total_turns"] = total_eval_turns
+    overall_stats["auto_retrieval_injected"] = total_injected
+    overall_stats["auto_retrieval_not_found_notes"] = not_found_notes
 
     overall_stats["tool_selection_accuracy"] = tool_selection_accuracy
     overall_stats["unnecessary_tool_rate"] = unnecessary_tool_rate

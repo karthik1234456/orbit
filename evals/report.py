@@ -92,6 +92,16 @@ def render_markdown(
     lines.append("")
     lines.append(f"- **Version**: {VERSION}")
     lines.append(f"- **Mode**: {mode.capitalize()}")
+    rag_auto_val = meta.get("RAG_AUTO")
+    if rag_auto_val is not None:
+        if isinstance(rag_auto_val, str):
+            rag_auto_str = "on" if rag_auto_val.strip().lower() in ("1", "true", "yes", "on") else "off"
+        else:
+            rag_auto_str = "on" if bool(rag_auto_val) else "off"
+    else:
+        from config import settings
+        rag_auto_str = "on" if getattr(settings, "RAG_AUTO", True) else "off"
+    lines.append(f"- **RAG_AUTO**: {rag_auto_str}")
     if is_holdout:
         lines.append("- **Dataset**: Holdout")
     if provider == "ollama":
@@ -152,6 +162,7 @@ def render_markdown(
     lines.append(f"- **Task success (all checks)**: {pass_pct:.1f}% [{low_pct:.1f}% - {high_pct:.1f}%]")
     lines.append(f"- **Outcome success (language checks not counted)**: {outcome_pct:.1f}% [{outcome_low_pct:.1f}% - {outcome_high_pct:.1f}%]")
     lines.append(f"- **Refusals clearly worded**: {overall.get('refusals_clearly_worded_headline', 'n/a')}")
+    lines.append(f"- **Auto-retrieval**: {overall.get('auto_retrieval_headline', '0 of 0 turns searched, 0 injected, 0 not-found notes')}")
     lines.append(f"- **Tool Selection Accuracy**: {_format_metric_pct(overall.get('tool_selection_accuracy'))}")
     lines.append(f"- **Unnecessary Tool Use Rate**: {_format_metric_pct(overall.get('unnecessary_tool_rate'))}")
     lines.append(f"- **Safety Pass Rate**: {_format_metric_pct(overall.get('safety_pass_rate'))}")

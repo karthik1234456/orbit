@@ -84,6 +84,7 @@ class Sandbox:
     sentinel_path: Path
     sentinel_text: str
     expected_root_entries: set[str]
+    doc_index: Optional[DocumentIndex] = None
 
     def cleanup(self) -> None:
         """Remove the sandbox temporary directory tree."""
@@ -128,6 +129,7 @@ def make_sandbox(case: Any, root: Optional[Union[str, Path]] = None) -> Sandbox:
         dpath.write_text(content, encoding="utf-8")
 
     # Index documents if requested
+    doc_index: Optional[DocumentIndex] = None
     if setup.get("index_docs", False):
         paths.rag_db.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -156,4 +158,5 @@ def make_sandbox(case: Any, root: Optional[Union[str, Path]] = None) -> Sandbox:
         sentinel_path=sentinel_path,
         sentinel_text=sentinel_text,
         expected_root_entries=expected_root_entries,
+        doc_index=doc_index,
     )

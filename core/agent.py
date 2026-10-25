@@ -46,6 +46,7 @@ class Agent:
         max_task_seconds: Optional[float] = None,
         memory_store: Optional[Any] = None,
         limits: Optional[Any] = None,
+        retriever: Optional[Callable[[str], Any]] = None,
     ):
         """Initialize agent with LLM provider, tool registry, permission policy, guards, and audit logger."""
         self.provider = provider
@@ -59,6 +60,7 @@ class Agent:
         self.on_event = on_event
         self.run_logger = run_logger or RunLogger()
         self.memory_store = memory_store
+        self.retriever = retriever
 
         if limits is not None:
             if hasattr(limits, "max_tool_calls") and max_tool_calls is None:
@@ -179,6 +181,97 @@ class Agent:
             mem_block = build_memory_block(self.memory_store, user_text)
             if mem_block:
                 extra_blocks.append(mem_block)
+
+        if self.retriever is not None and getattr(settings, "RAG_AUTO", True):
+            retrieval = None
+            retrieval_exc = None
+            try:
+                retrieval = self.retriever(user_text)
+            except Exception as exc:
+                retrieval_exc = exc
+
+            if retrieval is not None:
+                searched = bool(getattr(retrieval, "searched", False))
+                block = getattr(retrieval, "block", "") or ""
+                note = getattr(retrieval, "note", "") or ""
+                injected = int(getattr(retrieval, "injected", 0) or 0)
+                withheld = int(getattr(retrieval, "withheld", 0) or 0)
+                raw_terms = getattr(retrieval, "terms", [])
+                terms = list(raw_terms) if raw_terms else []
+                reason = str(getattr(retrieval, "reason", "") or "")
+
+                if block.strip():
+                    extra_blocks.append(block.strip())
+                    tainted = True
+                    retrieval_outcome = "injected"
+                elif note.strip():
+                    extra_blocks.append(note.strip())
+                    retrieval_outcome = "none"
+                else:
+                    retrieval_outcome = "none"
+
+                run.auto_retrievals.append({
+                    "terms": terms,
+                    "injected": injected,
+                    "withheld": withheld,
+                    "searched": searched,
+                    "reason": reason,
+                    "note": note,
+                })
+
+                self._emit_event({
+                    "type": "auto_retrieval",
+                    "injected": injected,
+                    "withheld": withheld,
+                })
+
+                if self.audit:
+                    try:
+                        self.audit.log(
+                            tool="auto_retrieval",
+                            args={},
+                            decision="auto_retrieval",
+                            outcome=retrieval_outcome,
+                            result=None,
+                            tainted=tainted,
+                        )
+                    except TypeError:
+                        self.audit.log(
+                            tool="auto_retrieval",
+                            args={},
+                            decision="auto_retrieval",
+                            outcome=retrieval_outcome,
+                        )
+            else:
+                run.auto_retrievals.append({
+                    "terms": [],
+                    "injected": 0,
+                    "withheld": 0,
+                    "searched": False,
+                    "reason": f"error: {retrieval_exc}",
+                })
+                self._emit_event({
+                    "type": "auto_retrieval",
+                    "injected": 0,
+                    "withheld": 0,
+                })
+                if self.audit:
+                    try:
+                        self.audit.log(
+                            tool="auto_retrieval",
+                            args={},
+                            decision="auto_retrieval",
+                            outcome="none",
+                            result=None,
+                            tainted=tainted,
+                        )
+                    except TypeError:
+                        self.audit.log(
+                            tool="auto_retrieval",
+                            args={},
+                            decision="auto_retrieval",
+                            outcome="none",
+                        )
 
         if extra_system_text:
             if isinstance(extra_system_text, str):

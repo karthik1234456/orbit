@@ -507,6 +507,16 @@ class OrbitWindow:
                 self.activity_tree.insert("", "end", iid=item_id, values=(idx, display_tool, status, result))
             self.activity_tree.yview_moveto(1.0)
 
+        elif kind == "auto_retrieval":
+            injected = int(data.get("injected", 0) or 0)
+            if injected > 0:
+                self.activity_tree.insert(
+                    "",
+                    "end",
+                    values=("", "documents", "retrieved", f"Searched your documents: {injected} passages"),
+                )
+                self.activity_tree.yview_moveto(1.0)
+
         elif kind == "confirm_request":
             req = data.get("request")
             if req is not None:

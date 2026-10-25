@@ -118,7 +118,7 @@ class ChatController:
             if not isinstance(event, dict):
                 return
             etype = event.get("type")
-            if etype in ("step_start", "step_end", "task_end"):
+            if etype in ("step_start", "step_end", "task_end", "auto_retrieval"):
                 self._emit(etype, dict(event))
         except Exception:
             pass

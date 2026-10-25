@@ -345,3 +345,30 @@ def test_error_event_shows_red_error_message():
         assert "Error: Simulated quota error" in chat_content
     finally:
         root.destroy()
+
+
+def test_activity_tab_shows_auto_retrieval_passages():
+    """Verify auto_retrieval event with injected > 0 adds a row in Activity tab."""
+    root = make_test_root()
+    try:
+        ctrl = FakeController()
+        win = OrbitWindow(root, ctrl, mode_label="MOCK")
+
+        ctrl.events.append(UiEvent("auto_retrieval", {"injected": 3, "withheld": 0}))
+        win._poll()
+        root.update_idletasks()
+
+        children = win.activity_tree.get_children()
+        assert len(children) == 1
+        item_vals = win.activity_tree.item(children[0], "values")
+        assert "Searched your documents: 3 passages" in str(item_vals[3])
+
+        # If injected is 0, no additional item is inserted
+        ctrl.events.append(UiEvent("auto_retrieval", {"injected": 0, "withheld": 1}))
+        win._poll()
+        root.update_idletasks()
+
+        assert len(win.activity_tree.get_children()) == 1
+    finally:
+        root.destroy()
+

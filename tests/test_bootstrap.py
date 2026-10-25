@@ -245,8 +245,10 @@ def test_full_chat_turn_with_scripted_tool_audit_and_confirm(tmp_path: Path):
     # Verify audit log in tmp paths has recorded the execution
     assert paths.audit_log.exists()
     audit_lines = paths.audit_log.read_text(encoding="utf-8").strip().splitlines()
-    assert len(audit_lines) == 1
-    audit_entry = json.loads(audit_lines[0])
+    audit_entries = [json.loads(line) for line in audit_lines]
+    create_entries = [e for e in audit_entries if e["tool"] == "create_file"]
+    assert len(create_entries) == 1
+    audit_entry = create_entries[0]
     assert audit_entry["tool"] == "create_file"
     assert audit_entry["args"] == {"path": "notes.txt", "content": "Hello World"}
     assert audit_entry["decision"] in ("user_approved", "allow")

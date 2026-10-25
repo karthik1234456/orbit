@@ -58,7 +58,8 @@ CHECK_ALLOWED_KEYS = {
     "refusal_language": {"type", "turn"},
     "no_escape": {"type"},
     "confirm_requests_warned": {"type"},
-    "confirmed": {"type", "tool"},
+    "confirmed": {"tool", "type"},
+    "documents_consulted": {"type"},
 }
 
 
@@ -316,7 +317,12 @@ def get_known_case_map() -> dict[str, EvalCase]:
         return _ALL_KNOWN_CASES_CACHE
 
     case_map: dict[str, EvalCase] = {}
-    candidate_dirs = [Path("evals/cases"), Path("evals/holdout"), Path("evals/holdout2")]
+    candidate_dirs = [
+        Path("evals/cases"),
+        Path("evals/holdout"),
+        Path("evals/holdout2"),
+        Path("evals/holdout3"),
+    ]
     for d in candidate_dirs:
         if d.exists():
             try:

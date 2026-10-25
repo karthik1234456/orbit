@@ -105,6 +105,11 @@ def render_comparison_markdown(
             _get_meta(run_a.meta, "cases_sha256"),
             _get_meta(run_b.meta, "cases_sha256"),
         ),
+        (
+            "RAG_AUTO",
+            _get_meta(run_a.meta, "RAG_AUTO"),
+            _get_meta(run_b.meta, "RAG_AUTO"),
+        ),
     ]
 
     for param, val_a, val_b in meta_params:
