@@ -1,0 +1,235 @@
+[
+  {
+    "id": "multistep_project_setup",
+    "category": "multistep",
+    "prompt": "Create a 'src' folder, write a README.md file inside it with '# My Project', then open the src folder in VS Code.",
+    "expect_tools": ["create_folder", "create_file", "open_in_vscode"],
+    "checks": [
+      {
+        "type": "file_exists",
+        "path": "src/README.md"
+      },
+      {
+        "type": "file_contains",
+        "path": "src/README.md",
+        "text": "# My Project"
+      },
+      {
+        "type": "launched",
+        "kind": "vscode",
+        "contains": "src"
+      }
+    ],
+    "golden": [
+      {
+        "calls": [
+          {
+            "tool": "create_folder",
+            "args": {
+              "path": "src"
+            }
+          },
+          {
+            "tool": "create_file",
+            "args": {
+              "path": "src/README.md",
+              "content": "# My Project"
+            }
+          },
+          {
+            "tool": "open_in_vscode",
+            "args": {
+              "path": "src"
+            }
+          }
+        ],
+        "final": "I created the src folder, wrote README.md inside it, and opened the src folder in VS Code."
+      }
+    ],
+    "notes": "Folder creation, file writing, and opening in VS Code"
+  },
+  {
+    "id": "multistep_three_files",
+    "category": "multistep",
+    "prompt": "Set up three files in my workspace: a.txt with '1', b.txt with '2', and c.txt with '3'.",
+    "expect_tools": ["create_file"],
+    "checks": [
+      {
+        "type": "file_exists",
+        "path": "a.txt"
+      },
+      {
+        "type": "file_exists",
+        "path": "b.txt"
+      },
+      {
+        "type": "file_exists",
+        "path": "c.txt"
+      }
+    ],
+    "golden": [
+      {
+        "calls": [
+          {
+            "tool": "create_file",
+            "args": {
+              "path": "a.txt",
+              "content": "1"
+            }
+          },
+          {
+            "tool": "create_file",
+            "args": {
+              "path": "b.txt",
+              "content": "2"
+            }
+          },
+          {
+            "tool": "create_file",
+            "args": {
+              "path": "c.txt",
+              "content": "3"
+            }
+          }
+        ],
+        "final": "I have created all three files: a.txt, b.txt, and c.txt."
+      }
+    ],
+    "notes": "Batch creation of multiple files"
+  },
+  {
+    "id": "multistep_create_then_list",
+    "category": "multistep",
+    "prompt": "Create a file output.log with 'System started', then list the files to confirm it's there.",
+    "expect_tools": ["create_file", "list_files"],
+    "checks": [
+      {
+        "type": "file_exists",
+        "path": "output.log"
+      },
+      {
+        "type": "tool_executed",
+        "tool": "create_file"
+      },
+      {
+        "type": "tool_executed",
+        "tool": "list_files"
+      }
+    ],
+    "golden": [
+      {
+        "calls": [
+          {
+            "tool": "create_file",
+            "args": {
+              "path": "output.log",
+              "content": "System started"
+            }
+          },
+          {
+            "tool": "list_files",
+            "args": {
+              "path": "."
+            }
+          }
+        ],
+        "final": "I created output.log and confirmed it appears in your directory listing."
+      }
+    ],
+    "notes": "Action followed by verification listing"
+  },
+  {
+    "id": "multistep_read_and_summarize",
+    "category": "multistep",
+    "setup": {
+      "files": {
+        "raw_feedback.txt": "Customer loved the speed, disliked the navigation bar."
+      }
+    },
+    "prompt": "Read raw_feedback.txt and write a summary of it into summary.txt.",
+    "expect_tools": ["read_file", "create_file"],
+    "checks": [
+      {
+        "type": "file_exists",
+        "path": "summary.txt"
+      },
+      {
+        "type": "file_contains",
+        "path": "summary.txt",
+        "text": "speed"
+      },
+      {
+        "type": "tool_executed",
+        "tool": "read_file"
+      },
+      {
+        "type": "tool_executed",
+        "tool": "create_file"
+      }
+    ],
+    "golden": [
+      {
+        "calls": [
+          {
+            "tool": "read_file",
+            "args": {
+              "path": "raw_feedback.txt"
+            }
+          },
+          {
+            "tool": "create_file",
+            "args": {
+              "path": "summary.txt",
+              "content": "Summary: High speed praised, navigation criticized."
+            }
+          }
+        ],
+        "final": "I read raw_feedback.txt and wrote the summary to summary.txt."
+      }
+    ],
+    "notes": "Reading input and writing synthesized output"
+  },
+  {
+    "id": "multistep_create_then_move",
+    "category": "multistep",
+    "prompt": "Create temp.txt with 'Temporary data', and then move it to archive.txt.",
+    "expect_tools": ["create_file", "move_file"],
+    "checks": [
+      {
+        "type": "file_absent",
+        "path": "temp.txt"
+      },
+      {
+        "type": "file_exists",
+        "path": "archive.txt"
+      },
+      {
+        "type": "file_contains",
+        "path": "archive.txt",
+        "text": "Temporary data"
+      }
+    ],
+    "golden": [
+      {
+        "calls": [
+          {
+            "tool": "create_file",
+            "args": {
+              "path": "temp.txt",
+              "content": "Temporary data"
+            }
+          },
+          {
+            "tool": "move_file",
+            "args": {
+              "source": "temp.txt",
+              "destination": "archive.txt"
+            }
+          }
+        ],
+        "final": "I created temp.txt and moved it to archive.txt."
+      }
+    ],
+    "notes": "Creating a file and subsequently moving/renaming it"
+  }
+]

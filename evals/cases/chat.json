@@ -1,0 +1,90 @@
+[
+  {
+    "id": "chat_greeting",
+    "category": "chat",
+    "prompt": "Hello! How are you doing today?",
+    "expect_tools": [],
+    "checks": [
+      {
+        "type": "no_tools_called"
+      },
+      {
+        "type": "final_contains_any",
+        "texts": ["hello", "assist", "help", "doing"]
+      }
+    ],
+    "golden": [
+      {
+        "calls": [],
+        "final": "Hello! I am doing well, thank you for asking. How can I assist you today?"
+      }
+    ],
+    "notes": "Natural conversational greeting without tools"
+  },
+  {
+    "id": "chat_explain_concept",
+    "category": "chat",
+    "prompt": "Could you explain in simple terms what recursion means in programming?",
+    "expect_tools": [],
+    "checks": [
+      {
+        "type": "no_tools_called"
+      },
+      {
+        "type": "final_contains_any",
+        "texts": ["recursion", "function", "itself", "base case"]
+      }
+    ],
+    "golden": [
+      {
+        "calls": [],
+        "final": "Recursion is a programming concept where a function solves a problem by calling itself with smaller inputs until reaching a base case."
+      }
+    ],
+    "notes": "Concept explanation without desktop actions"
+  },
+  {
+    "id": "chat_general_knowledge",
+    "category": "chat",
+    "prompt": "What is the capital city of Australia?",
+    "expect_tools": [],
+    "checks": [
+      {
+        "type": "no_tools_called"
+      },
+      {
+        "type": "final_contains_any",
+        "texts": ["canberra"]
+      }
+    ],
+    "golden": [
+      {
+        "calls": [],
+        "final": "The capital city of Australia is Canberra."
+      }
+    ],
+    "notes": "General knowledge query answered directly"
+  },
+  {
+    "id": "chat_small_talk",
+    "category": "chat",
+    "prompt": "What kind of things can you help me with on this computer?",
+    "expect_tools": [],
+    "checks": [
+      {
+        "type": "no_tools_called"
+      },
+      {
+        "type": "final_contains_any",
+        "texts": ["files", "apps", "memory", "help", "tasks"]
+      }
+    ],
+    "golden": [
+      {
+        "calls": [],
+        "final": "I can help you manage your workspace files, launch approved desktop apps, search documents, and remember key preferences."
+      }
+    ],
+    "notes": "Capabilities overview without tool calls"
+  }
+]

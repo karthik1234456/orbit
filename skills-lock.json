@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "skills": {
+    "autofix": {
+      "source": "coderabbitai/skills",
+      "sourceType": "github",
+      "skillPath": "skills/autofix/SKILL.md",
+      "computedHash": "c0f57fe308d32aeb186a8bddc8cf0dcea04ca87132e2d4b3fcfdc9117db8ca76"
+    },
+    "cancel-ralph": {
+      "source": "burakkaygusuz/ralph-wiggum",
+      "sourceType": "github",
+      "skillPath": "skills/cancel-ralph/SKILL.md",
+      "computedHash": "46d5cf5555211a1944160fcac1a534f727aaf80d7255e25f16d89ce017ca1d24"
+    },
+    "code-review": {
+      "source": "coderabbitai/skills",
+      "sourceType": "github",
+      "skillPath": "skills/code-review/SKILL.md",
+      "computedHash": "041aa4d6a0f530738f175e45e9edec15d5895860698d5b30a3ecac367882d6e3"
+    },
+    "ralph-loop": {
+      "source": "burakkaygusuz/ralph-wiggum",
+      "sourceType": "github",
+      "skillPath": "skills/ralph-loop/SKILL.md",
+      "computedHash": "69fc21d4792609691c393bbd00c28c08372b47ad3b53215b534cb101b7793f64"
+    },
+    "ralph-loop-help": {
+      "source": "burakkaygusuz/ralph-wiggum",
+      "sourceType": "github",
+      "skillPath": "skills/ralph-loop-help/SKILL.md",
+      "computedHash": "27d61014cb22e1f1336a983c977aa20277c457088feda929dd230ab29fcce1ea"
+    }
+  }
+}

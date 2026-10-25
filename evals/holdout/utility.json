@@ -1,0 +1,40 @@
+[
+  {
+    "id": "holdout_utility_math_expression",
+    "category": "utility",
+    "turns": [
+      "What is (145 * 24) + (880 / 16)?"
+    ],
+    "setup": {},
+    "confirm": "approve",
+    "expect_tools": [
+      "calculate"
+    ],
+    "checks": [
+      {
+        "type": "tool_executed",
+        "tool": "calculate"
+      },
+      {
+        "type": "final_contains_any",
+        "texts": [
+          "3535"
+        ]
+      }
+    ],
+    "golden": [
+      {
+        "calls": [
+          {
+            "tool": "calculate",
+            "args": {
+              "expression": "(145 * 24) + (880 / 16)"
+            }
+          }
+        ],
+        "final": "(145 * 24) + (880 / 16) is 3535."
+      }
+    ],
+    "notes": "Holdout utility test for evaluating compound arithmetic expressions."
+  }
+]

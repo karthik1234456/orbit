@@ -1,0 +1,9 @@
+google-genai
+python-dotenv
+pytest
+psutil
+faster-whisper
+sounddevice
+numpy
+pyttsx3
+requests

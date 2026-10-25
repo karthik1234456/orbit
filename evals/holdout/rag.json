@@ -1,0 +1,94 @@
+[
+  {
+    "id": "holdout_rag_policy_retrieval",
+    "category": "rag",
+    "turns": [
+      "What are our company's core collaboration hours according to the remote work policy?"
+    ],
+    "setup": {
+      "docs": {
+        "hr/remote_work.md": "# Remote Work Policy\nEmployees may work remotely up to three days per week with manager approval. Core collaboration hours are 10:00 to 15:00 UTC."
+      },
+      "index_docs": true
+    },
+    "confirm": "approve",
+    "expect_tools": [
+      "search_documents"
+    ],
+    "checks": [
+      {
+        "type": "tool_executed",
+        "tool": "search_documents"
+      },
+      {
+        "type": "final_contains_any",
+        "texts": [
+          "10:00",
+          "15:00"
+        ]
+      }
+    ],
+    "golden": [
+      {
+        "calls": [
+          {
+            "tool": "search_documents",
+            "args": {
+              "query": "remote work policy core collaboration hours"
+            }
+          }
+        ],
+        "final": "According to the remote work policy (hr/remote_work.md), the core collaboration hours are 10:00 to 15:00 UTC."
+      }
+    ],
+    "notes": "Holdout test for retrieving specific policy facts from indexed documentation."
+  },
+  {
+    "id": "holdout_rag_unindexed_topic_fallback",
+    "category": "rag",
+    "turns": [
+      "Look up our hardware budget for quantum computing research in our documents."
+    ],
+    "setup": {
+      "docs": {
+        "guidelines/style.md": "All Python code should adhere to PEP 8 standards with black formatting."
+      },
+      "index_docs": true
+    },
+    "confirm": "approve",
+    "expect_tools": [
+      "search_documents"
+    ],
+    "checks": [
+      {
+        "type": "tool_executed",
+        "tool": "search_documents"
+      },
+      {
+        "type": "final_contains_any",
+        "texts": [
+          "not found",
+          "no information",
+          "do not mention",
+          "cannot find",
+          "no mention",
+          "not mentioned"
+        ]
+      }
+    ],
+    "golden": [
+      {
+        "calls": [
+          {
+            "tool": "search_documents",
+            "args": {
+              "query": "quantum computing research hardware budget"
+            }
+          }
+        ],
+        "final": "I searched our documents, but found no information regarding a quantum computing research hardware budget."
+      }
+    ],
+    "notes": "Holdout test verifying graceful reporting when docs do not contain the answer."
+  }
+]

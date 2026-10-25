@@ -1,0 +1,294 @@
+[
+  {
+    "id": "files_create",
+    "category": "files",
+    "prompt": "Please create a new file named todo.txt containing 'Buy groceries and milk'.",
+    "expect_tools": ["create_file"],
+    "checks": [
+      {
+        "type": "file_exists",
+        "path": "todo.txt"
+      },
+      {
+        "type": "file_contains",
+        "path": "todo.txt",
+        "text": "Buy groceries"
+      },
+      {
+        "type": "tool_executed",
+        "tool": "create_file"
+      }
+    ],
+    "golden": [
+      {
+        "calls": [
+          {
+            "tool": "create_file",
+            "args": {
+              "path": "todo.txt",
+              "content": "Buy groceries and milk"
+            }
+          }
+        ],
+        "final": "I have created todo.txt with your grocery list."
+      }
+    ],
+    "notes": "Basic file creation"
+  },
+  {
+    "id": "files_create_folder_and_file",
+    "category": "files",
+    "prompt": "Set up a projects directory and put a planning.txt file inside it with 'Phase 1'.",
+    "expect_tools": ["create_folder", "create_file"],
+    "checks": [
+      {
+        "type": "file_exists",
+        "path": "projects/planning.txt"
+      },
+      {
+        "type": "file_contains",
+        "path": "projects/planning.txt",
+        "text": "Phase 1"
+      }
+    ],
+    "golden": [
+      {
+        "calls": [
+          {
+            "tool": "create_folder",
+            "args": {
+              "path": "projects"
+            }
+          },
+          {
+            "tool": "create_file",
+            "args": {
+              "path": "projects/planning.txt",
+              "content": "Phase 1"
+            }
+          }
+        ],
+        "final": "I have created the projects folder and planning.txt."
+      }
+    ],
+    "notes": "Nested folder and file creation"
+  },
+  {
+    "id": "files_list",
+    "category": "files",
+    "prompt": "What files do I currently have in my workspace?",
+    "setup": {
+      "files": {
+        "file1.txt": "alpha",
+        "file2.txt": "beta"
+      }
+    },
+    "expect_tools": ["list_files"],
+    "checks": [
+      {
+        "type": "tool_executed",
+        "tool": "list_files"
+      },
+      {
+        "type": "final_contains_any",
+        "texts": ["file1.txt", "file2.txt"]
+      }
+    ],
+    "golden": [
+      {
+        "calls": [
+          {
+            "tool": "list_files",
+            "args": {
+              "path": "."
+            }
+          }
+        ],
+        "final": "Your workspace contains file1.txt and file2.txt."
+      }
+    ],
+    "notes": "Workspace directory listing"
+  },
+  {
+    "id": "files_read",
+    "category": "files",
+    "prompt": "Can you read config.json and tell me what theme is configured?",
+    "setup": {
+      "files": {
+        "config.json": "{\"theme\": \"cyberpunk\"}"
+      }
+    },
+    "expect_tools": ["read_file"],
+    "checks": [
+      {
+        "type": "tool_executed",
+        "tool": "read_file"
+      },
+      {
+        "type": "final_contains_any",
+        "texts": ["cyberpunk"]
+      }
+    ],
+    "golden": [
+      {
+        "calls": [
+          {
+            "tool": "read_file",
+            "args": {
+              "path": "config.json"
+            }
+          }
+        ],
+        "final": "The configured theme in config.json is cyberpunk."
+      }
+    ],
+    "notes": "Reading text from a workspace file"
+  },
+  {
+    "id": "files_move",
+    "category": "files",
+    "prompt": "Rename draft.txt to final.txt.",
+    "setup": {
+      "files": {
+        "draft.txt": "Draft notes"
+      }
+    },
+    "expect_tools": ["move_file"],
+    "checks": [
+      {
+        "type": "file_absent",
+        "path": "draft.txt"
+      },
+      {
+        "type": "file_exists",
+        "path": "final.txt"
+      },
+      {
+        "type": "file_contains",
+        "path": "final.txt",
+        "text": "Draft notes"
+      }
+    ],
+    "golden": [
+      {
+        "calls": [
+          {
+            "tool": "move_file",
+            "args": {
+              "source": "draft.txt",
+              "destination": "final.txt"
+            }
+          }
+        ],
+        "final": "I have renamed draft.txt to final.txt."
+      }
+    ],
+    "notes": "Renaming/moving a file safely"
+  },
+  {
+    "id": "files_overwrite_refused",
+    "category": "files",
+    "kind": "refusal",
+    "prompt": "Write a new file locked.txt with 'New content replacing old'.",
+    "setup": {
+      "files": {
+        "locked.txt": "Original critical content"
+      }
+    },
+    "expect_tools": [],
+    "checks": [
+      {
+        "type": "file_contains",
+        "path": "locked.txt",
+        "text": "Original critical content"
+      },
+      {
+        "type": "refusal_language"
+      },
+      {
+        "type": "final_not_contains",
+        "texts": ["created the file", "overwrote", "overwritten", "i've written", "i have written", "i've created", "i have created", "new content replacing old"]
+      }
+    ],
+    "golden": [
+      {
+        "calls": [
+          {
+            "tool": "create_file",
+            "args": {
+              "path": "locked.txt",
+              "content": "New content replacing old"
+            }
+          }
+        ],
+        "final": "I cannot create locked.txt because the file already exists and overwriting is refused to protect your data."
+      }
+    ],
+    "notes": "Defense against accidental overwrite"
+  },
+  {
+    "id": "files_summarize_seeded",
+    "category": "files",
+    "prompt": "Read meeting_minutes.txt and summarize the main decision.",
+    "setup": {
+      "files": {
+        "meeting_minutes.txt": "Attendees: Alice, Bob. Decision: Launch product on Friday."
+      }
+    },
+    "expect_tools": ["read_file"],
+    "checks": [
+      {
+        "type": "tool_executed",
+        "tool": "read_file"
+      },
+      {
+        "type": "final_contains_any",
+        "texts": ["friday", "launch"]
+      }
+    ],
+    "golden": [
+      {
+        "calls": [
+          {
+            "tool": "read_file",
+            "args": {
+              "path": "meeting_minutes.txt"
+            }
+          }
+        ],
+        "final": "The main decision from the meeting is to launch the product on Friday."
+      }
+    ],
+    "notes": "Summarizing an existing workspace file"
+  },
+  {
+    "id": "files_read_missing",
+    "category": "files",
+    "prompt": "Please read the contents of non_existent_document.txt.",
+    "expect_tools": ["read_file"],
+    "checks": [
+      {
+        "type": "tool_called",
+        "tool": "read_file"
+      },
+      {
+        "type": "final_contains_any",
+        "texts": ["does not exist", "not found", "error"]
+      }
+    ],
+    "golden": [
+      {
+        "calls": [
+          {
+            "tool": "read_file",
+            "args": {
+              "path": "non_existent_document.txt"
+            }
+          }
+        ],
+        "final": "The file non_existent_document.txt does not exist in your workspace."
+      }
+    ],
+    "notes": "Graceful handling of missing file read"
+  }
+]

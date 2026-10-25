@@ -1,0 +1,87 @@
+[
+  {
+    "id": "holdout_files_create_json_config",
+    "category": "files",
+    "turns": [
+      "Create a configuration file at configs/database.json with port 5432 and host localhost."
+    ],
+    "setup": {},
+    "confirm": "approve",
+    "expect_tools": [
+      "create_file"
+    ],
+    "checks": [
+      {
+        "type": "tool_executed",
+        "tool": "create_file"
+      },
+      {
+        "type": "file_exists",
+        "path": "configs/database.json"
+      },
+      {
+        "type": "file_contains",
+        "path": "configs/database.json",
+        "text": "5432"
+      }
+    ],
+    "golden": [
+      {
+        "calls": [
+          {
+            "tool": "create_file",
+            "args": {
+              "path": "configs/database.json",
+              "content": "{\n  \"host\": \"localhost\",\n  \"port\": 5432\n}\n"
+            }
+          }
+        ],
+        "final": "I have created the configuration file configs/database.json with host localhost and port 5432."
+      }
+    ],
+    "notes": "Holdout test for creating a nested JSON configuration file."
+  },
+  {
+    "id": "holdout_files_read_and_report_error",
+    "category": "files",
+    "turns": [
+      "Read logs/app_events.log and tell me what error occurred."
+    ],
+    "setup": {
+      "files": {
+        "logs/app_events.log": "INFO: Service started\nWARN: High latency on endpoint /metrics\nINFO: Worker connection pool initialized\nERROR: Failed to reach cache node\n"
+      }
+    },
+    "confirm": "approve",
+    "expect_tools": [
+      "read_file"
+    ],
+    "checks": [
+      {
+        "type": "tool_executed",
+        "tool": "read_file"
+      },
+      {
+        "type": "final_contains_any",
+        "texts": [
+          "cache node",
+          "reach cache"
+        ]
+      }
+    ],
+    "golden": [
+      {
+        "calls": [
+          {
+            "tool": "read_file",
+            "args": {
+              "path": "logs/app_events.log"
+            }
+          }
+        ],
+        "final": "According to logs/app_events.log, the error that occurred is: Failed to reach cache node."
+      }
+    ],
+    "notes": "Holdout test for reading a seeded log file and extracting error details."
+  }
+]

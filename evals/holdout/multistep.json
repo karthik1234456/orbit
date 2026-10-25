@@ -1,0 +1,128 @@
+[
+  {
+    "id": "holdout_multistep_build_module_structure",
+    "category": "multistep",
+    "turns": [
+      "Set up a Python package by creating directory 'pkg', an empty 'pkg/__init__.py', and 'pkg/core.py' with function greet()."
+    ],
+    "setup": {},
+    "confirm": "approve",
+    "expect_tools": [
+      "create_folder",
+      "create_file"
+    ],
+    "checks": [
+      {
+        "type": "tool_executed",
+        "tool": "create_folder"
+      },
+      {
+        "type": "tool_executed",
+        "tool": "create_file"
+      },
+      {
+        "type": "file_exists",
+        "path": "pkg/__init__.py"
+      },
+      {
+        "type": "file_exists",
+        "path": "pkg/core.py"
+      },
+      {
+        "type": "file_contains",
+        "path": "pkg/core.py",
+        "text": "def greet"
+      }
+    ],
+    "golden": [
+      {
+        "calls": [
+          {
+            "tool": "create_folder",
+            "args": {
+              "path": "pkg"
+            }
+          },
+          {
+            "tool": "create_file",
+            "args": {
+              "path": "pkg/__init__.py",
+              "content": ""
+            }
+          },
+          {
+            "tool": "create_file",
+            "args": {
+              "path": "pkg/core.py",
+              "content": "def greet(name: str) -> str:\n    return f\"Hello, {name}!\"\n"
+            }
+          }
+        ],
+        "final": "I have set up the Python package directory 'pkg' with '__init__.py' and 'core.py' containing the greet() function."
+      }
+    ],
+    "notes": "Holdout multistep test for directory creation and multiple file initializations."
+  },
+  {
+    "id": "holdout_multistep_backup_and_cleanup",
+    "category": "multistep",
+    "turns": [
+      "Move data/raw.csv to backup/raw_backup.csv and then create a new empty data/raw.csv."
+    ],
+    "setup": {
+      "files": {
+        "data/raw.csv": "id,val\n1,alpha\n2,beta\n"
+      }
+    },
+    "confirm": "approve",
+    "expect_tools": [
+      "move_file",
+      "create_file"
+    ],
+    "checks": [
+      {
+        "type": "tool_executed",
+        "tool": "move_file"
+      },
+      {
+        "type": "tool_executed",
+        "tool": "create_file"
+      },
+      {
+        "type": "file_exists",
+        "path": "backup/raw_backup.csv"
+      },
+      {
+        "type": "file_contains",
+        "path": "backup/raw_backup.csv",
+        "text": "alpha"
+      },
+      {
+        "type": "file_exists",
+        "path": "data/raw.csv"
+      }
+    ],
+    "golden": [
+      {
+        "calls": [
+          {
+            "tool": "move_file",
+            "args": {
+              "source": "data/raw.csv",
+              "destination": "backup/raw_backup.csv"
+            }
+          },
+          {
+            "tool": "create_file",
+            "args": {
+              "path": "data/raw.csv",
+              "content": ""
+            }
+          }
+        ],
+        "final": "I have moved data/raw.csv to backup/raw_backup.csv and created a fresh empty data/raw.csv."
+      }
+    ],
+    "notes": "Holdout multistep test for file move followed by recreating source file."
+  }
+]
