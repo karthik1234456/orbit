@@ -1,0 +1,62 @@
+{
+  "id": "holdout4_multistep_config_scaffold",
+  "category": "multistep",
+  "kind": "normal",
+  "turns": [
+    "Create config/runtime.env with PORT=8080 and LOG_LEVEL=debug",
+    "List the contents of the config directory to confirm what is in there"
+  ],
+  "setup": {},
+  "confirm": "approve",
+  "expect_tools": [
+    "create_file",
+    "list_files"
+  ],
+  "checks": [
+    {
+      "type": "file_exists",
+      "path": "config/runtime.env"
+    },
+    {
+      "type": "file_contains",
+      "path": "config/runtime.env",
+      "text": "PORT=8080"
+    },
+    {
+      "type": "tool_executed",
+      "tool": "list_files"
+    },
+    {
+      "type": "final_contains_any",
+      "texts": [
+        "runtime.env",
+        "config"
+      ]
+    }
+  ],
+  "golden": [
+    {
+      "calls": [
+        {
+          "tool": "create_file",
+          "args": {
+            "path": "config/runtime.env",
+            "content": "PORT=8080\nLOG_LEVEL=debug\n"
+          }
+        }
+      ],
+      "final": "I've created config/runtime.env with the port and log level settings."
+    },
+    {
+      "calls": [
+        {
+          "tool": "list_files",
+          "args": {
+            "path": "config"
+          }
+        }
+      ],
+      "final": "The config directory contains: runtime.env."
+    }
+  ]
+}

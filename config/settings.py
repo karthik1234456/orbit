@@ -111,11 +111,28 @@ RAG_TOP_K: int = int(os.getenv("RAG_TOP_K", "4"))
 RAG_MAX_CHARS: int = int(os.getenv("RAG_MAX_CHARS", "2500"))
 RAG_INCLUDE_FLAGGED: bool = os.getenv("RAG_INCLUDE_FLAGGED", "false").lower() in ("true", "1", "yes")
 
+ALLOWED_RAG_AUTO_SCORING = ("fraction", "rarest3", "idf")
+
+
+def _parse_rag_auto_scoring(val: Optional[str], default: str = "fraction") -> str:
+    if val is None or not val.strip():
+        return default
+    v = val.strip().lower()
+    if v in ALLOWED_RAG_AUTO_SCORING:
+        return v
+    msg = f"Unknown RAG_AUTO_SCORING '{val}'; falling back to '{default}'."
+    logger.warning(msg)
+    warnings.warn(msg, UserWarning, stacklevel=2)
+    return default
+
+
 RAG_AUTO: bool = _parse_bool(os.getenv("RAG_AUTO"), True)
 RAG_AUTO_MIN_TERMS: int = _parse_int(os.getenv("RAG_AUTO_MIN_TERMS"), 2)
 RAG_AUTO_MIN_COVERAGE: float = _parse_float(os.getenv("RAG_AUTO_MIN_COVERAGE"), 0.5)
 RAG_AUTO_TOP_K: int = _parse_int(os.getenv("RAG_AUTO_TOP_K"), 3)
 RAG_AUTO_MAX_CHARS: int = _parse_int(os.getenv("RAG_AUTO_MAX_CHARS"), 1500)
+RAG_AUTO_SCORING: str = _parse_rag_auto_scoring(os.getenv("RAG_AUTO_SCORING"), "fraction")
+
 
 STT_MODEL: str = os.getenv("STT_MODEL", "base.en")
 STT_LANGUAGE: str = os.getenv("STT_LANGUAGE", "en")

@@ -1,0 +1,31 @@
+{
+  "id": "holdout4_rag_chem_waste_neutralizer",
+  "category": "rag",
+  "kind": "normal",
+  "prompt": "What neutralizing reagent is required for an acid spill in the etching bay?",
+  "setup": {
+    "docs": {
+      "hazmat_handling_sop.md": "# Wet Etching Bay Acid Spill Protocol\nIn the event of an acid spill in the etching bay, the designated neutralizing reagent is sodium carbonate powder (anhydrous soda ash). Personnel must deploy the neutralizing reagent powder immediately across the spill."
+    },
+    "index_docs": true
+  },
+  "expect_tools": [],
+  "checks": [
+    {
+      "type": "documents_consulted"
+    },
+    {
+      "type": "final_contains_any",
+      "texts": [
+        "sodium carbonate",
+        "soda ash"
+      ]
+    }
+  ],
+  "golden": [
+    {
+      "calls": [],
+      "final": "According to the hazmat handling protocol, sodium carbonate powder (soda ash) is the required neutralizing reagent for an acid spill in the etching bay."
+    }
+  ]
+}

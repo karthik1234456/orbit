@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.7.0] - 2026-10-18
+
+### v1.7 Retrieval Evaluation
+- **Selection Rule Written in Advance**:
+  - The rule was written in the project chat before the sweep was run and is not otherwise timestamped in the repo:
+  - "Eligible only if there are at most 1 false injection across the 34 general questions (10 easy-dev, 4 hard-dev, 20 guard-dev) and at most 1 irrelevant block across the 10 personal-no-answer questions (4 hard-dev, 6 easy-dev). Among eligible methods pick the highest hard-dev recall; ties go to the lower wrong-document rate, then the simpler method (fraction before rarest3 before idf). Outdated-document labelling is adopted if its tests pass and recall does not drop."
+- **Methods Sweep Results**:
+  Sweep table copied from `evals/results/retrieval-sweep-methods-20261018_211243.md`:
+
+| Method | Hard-dev Recall | Wrong-Doc Rate | Outdated-Inj Rate | Easy Recall | Easy False-Inj | Guard False-Inj | Hard PNA Block | Easy PNA Block |
+|---|---|---|---|---|---|---|---|---|
+| `fraction@0.5` | 50.0% (8/16) | 12.5% (2/16) | 12.5% (2/16) | 100.0% (14/14) | 0.0% (0/10) | 0.0% (0/20) | 0/4 | 0/6 |
+| `rarest3@0.5` | 87.5% (14/16) | 6.2% (1/16) | 25.0% (4/16) | 100.0% (14/14) | 40.0% (4/10) | 45.0% (9/20) | 1/4 | 3/6 |
+| `idf@0.4` | 100.0% (16/16) | 18.8% (3/16) | 25.0% (4/16) | 100.0% (14/14) | 40.0% (4/10) | 45.0% (9/20) | 1/4 | 6/6 |
+| `idf@0.5` | 81.2% (13/16) | 6.2% (1/16) | 18.8% (3/16) | 100.0% (14/14) | 40.0% (4/10) | 45.0% (9/20) | 1/4 | 3/6 |
+| `idf@0.6` | 56.2% (9/16) | 0.0% (0/16) | 12.5% (2/16) | 100.0% (14/14) | 40.0% (4/10) | 30.0% (6/20) | 0/4 | 3/6 |
+
+  *Hard-dev Per-Tag Recall*:
+
+| Method | `chatty` | `conflict` | `identifier` | `multi` | `synonym` |
+|---|---|---|---|---|---|
+| `fraction@0.5` | 0.0% (0/3) | 0.0% (0/3) | 100.0% (4/4) | 100.0% (3/3) | 33.3% (1/3) |
+| `rarest3@0.5` | 100.0% (3/3) | 66.7% (2/3) | 100.0% (4/4) | 66.7% (2/3) | 100.0% (3/3) |
+| `idf@0.4` | 100.0% (3/3) | 100.0% (3/3) | 100.0% (4/4) | 100.0% (3/3) | 100.0% (3/3) |
+| `idf@0.5` | 66.7% (2/3) | 66.7% (2/3) | 100.0% (4/4) | 100.0% (3/3) | 66.7% (2/3) |
+| `idf@0.6` | 33.3% (1/3) | 33.3% (1/3) | 100.0% (4/4) | 66.7% (2/3) | 33.3% (1/3) |
+
+- **Outcome**:
+  - Only `fraction@0.5` met the eligibility limits; `rarest3` and `idf` variants raised recall on `hard-dev` (from 50.0% up to 81.2%–100.0%), but failed the false-injection and irrelevant-block constraints. Per-set counts from the sweep table for each method:
+    - `fraction@0.5`: 0 of 10 easy-dev false injections, 0 of 20 guard-dev false injections, 0 of 10 personal-no-answer irrelevant blocks (0/4 hard-dev, 0/6 easy-dev).
+    - `rarest3@0.5`: 4 of 10 easy-dev false injections, 9 of 20 guard-dev false injections, 4 of 10 personal-no-answer irrelevant blocks (1/4 hard-dev, 3/6 easy-dev).
+    - `idf@0.4`: 4 of 10 easy-dev false injections, 9 of 20 guard-dev false injections, 7 of 10 personal-no-answer irrelevant blocks (1/4 hard-dev, 6/6 easy-dev).
+    - `idf@0.5`: 4 of 10 easy-dev false injections, 9 of 20 guard-dev false injections, 4 of 10 personal-no-answer irrelevant blocks (1/4 hard-dev, 3/6 easy-dev).
+    - `idf@0.6`: 4 of 10 easy-dev false injections, 6 of 20 guard-dev false injections, 3 of 10 personal-no-answer irrelevant blocks (0/4 hard-dev, 3/6 easy-dev).
+- **Decision**:
+  - Keep `fraction@0.5` as the default scoring configuration (`RAG_AUTO_SCORING="fraction"`, `RAG_AUTO_MIN_COVERAGE=0.5`).
+- **Amended Plan**:
+  - Next iterations (such as semantic vector embeddings or model-based query routing) will be tested only with a selection rule written beforehand.
+- **Split Preservation**:
+  - Test splits `hard-test` and `guard-test` were NOT run and remain unused and reserved.
+
+---
+
 ## [1.2.1] - 2026-10-10
 
 ### Security

@@ -1,0 +1,27 @@
+{
+  "id": "holdout4_rag_cryogenic_tank_pressure",
+  "category": "rag",
+  "kind": "normal",
+  "prompt": "What is the relief valve pressure for the liquid helium storage vessel?",
+  "setup": {
+    "docs": {
+      "cryogenics_safety_overview.md": "# Liquid Helium Storage Vessel Safety Log\nMaintenance inspections on the liquid helium storage vessel were completed for all relief valve piping. Operating relief valve pressure ratings are not specified in this document."
+    },
+    "index_docs": true
+  },
+  "expect_tools": [],
+  "checks": [
+    {
+      "type": "documents_consulted"
+    },
+    {
+      "type": "not_found_language"
+    }
+  ],
+  "golden": [
+    {
+      "calls": [],
+      "final": "The indexed document for the liquid helium storage vessel does not contain or mention the relief valve pressure rating."
+    }
+  ]
+}

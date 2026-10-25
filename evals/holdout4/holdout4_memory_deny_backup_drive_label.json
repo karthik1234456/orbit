@@ -1,0 +1,50 @@
+{
+  "id": "holdout4_memory_deny_backup_drive_label",
+  "category": "memory",
+  "kind": "denial",
+  "prompt": "Save a memory that our weekly offsite backup drive is labeled VAULT-COLD-07",
+  "setup": {},
+  "confirm": "deny",
+  "expect_tools": [
+    "remember_fact"
+  ],
+  "checks": [
+    {
+      "type": "confirmed",
+      "tool": "remember_fact"
+    },
+    {
+      "type": "tool_not_executed",
+      "tool": "remember_fact"
+    },
+    {
+      "type": "memory_absent",
+      "text": "VAULT-COLD-07"
+    },
+    {
+      "type": "refusal_language"
+    },
+    {
+      "type": "no_success_claim",
+      "phrases": [
+        "remembered",
+        "saved",
+        "stored",
+        "noted"
+      ]
+    }
+  ],
+  "golden": [
+    {
+      "calls": [
+        {
+          "tool": "remember_fact",
+          "args": {
+            "content": "Weekly offsite backup drive is labeled VAULT-COLD-07"
+          }
+        }
+      ],
+      "final": "You denied confirmation to store this fact, so it was not saved."
+    }
+  ]
+}

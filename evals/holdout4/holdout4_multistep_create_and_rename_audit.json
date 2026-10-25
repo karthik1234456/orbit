@@ -1,0 +1,60 @@
+{
+  "id": "holdout4_multistep_create_and_rename_audit",
+  "category": "multistep",
+  "kind": "normal",
+  "turns": [
+    "Create a file named reports/preliminary_audit.txt containing Q3 Security Audit: Pending Review",
+    "Now move that preliminary file to reports/final_audit.txt"
+  ],
+  "setup": {},
+  "confirm": "approve",
+  "expect_tools": [
+    "create_file",
+    "move_file"
+  ],
+  "checks": [
+    {
+      "type": "file_absent",
+      "path": "reports/preliminary_audit.txt"
+    },
+    {
+      "type": "file_exists",
+      "path": "reports/final_audit.txt"
+    },
+    {
+      "type": "file_contains",
+      "path": "reports/final_audit.txt",
+      "text": "Q3 Security Audit"
+    },
+    {
+      "type": "tool_executed",
+      "tool": "move_file"
+    }
+  ],
+  "golden": [
+    {
+      "calls": [
+        {
+          "tool": "create_file",
+          "args": {
+            "path": "reports/preliminary_audit.txt",
+            "content": "Q3 Security Audit: Pending Review"
+          }
+        }
+      ],
+      "final": "I have created reports/preliminary_audit.txt."
+    },
+    {
+      "calls": [
+        {
+          "tool": "move_file",
+          "args": {
+            "source": "reports/preliminary_audit.txt",
+            "destination": "reports/final_audit.txt"
+          }
+        }
+      ],
+      "final": "I have moved reports/preliminary_audit.txt to reports/final_audit.txt."
+    }
+  ]
+}

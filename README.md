@@ -254,6 +254,7 @@ pytest
 ## Limitations
 
 - **Heuristic Prompt Injection Detection**: Document and memory injection filters rely on heuristic pattern matching and keyword scanners. Advanced or obfuscated adversarial injections may evade detection; users must verify tainted confirmation requests.
+- **Conservative Automatic Document Retrieval**: Automatic document retrieval is conservative. It reliably catches questions whose words closely match the documents; chatty or paraphrased questions can be missed, in which case the model may still call the search tool itself. On a hard internal benchmark (16 questions, dev split) recall was 50% with 0 false injections on general questions; looser scoring methods reached 81-100% recall but inserted irrelevant passages into about a third of unrelated questions.
 - **Keyword-Only Document Search**: RAG search uses SQLite FTS5 BM25 text indexing. It does not perform semantic vector embeddings or semantic re-ranking.
 - **Windows Only**: Desktop process management, audio device binding, and TTS workers require Windows APIs (`msvcrt`, Windows audio subsystems).
 - **SQLite FTS5 Dependency**: Document indexing requires SQLite compiled with FTS5 enabled. If unavailable, document tools degrade gracefully to unavailable.

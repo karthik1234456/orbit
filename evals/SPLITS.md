@@ -19,15 +19,20 @@ This document defines the status and governance of the evaluation dataset splits
 | `retrieval/dev` | `evals/retrieval/dev.json` | **dev** | Tuned against during threshold and retrieval tuning. |
 | `retrieval/test` | `evals/retrieval/test.json` | **test** | Untouched until the threshold is chosen. |
 | `retrieval_hard/dev` | `evals/retrieval_hard/dev.json` | **dev** | Hard retrieval benchmark: tuned against during development. |
-| `retrieval_hard/test` | `evals/retrieval_hard/test.json` | **test** | Hard retrieval benchmark: untouched until a method is chosen. |
+| `retrieval_hard/test` | `evals/retrieval_hard/test.json` | **reserved** | Hard retrieval benchmark: reserved and unused. Untouched until a method is chosen. |
+| `retrieval_guard/dev` | `evals/retrieval_guard/dev.json` | **dev** | Guard retrieval benchmark: tuned against during development. |
+| `retrieval_guard/test` | `evals/retrieval_guard/test.json` | **reserved** | Guard retrieval benchmark: reserved and unused. Untouched until a method is chosen. |
 
 ## Retrieval Splits Governance
 
-The retrieval evaluation benchmark (`evals/retrieval` and `evals/retrieval_hard`) isolates document retrieval recall, false-injection rate, not-found notes, and cross-document reasoning:
+The retrieval evaluation benchmark (`evals/retrieval`, `evals/retrieval_hard`, and `evals/retrieval_guard`) isolates document retrieval recall, false-injection rate, not-found notes, and cross-document reasoning:
 - `evals/retrieval/dev.json` (**dev**): Standard retrieval dev split used for threshold sweeps (`min_terms` × `coverage`), vocabulary tuning, and algorithm development.
 - `evals/retrieval/test.json` (**test**): Standard retrieval test split. Untouched until the threshold is chosen. Parameter sweeps (`--sweep`) are strictly prohibited and refused by the runner.
-- `evals/retrieval_hard/dev.json` (`hard-dev`): Hard retrieval benchmark split tuned against during development. Evaluates challenging real-world scenarios including multi-document cross-referencing, near-duplicate conflicting policies, identifiers, synonyms, and conversational queries. Parameter sweeps (`--sweep`) are permitted.
-- `evals/retrieval_hard/test.json` (`hard-test`): Hard retrieval benchmark split untouched until a method is chosen. Parameter sweeps (`--sweep`) are strictly prohibited and refused by the runner.
+- `evals/retrieval_hard/dev.json` (`hard-dev`): Hard retrieval benchmark split tuned against during development. Evaluates challenging real-world scenarios including multi-document cross-referencing, near-duplicate conflicting policies, identifiers, synonyms, and conversational queries. Parameter sweeps (`--sweep`, `--sweep-methods`) are permitted.
+- `evals/retrieval_hard/test.json` (`hard-test`): Hard retrieval benchmark split reserved and unused. Untouched until a method is chosen. Parameter sweeps (`--sweep`, `--sweep-methods`) are strictly prohibited and refused by the runner.
+- `evals/retrieval_guard/dev.json` (`guard-dev`): Guard retrieval benchmark split tuned against during development. Evaluates false-injection rates on conversational and general queries using the hard corpus index. Parameter sweeps (`--sweep`, `--sweep-methods`) are permitted.
+- `evals/retrieval_guard/test.json` (`guard-test`): Guard retrieval benchmark split reserved and unused. Untouched until a method is chosen. Parameter sweeps (`--sweep`, `--sweep-methods`) are strictly prohibited and refused by the runner.
+
 
 ## Inspection Notes: holdout3 (2026-10-12)
 
@@ -37,3 +42,5 @@ During evaluation analysis on 2026-10-12, failures observed in `holdout3` were d
 
 Because `holdout3` was inspected and modified based on these results, it is classified as **used** (dev data) and no longer serves as independent evidence.
 
+
+holdout4: reserved, run live exactly once with the final code

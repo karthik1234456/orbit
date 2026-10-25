@@ -1,0 +1,35 @@
+{
+  "id": "holdout4_util_hex_calculation",
+  "category": "utility",
+  "kind": "normal",
+  "prompt": "I have a subnet allocation calculation: what is 4096 minus 128 minus 64?",
+  "setup": {},
+  "expect_tools": [
+    "calculate"
+  ],
+  "checks": [
+    {
+      "type": "tool_executed",
+      "tool": "calculate"
+    },
+    {
+      "type": "final_contains_any",
+      "texts": [
+        "3904"
+      ]
+    }
+  ],
+  "golden": [
+    {
+      "calls": [
+        {
+          "tool": "calculate",
+          "args": {
+            "expression": "4096 - 128 - 64"
+          }
+        }
+      ],
+      "final": "The calculation 4096 - 128 - 64 equals 3904."
+    }
+  ]
+}

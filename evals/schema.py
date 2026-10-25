@@ -335,6 +335,7 @@ def get_known_case_map() -> dict[str, EvalCase]:
         Path("evals/holdout"),
         Path("evals/holdout2"),
         Path("evals/holdout3"),
+        Path("evals/holdout4"),
     ]
     for d in candidate_dirs:
         if d.exists():

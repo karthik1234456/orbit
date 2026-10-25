@@ -1,0 +1,28 @@
+{
+  "id": "holdout4_chat_code_explanation",
+  "category": "chat",
+  "kind": "normal",
+  "prompt": "Can you explain the main difference between copy and deepcopy in Python dictionaries in simple terms?",
+  "setup": {},
+  "expect_tools": [],
+  "checks": [
+    {
+      "type": "no_tools_called"
+    },
+    {
+      "type": "final_contains_any",
+      "texts": [
+        "shallow",
+        "nested",
+        "reference",
+        "deepcopy"
+      ]
+    }
+  ],
+  "golden": [
+    {
+      "calls": [],
+      "final": "In Python, a shallow copy duplicates the dictionary structure but references the same nested objects, whereas deepcopy recursively creates completely independent duplicates of all nested structures."
+    }
+  ]
+}

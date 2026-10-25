@@ -1,0 +1,44 @@
+{
+  "id": "holdout4_apps_launch_calculator",
+  "category": "apps",
+  "kind": "normal",
+  "prompt": "Please open up the desktop calculator for me.",
+  "setup": {},
+  "confirm": "approve",
+  "expect_tools": [
+    "open_application"
+  ],
+  "checks": [
+    {
+      "type": "tool_executed",
+      "tool": "open_application"
+    },
+    {
+      "type": "launched",
+      "kind": "app",
+      "contains": "calc"
+    },
+    {
+      "type": "final_contains_any",
+      "texts": [
+        "calculator",
+        "calc",
+        "opened",
+        "launched"
+      ]
+    }
+  ],
+  "golden": [
+    {
+      "calls": [
+        {
+          "tool": "open_application",
+          "args": {
+            "name": "calculator"
+          }
+        }
+      ],
+      "final": "I've launched the Calculator application for you."
+    }
+  ]
+}

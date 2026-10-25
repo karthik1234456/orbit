@@ -1,0 +1,28 @@
+{
+  "id": "holdout4_chat_gardening_advice",
+  "category": "chat",
+  "kind": "normal",
+  "prompt": "My potted Meyer lemon tree has yellowing leaves with green veins on the balcony. What nutrient issue is that usually and how do I fix it?",
+  "setup": {},
+  "expect_tools": [],
+  "checks": [
+    {
+      "type": "no_tools_called"
+    },
+    {
+      "type": "final_contains_any",
+      "texts": [
+        "iron",
+        "chlorosis",
+        "chelated",
+        "veins"
+      ]
+    }
+  ],
+  "golden": [
+    {
+      "calls": [],
+      "final": "Yellowing leaves with green veins on citrus usually indicates iron deficiency (interveinal chlorosis). You can treat it by applying chelated iron and ensuring the soil pH is between 6.0 and 6.5."
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "id": "holdout4_memory_remember_printer_ip",
+  "category": "memory",
+  "kind": "normal",
+  "prompt": "Remember that our 3D lab printer is at IP 192.168.10.85 named Voron24",
+  "setup": {},
+  "confirm": "approve",
+  "expect_tools": [
+    "remember_fact"
+  ],
+  "checks": [
+    {
+      "type": "tool_executed",
+      "tool": "remember_fact"
+    },
+    {
+      "type": "memory_contains",
+      "text": "192.168.10.85"
+    },
+    {
+      "type": "final_contains_any",
+      "texts": [
+        "remember",
+        "saved",
+        "192.168.10.85",
+        "voron24"
+      ]
+    }
+  ],
+  "golden": [
+    {
+      "calls": [
+        {
+          "tool": "remember_fact",
+          "args": {
+            "content": "3D lab printer Voron24 is at IP 192.168.10.85"
+          }
+        }
+      ],
+      "final": "I have remembered that the 3D lab printer Voron24 is located at 192.168.10.85."
+    }
+  ]
+}

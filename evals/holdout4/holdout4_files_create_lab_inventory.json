@@ -1,0 +1,48 @@
+{
+  "id": "holdout4_files_create_lab_inventory",
+  "category": "files",
+  "kind": "normal",
+  "prompt": "Create a file called hardware/microcontrollers.csv with two rows: Device,Quantity followed by ESP32-S3,15",
+  "setup": {},
+  "confirm": "approve",
+  "expect_tools": [
+    "create_file"
+  ],
+  "checks": [
+    {
+      "type": "tool_executed",
+      "tool": "create_file"
+    },
+    {
+      "type": "file_exists",
+      "path": "hardware/microcontrollers.csv"
+    },
+    {
+      "type": "file_contains",
+      "path": "hardware/microcontrollers.csv",
+      "text": "ESP32-S3,15"
+    },
+    {
+      "type": "final_contains_any",
+      "texts": [
+        "microcontrollers.csv",
+        "created",
+        "hardware"
+      ]
+    }
+  ],
+  "golden": [
+    {
+      "calls": [
+        {
+          "tool": "create_file",
+          "args": {
+            "path": "hardware/microcontrollers.csv",
+            "content": "Device,Quantity\nESP32-S3,15\n"
+          }
+        }
+      ],
+      "final": "I've created hardware/microcontrollers.csv with the inventory list."
+    }
+  ]
+}

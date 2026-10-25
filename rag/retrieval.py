@@ -23,7 +23,8 @@ Heuristics and Architecture Rationale:
    the heuristic adapts to require 100% of the query terms.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import math
 from pathlib import Path
 import re
 from typing import Any, Optional
@@ -72,6 +73,56 @@ def query_terms(text: str) -> list[str]:
     return [w for w in raw_words if len(w) >= 3 and w not in STOPWORDS]
 
 
+class AutoHit(dict):
+    """Candidate hit evaluated during auto-retrieval."""
+
+    def __init__(
+        self,
+        file: str = "",
+        chunk: int = 0,
+        matched_terms: Optional[list[str]] = None,
+        matched_fraction: float = 0.0,
+        kept: bool = False,
+        outdated: bool = False,
+        **kwargs: Any,
+    ):
+        terms_list = matched_terms if matched_terms is not None else []
+        super().__init__(
+            file=file,
+            chunk=chunk,
+            matched_terms=terms_list,
+            matched_fraction=matched_fraction,
+            kept=kept,
+            outdated=outdated,
+            **kwargs,
+        )
+
+    @property
+    def file(self) -> str:
+        return self["file"]
+
+    @property
+    def chunk(self) -> int:
+        return self["chunk"]
+
+    @property
+    def matched_terms(self) -> list[str]:
+        return self["matched_terms"]
+
+    @property
+    def matched_fraction(self) -> float:
+        return self["matched_fraction"]
+
+    @property
+    def kept(self) -> bool:
+        return self["kept"]
+
+    @property
+    def outdated(self) -> bool:
+        return self.get("outdated", False)
+
+
+
 @dataclass
 class AutoRetrieval:
     """Outcome of automatic document retrieval for a user message."""
@@ -83,6 +134,7 @@ class AutoRetrieval:
     terms: list[str]
     reason: str
     note: str = ""
+    hits: list[AutoHit] = field(default_factory=list)
 
 
 def auto_retrieve(
@@ -94,6 +146,7 @@ def auto_retrieve(
     top_k: Optional[int] = None,
     max_chars: Optional[int] = None,
     enabled: Optional[bool] = None,
+    scoring: Optional[str] = None,
 ) -> AutoRetrieval:
     """Automatically search indexed documents and construct a bounded context block.
 
@@ -105,6 +158,7 @@ def auto_retrieve(
         top_k: Maximum candidate hits to evaluate from FTS search.
         max_chars: Maximum overall character budget for the resulting docs block.
         enabled: Toggle override (defaults to settings.RAG_AUTO).
+        scoring: Scoring method in {"fraction", "rarest3", "idf"} (defaults to settings.RAG_AUTO_SCORING).
 
     Returns:
         AutoRetrieval: Object containing search status, formatted context block,
@@ -136,7 +190,9 @@ def auto_retrieve(
             )
 
         # Check if index is empty
-        chunk_count = index.count_chunks() if hasattr(index, "count_chunks") else 0
+        chunk_count = index.count_chunks() if hasattr(index, "count_chunks") else (
+            index.chunk_count() if hasattr(index, "chunk_count") else 0
+        )
         if chunk_count <= 0:
             return AutoRetrieval(
                 searched=False,
@@ -179,6 +235,13 @@ def auto_retrieve(
             if max_chars is not None
             else getattr(settings, "RAG_AUTO_MAX_CHARS", 1500)
         )
+        eff_scoring = (
+            scoring
+            if scoring is not None
+            else getattr(settings, "RAG_AUTO_SCORING", "fraction")
+        )
+        if eff_scoring not in ("fraction", "rarest3", "idf"):
+            eff_scoring = "fraction"
 
         hits, withheld = index.search(
             query=text,
@@ -188,8 +251,41 @@ def auto_retrieve(
 
         distinct_terms = set(terms)
         num_distinct = len(distinct_terms)
-        min_required_terms = min(eff_min_terms, num_distinct)
 
+        # Pre-compute scoring data for rarest3 and idf
+        df_map: dict[str, int] = {}
+        active_terms: list[str] = []
+        rarest3_set: set[str] = set()
+        rarest3_count: int = 0
+        idf_weights: dict[str, float] = {}
+        idf_total_w: float = 0.0
+
+        if eff_scoring in ("rarest3", "idf"):
+            if hasattr(index, "term_df"):
+                df_map = index.term_df(distinct_terms)
+            active_terms = [t for t in distinct_terms if df_map.get(t, 0) >= 1]
+            min_required_terms = min(eff_min_terms, len(active_terms))
+
+            if eff_scoring == "rarest3":
+                if active_terms:
+                    sorted_active = sorted(active_terms, key=lambda t: (df_map.get(t, 0), t))
+                    rarest3_terms = sorted_active[:3]
+                    rarest3_set = set(rarest3_terms)
+                    rarest3_count = len(rarest3_terms)
+            elif eff_scoring == "idf":
+                N = (
+                    index.chunk_count()
+                    if hasattr(index, "chunk_count")
+                    else (index.count_chunks() if hasattr(index, "count_chunks") else 0)
+                )
+                if active_terms and N > 0:
+                    idf_weights = {t: math.log(1.0 + N / df_map[t]) for t in active_terms}
+                    idf_total_w = sum(idf_weights.values())
+        else:
+            # "fraction" scoring
+            min_required_terms = min(eff_min_terms, num_distinct)
+
+        recorded_hits: list[AutoHit] = []
         kept_hits: list[Hit] = []
         for hit in hits:
             cid = getattr(hit, "chunk_id", None)
@@ -198,10 +294,50 @@ def auto_retrieve(
             else:
                 matched_terms = set()
             matched_count = len(matched_terms)
-            coverage = matched_count / num_distinct if num_distinct > 0 else 0.0
 
-            if matched_count >= min_required_terms and coverage >= eff_min_coverage:
+            if eff_scoring == "rarest3":
+                if rarest3_count > 0:
+                    matched_rarest_count = len(matched_terms & rarest3_set)
+                    coverage = matched_rarest_count / rarest3_count
+                else:
+                    coverage = 0.0
+                is_kept = bool(
+                    len(active_terms) > 0
+                    and matched_count >= min_required_terms
+                    and coverage >= eff_min_coverage
+                )
+            elif eff_scoring == "idf":
+                if idf_total_w > 0.0:
+                    matched_w = sum(idf_weights[t] for t in matched_terms if t in idf_weights)
+                    coverage = matched_w / idf_total_w
+                else:
+                    coverage = 0.0
+                is_kept = bool(
+                    len(active_terms) > 0
+                    and matched_count >= min_required_terms
+                    and coverage >= eff_min_coverage
+                )
+            else:
+                # Default "fraction" scoring
+                coverage = matched_count / num_distinct if num_distinct > 0 else 0.0
+                is_kept = bool(matched_count >= min_required_terms and coverage >= eff_min_coverage)
+
+            if is_kept:
                 kept_hits.append(hit)
+
+            file_path = getattr(hit, "path", "")
+            chunk_no = getattr(hit, "chunk_no", 0)
+            is_outdated = getattr(hit, "outdated", False)
+            recorded_hits.append(
+                AutoHit(
+                    file=file_path,
+                    chunk=chunk_no,
+                    matched_terms=sorted(matched_terms),
+                    matched_fraction=coverage,
+                    kept=is_kept,
+                    outdated=is_outdated,
+                )
+            )
 
         if not kept_hits:
             ar = AutoRetrieval(
@@ -211,9 +347,17 @@ def auto_retrieve(
                 withheld=withheld,
                 terms=terms,
                 reason="no_hits_passed_thresholds" if hits else "no_hits_found",
+                hits=recorded_hits,
             )
             ar.note = not_found_note(text, index, retrieval=ar)
             return ar
+
+        # Sort kept hits so non-outdated passages come first
+        kept_hits = sorted(
+            kept_hits,
+            key=lambda h: 1 if getattr(h, "outdated", False) else 0,
+        )
+
 
         header_line = "ORBIT searched the user's documents automatically for this message."
         # Reserve room for the header line and newline separator
@@ -234,6 +378,7 @@ def auto_retrieve(
                 withheld=withheld,
                 terms=terms,
                 reason="block_empty",
+                hits=recorded_hits,
             )
             ar.note = not_found_note(text, index, retrieval=ar)
             return ar
@@ -249,6 +394,7 @@ def auto_retrieve(
             withheld=withheld,
             terms=terms,
             reason="retrieved",
+            hits=recorded_hits,
         )
 
     except Exception as exc:

@@ -134,6 +134,9 @@ def render_markdown(
     if is_holdout:
         lines.append("> **HOLDOUT RUN: unobserved evaluation suite, do not optimize for these cases**")
         lines.append("")
+    if meta.get("rerun_not_unseen"):
+        lines.append("> **RERUN: NOT UNSEEN**")
+        lines.append("")
     if is_partial:
         total_str = total_cases if total_cases is not None else len(case_list)
         cats_str = ", ".join(sorted({c.category for c in case_list}))

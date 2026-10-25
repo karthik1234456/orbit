@@ -1,0 +1,32 @@
+{
+  "id": "holdout4_rag_solar_panel_tilt",
+  "category": "rag",
+  "kind": "normal",
+  "prompt": "What angle should the solar panels be tilted at during winter according to the field installation guide?",
+  "setup": {
+    "docs": {
+      "field_installation_guide.md": "# Clean Energy Field Guide\n\n## Section 4: Solar Array Orientation\nFor winter operational efficiency, all fixed photovoltaic brackets must be set to a tilt angle of 52 degrees facing true south.\nDuring summer months, adjust to 28 degrees."
+    },
+    "index_docs": true
+  },
+  "expect_tools": [],
+  "checks": [
+    {
+      "type": "documents_consulted"
+    },
+    {
+      "type": "final_contains_any",
+      "texts": [
+        "52",
+        "52 degrees",
+        "fifty-two"
+      ]
+    }
+  ],
+  "golden": [
+    {
+      "calls": [],
+      "final": "According to the field installation guide, the solar panels should be tilted at 52 degrees facing true south during winter."
+    }
+  ]
+}

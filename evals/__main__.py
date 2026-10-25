@@ -94,7 +94,13 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         nargs="?",
         const=True,
         default=False,
-        help="Execute evaluation using holdout cases in evals/holdout (or specified directory e.g. --holdout holdout2 or --holdout holdout3) instead of evals/cases.",
+        help="Execute evaluation using holdout cases in evals/holdout (or specified directory e.g. --holdout holdout2, --holdout holdout3, or --holdout holdout4) instead of evals/cases.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="Force execution even if holdout integrity checks fail (e.g. rerun on holdout4).",
     )
     parser.add_argument(
         "--publish",
@@ -123,15 +129,27 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--retrieval",
         type=str,
-        choices=["dev", "test", "hard-dev", "hard-test"],
+        choices=["dev", "test", "hard-dev", "hard-test", "guard-dev", "guard-test"],
         default=None,
-        help="Execute retrieval evaluation on the specified split ('dev', 'test', 'hard-dev', or 'hard-test').",
+        help="Execute retrieval evaluation on the specified split ('dev', 'test', 'hard-dev', 'hard-test', 'guard-dev', or 'guard-test').",
     )
     parser.add_argument(
         "--sweep",
         action="store_true",
         default=False,
-        help="Run threshold parameter sweep across min_terms and coverage (allowed for 'dev' and 'hard-dev' splits only).",
+        help="Run threshold parameter sweep across min_terms and coverage (allowed for dev splits only).",
+    )
+    parser.add_argument(
+        "--sweep-methods",
+        action="store_true",
+        default=False,
+        help="Run scoring methods sweep over fraction@0.5, rarest3@0.5, idf@0.4, idf@0.5, idf@0.6 (allowed for dev splits only; refuses test splits).",
+    )
+    parser.add_argument(
+        "--report-name",
+        type=str,
+        default=None,
+        help="Custom output filename for the retrieval markdown report.",
     )
     return parser.parse_args(argv)
 
@@ -146,8 +164,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         return run_retrieval_eval(
             split=args.retrieval,
             sweep=args.sweep,
+            sweep_methods=args.sweep_methods,
             out_dir=args.out,
+            report_filename=args.report_name,
         )
+
 
     if args.compare:
         from evals.compare import compare_files
@@ -179,6 +200,46 @@ def main(argv: Optional[list[str]] = None) -> int:
         eval_temperature = args.temperature
     else:
         eval_temperature = 0.3 if args.repeat_mode == "seeds" else 0.0
+
+    # Resolve cases path
+    if args.holdout:
+        if isinstance(args.holdout, str) and args.holdout.strip():
+            holdout_dir_str = args.holdout.strip()
+            p = Path(holdout_dir_str)
+            if not p.exists() and (Path("evals") / holdout_dir_str).exists():
+                cases_path = Path("evals") / holdout_dir_str
+            else:
+                cases_path = p
+        elif args.cases == "evals/cases":
+            cases_path = Path("evals/holdout")
+        else:
+            cases_path = Path(args.cases)
+    else:
+        cases_path = Path(args.cases)
+
+    if not cases_path.exists():
+        print(f"Cases path '{cases_path}' not found. No cases to evaluate.", file=sys.stderr)
+        return 1
+
+    is_holdout4 = "holdout4" in str(cases_path).replace("\\", "/").lower()
+    rerun_not_unseen = False
+    if is_holdout4 and args.live:
+        marker_file = Path("evals/holdout4/.ran")
+        if marker_file.exists():
+            if not args.force:
+                print(
+                    "Error: holdout4 has already been run live (marker evals/holdout4/.ran exists). "
+                    "A second live run on holdout4 is refused to maintain unseen holdout integrity. "
+                    "Use --force to override.",
+                    file=sys.stderr,
+                )
+                return 1
+            else:
+                print(
+                    "WARNING: holdout4 has already been run live. "
+                    "With --force, holdout4 is now considered a dev set and is no longer an unseen test set."
+                )
+                rerun_not_unseen = True
 
     # In live mode, verify provider connectivity/keys
     if args.live:
@@ -223,25 +284,6 @@ def main(argv: Optional[list[str]] = None) -> int:
                 return 1
 
     # Load cases
-    if args.holdout:
-        if isinstance(args.holdout, str) and args.holdout.strip():
-            holdout_dir_str = args.holdout.strip()
-            p = Path(holdout_dir_str)
-            if not p.exists() and (Path("evals") / holdout_dir_str).exists():
-                cases_path = Path("evals") / holdout_dir_str
-            else:
-                cases_path = p
-        elif args.cases == "evals/cases":
-            cases_path = Path("evals/holdout")
-        else:
-            cases_path = Path(args.cases)
-    else:
-        cases_path = Path(args.cases)
-
-    if not cases_path.exists():
-        print(f"Cases path '{cases_path}' not found. No cases to evaluate.", file=sys.stderr)
-        return 1
-
     try:
         all_cases = load_cases(cases_path)
     except Exception as exc:
@@ -361,6 +403,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         "RAG_AUTO_TOP_K": getattr(settings, "RAG_AUTO_TOP_K", 3),
         "RAG_AUTO_MAX_CHARS": getattr(settings, "RAG_AUTO_MAX_CHARS", 1500),
     }
+    if rerun_not_unseen:
+        extra_meta["rerun_not_unseen"] = True
     if args.live and provider_name == "ollama":
         extra_meta.update({
             "num_ctx": settings.OLLAMA_NUM_CTX,
@@ -402,6 +446,29 @@ def main(argv: Optional[list[str]] = None) -> int:
     report_file = out_file.with_suffix(".md")
     report_file.write_text(report_content, encoding="utf-8")
     print(f"\nReport written to: {report_file}")
+
+    # Write holdout4 integrity marker after live run
+    if is_holdout4 and args.live:
+        marker_file = Path("evals/holdout4/.ran")
+        try:
+            from datetime import timezone
+            date_str = datetime.now(timezone.utc).isoformat()
+        except Exception:
+            date_str = datetime.now().isoformat()
+        import subprocess
+        try:
+            commit_res = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+        except Exception:
+            commit_res = "unknown"
+        marker_content = f"date: {date_str}\ncommit: {commit_res}\nmodel: {model_name}\n"
+        try:
+            marker_file.write_text(marker_content, encoding="utf-8")
+        except Exception as e:
+            print(f"Warning: Failed to write marker file {marker_file}: {e}", file=sys.stderr)
 
     # Print headline summary
     agg = aggregate(results, cases)

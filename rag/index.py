@@ -6,9 +6,31 @@ from datetime import datetime, timezone
 from pathlib import Path
 import re
 import sqlite3
-from typing import Generator, Iterable, Union
+from typing import Generator, Iterable, Optional, Union
 
-SCHEMA_VERSION = 2
+
+SCHEMA_VERSION = 3
+
+# Conservative patterns detecting obsolete/superseded documents
+_OUTDATED_PATTERNS = [
+    re.compile(
+        r"(?i)\bthis\s+(?:document|policy|version|guideline|procedure|standard)\b[^.\n]*?\b(?:is|has\s+been|was)\s+(?:superseded|replaced|no\s+longer\s+in\s+effect|deprecated|obsolete)\b"
+    ),
+    re.compile(r"(?i)\bsuperseded\s+by\b"),
+    re.compile(
+        r"(?im)^\s*(?:>\s*)?(?:#+\s*)?[*_`]*status[*_`]*\s*[:\-][*_`]*\s*[^\n.;]*?\b(?:outdated|superseded|deprecated|archived|obsolete)\b"
+    ),
+]
+
+
+def is_document_outdated(text: str) -> bool:
+    """Check whether a document text indicates it is obsolete/superseded using conservative patterns."""
+    if not text or not isinstance(text, str):
+        return False
+    for pat in _OUTDATED_PATTERNS:
+        if pat.search(text):
+            return True
+    return False
 
 # Common English stopwords dropped from FTS search queries
 STOPWORDS = {
@@ -47,6 +69,8 @@ class Hit:
     score: float
     flagged: bool
     chunk_id: int = 0
+    outdated: bool = False
+
 
 
 class IndexUnavailable(Exception):
@@ -123,7 +147,8 @@ class DocumentIndex:
                     sha256 TEXT NOT NULL,
                     indexed_at TEXT NOT NULL,
                     chunk_count INTEGER NOT NULL,
-                    flagged_count INTEGER NOT NULL
+                    flagged_count INTEGER NOT NULL,
+                    outdated INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -161,6 +186,7 @@ class DocumentIndex:
         path: str,
         sha256: str,
         chunks: list[tuple[str, bool]],
+        outdated: Optional[bool] = None,
     ) -> str:
         """Add or update a document and its chunks in one transaction.
 
@@ -168,6 +194,7 @@ class DocumentIndex:
             path: Relative document path.
             sha256: SHA-256 hash of document content.
             chunks: List of (chunk_text, is_flagged) tuples.
+            outdated: Whether document is obsolete/superseded (auto-detected if None).
 
         Returns:
             str: "unchanged", "updated", or "added".
@@ -176,14 +203,22 @@ class DocumentIndex:
         flagged_count = sum(1 for _, flagged in chunks if flagged)
         chunk_count = len(chunks)
 
+        if outdated is None:
+            full_text = "\n\n".join(t for t, _ in chunks)
+            is_outdated = is_document_outdated(full_text)
+        else:
+            is_outdated = bool(outdated)
+
+        outdated_val = 1 if is_outdated else 0
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT id, sha256 FROM documents WHERE path = ?", (path,))
+            cursor.execute("SELECT id, sha256, outdated FROM documents WHERE path = ?", (path,))
             row = cursor.fetchone()
 
             if row:
-                doc_id, existing_hash = row
-                if existing_hash == sha256:
+                doc_id, existing_hash, existing_outdated = row
+                if existing_hash == sha256 and existing_outdated == outdated_val:
                     return "unchanged"
 
                 # Update existing document: delete old chunks first
@@ -191,19 +226,19 @@ class DocumentIndex:
                 cursor.execute(
                     """
                     UPDATE documents
-                    SET sha256 = ?, indexed_at = ?, chunk_count = ?, flagged_count = ?
+                    SET sha256 = ?, indexed_at = ?, chunk_count = ?, flagged_count = ?, outdated = ?
                     WHERE id = ?
                     """,
-                    (sha256, now_iso, chunk_count, flagged_count, doc_id),
+                    (sha256, now_iso, chunk_count, flagged_count, outdated_val, doc_id),
                 )
                 status = "updated"
             else:
                 cursor.execute(
                     """
-                    INSERT INTO documents (path, sha256, indexed_at, chunk_count, flagged_count)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO documents (path, sha256, indexed_at, chunk_count, flagged_count, outdated)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (path, sha256, now_iso, chunk_count, flagged_count),
+                    (path, sha256, now_iso, chunk_count, flagged_count, outdated_val),
                 )
                 doc_id = cursor.lastrowid
                 status = "added"
@@ -252,7 +287,7 @@ class DocumentIndex:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT c.rowid, d.path, c.chunk_no, c.content, bm25(chunks) AS score, c.flagged
+                SELECT c.rowid, d.path, c.chunk_no, c.content, bm25(chunks) AS score, c.flagged, d.outdated
                 FROM chunks c
                 JOIN documents d ON c.doc_id = d.id
                 WHERE chunks MATCH ?
@@ -265,8 +300,9 @@ class DocumentIndex:
         hits: list[Hit] = []
         withheld_count = 0
 
-        for chunk_rowid, path, chunk_no, content, score, flagged_val in rows:
+        for chunk_rowid, path, chunk_no, content, score, flagged_val, outdated_val in rows:
             is_flagged = bool(int(flagged_val) if flagged_val is not None else 0)
+            is_outdated = bool(int(outdated_val) if outdated_val is not None else 0)
 
             if is_flagged and not include_flagged:
                 withheld_count += 1
@@ -281,6 +317,7 @@ class DocumentIndex:
                         score=float(score),
                         flagged=is_flagged,
                         chunk_id=int(chunk_rowid),
+                        outdated=is_outdated,
                     )
                 )
 
@@ -351,10 +388,48 @@ class DocumentIndex:
             cursor.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
             return True
 
-    def count_chunks(self) -> int:
+    def chunk_count(self) -> int:
         """Return the total number of chunks currently indexed."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT count(*) FROM chunks")
             row = cursor.fetchone()
             return int(row[0]) if row else 0
+
+    def count_chunks(self) -> int:
+        """Alias for chunk_count() for backward compatibility."""
+        return self.chunk_count()
+
+    def term_df(self, terms: Iterable[str]) -> dict[str, int]:
+        """Return document frequency (chunk count matching each term) using FTS5 porter tokenizer.
+
+        Args:
+            terms: Iterable of query terms.
+
+        Returns:
+            dict[str, int]: Mapping of term -> chunk match count.
+        """
+        if not terms:
+            return {}
+        result: dict[str, int] = {}
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            for term in terms:
+                if term in result:
+                    continue
+                clean_term = str(term).strip().replace('"', '""')
+                if not clean_term:
+                    result[term] = 0
+                    continue
+                match_query = f'"{clean_term}"'
+                try:
+                    cursor.execute(
+                        "SELECT count(*) FROM chunks WHERE chunks MATCH ?",
+                        (match_query,),
+                    )
+                    row = cursor.fetchone()
+                    result[term] = int(row[0]) if row else 0
+                except sqlite3.OperationalError:
+                    result[term] = 0
+        return result
+

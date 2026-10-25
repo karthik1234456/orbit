@@ -262,3 +262,200 @@ def test_report_contains_thresholds_and_dirty_marker(tmp_path: Path):
     assert "Injected-Wrong-Document Rate" in content
     assert "Recall by Tag" in content
     assert "Per-Item Results" in content
+
+
+def test_header_example_citation_is_never_counted(tmp_path: Path):
+    """Verify that the header example citation [file.md#2] is never counted as an injected wrong document."""
+    idx = DocumentIndex(path=tmp_path / "header_test.db")
+    idx.upsert_document(
+        "real_doc.md",
+        "sha_real",
+        [("Alpha release schedule for project Apollo is confirmed for November.", False)],
+    )
+
+    item = {
+        "id": "item-header-check",
+        "kind": "doc",
+        "tag": "identifier",
+        "question": "When is the Apollo alpha release schedule confirmed?",
+        "relevant": ["real_doc.md"],
+    }
+
+    # Verify that auto_retrieve block actually contains [file.md#2] in its safety header instructions
+    ret = auto_retrieve(idx, item["question"])
+    assert "[file.md#2]" in ret.block
+
+    res = evaluate_item(idx, item)
+    # Even though [file.md#2] is in the block, evaluate_item uses ret.hits and never parses block text
+    assert res["has_wrong_doc"] is False
+    assert res["wrong_docs"] == []
+    assert "file.md" not in res["wrong_docs"]
+    assert res["matched_relevant"] == ["real_doc.md"]
+    assert res["passed"] is True
+
+
+def test_wrong_document_hit_is_counted(tmp_path: Path):
+    """Verify that an injected chunk from a non-relevant, non-outdated document is counted as a wrong document."""
+    idx = DocumentIndex(path=tmp_path / "wrong_test.db")
+    idx.upsert_document(
+        "target.md",
+        "sha_tgt",
+        [("Primary datacenter access requires badge SEC-100.", False)],
+    )
+    idx.upsert_document(
+        "unrelated.md",
+        "sha_unrel",
+        [("Datacenter equipment cooling maintenance requires badge SEC-100.", False)],
+    )
+
+    item = {
+        "id": "item-wrong-doc",
+        "kind": "doc",
+        "tag": "identifier",
+        "question": "What badge is required for primary datacenter access?",
+        "relevant": ["target.md"],
+    }
+
+    res = evaluate_item(idx, item, outdated=[])
+    assert "unrelated.md" in res["wrong_docs"]
+    assert res["has_wrong_doc"] is True
+
+
+def test_outdated_hit_is_counted_separately(tmp_path: Path):
+    """Verify that an injected chunk from an outdated document is counted as outdated and not as wrong-doc."""
+    idx = DocumentIndex(path=tmp_path / "outdated_test.db")
+    idx.upsert_document(
+        "policy_2026.md",
+        "sha_2026",
+        [("Active expense reimbursement rule: standard meals limit is 75 dollars.", False)],
+    )
+    idx.upsert_document(
+        "policy_2023.md",
+        "sha_2023",
+        [("Legacy travel expense reimbursement rule: standard meals limit is 45 dollars.", False)],
+    )
+
+    item = {
+        "id": "item-outdated",
+        "kind": "doc",
+        "tag": "conflict",
+        "question": "What is the standard meals limit under our travel expense reimbursement policy?",
+        "relevant": ["policy_2026.md"],
+    }
+
+    res = evaluate_item(idx, item, outdated=["policy_2023.md"])
+    assert res["has_outdated"] is True
+    assert "policy_2023.md" in res["outdated_docs"]
+    # Crucially, policy_2023.md must NOT be counted as a generic wrong document
+    assert "policy_2023.md" not in res["wrong_docs"]
+    assert res["has_wrong_doc"] is False
+
+    # Also check aggregate metrics computation
+    metrics = compute_retrieval_metrics([res])
+    assert metrics["outdated_injected_rate"] == 1.0
+    assert metrics["injected_wrong_doc_rate"] == 0.0
+    assert metrics["conflict_outdated_count"] == 1
+
+
+def test_tiny_hand_made_index_gives_right_numbers(tmp_path: Path):
+    """Verify that evaluate_item and compute_retrieval_metrics compute exact numbers on a tiny index."""
+    idx = DocumentIndex(path=tmp_path / "tiny_eval.db")
+    # 1. Relevant active policy
+    idx.upsert_document(
+        "policy_2026.md",
+        "sha_p26",
+        [("Annual corporate conference travel allowance is fifteen hundred dollars.", False)],
+    )
+    # 2. Outdated superseded policy
+    idx.upsert_document(
+        "policy_2023.md",
+        "sha_p23",
+        [("Corporate conference travel allowance was one thousand dollars historically.", False)],
+    )
+    # 3. Unrelated catalog
+    idx.upsert_document(
+        "hardware_catalog.md",
+        "sha_hw",
+        [("Hardware catalog: server rack mount kit model SRK-900.", False)],
+    )
+
+    outdated_list = ["policy_2023.md"]
+
+    items = [
+        # Item 1: conflict doc item that hits both current and outdated
+        {
+            "id": "item-conflict",
+            "kind": "doc",
+            "tag": "conflict",
+            "question": "What is our corporate conference travel allowance?",
+            "relevant": ["policy_2026.md"],
+        },
+        # Item 2: doc item where unrelated chunk is injected instead of missing relevant doc
+        {
+            "id": "item-wrong",
+            "kind": "doc",
+            "tag": "identifier",
+            "question": "Server rack mount kit model specifications",
+            "relevant": ["nonexistent_manual.md"],
+        },
+        # Item 3: general conversation item (no injection expected)
+        {
+            "id": "item-gen",
+            "kind": "general",
+            "tag": "general",
+            "question": "Write a python function to compute factorial",
+            "relevant": [],
+        },
+        # Item 4: personal-no-answer item (note expected)
+        {
+            "id": "item-pna",
+            "kind": "personal-no-answer",
+            "tag": "personal-no-answer",
+            "question": "What is our team quarterly bonus target for this year?",
+            "relevant": [],
+        },
+    ]
+
+    results = [evaluate_item(idx, it, outdated=outdated_list) for it in items]
+    metrics = compute_retrieval_metrics(results)
+
+    # Verify Item 1 (conflict)
+    r_conf = results[0]
+    assert r_conf["passed"] is True
+    assert "policy_2026.md" in r_conf["matched_relevant"]
+    assert r_conf["has_current"] is True
+    assert r_conf["has_outdated"] is True
+    assert "policy_2023.md" in r_conf["outdated_docs"]
+    assert r_conf["has_wrong_doc"] is False
+
+    # Verify Item 2 (wrong doc)
+    r_wrong = results[1]
+    assert r_wrong["passed"] is False
+    assert r_wrong["has_wrong_doc"] is True
+    assert "hardware_catalog.md" in r_wrong["wrong_docs"]
+    assert r_wrong["has_outdated"] is False
+
+    # Verify Item 3 (general)
+    r_gen = results[2]
+    assert r_gen["passed"] is True
+    assert r_gen["has_block"] is False
+
+    # Verify Item 4 (pna)
+    r_pna = results[3]
+    assert r_pna["passed"] is True
+    assert r_pna["has_block"] is False
+    assert r_pna["has_note"] is True
+
+    # Aggregate metrics
+    assert metrics["doc_total"] == 2
+    assert metrics["doc_passed"] == 1
+    assert metrics["recall"] == 0.5  # 1/2
+    assert metrics["injected_wrong_doc_rate"] == 0.5  # 1/2 (item-wrong)
+    assert metrics["outdated_injected_rate"] == 0.5  # 1/2 (item-conflict)
+    assert metrics["conflict_total"] == 1
+    assert metrics["conflict_current_count"] == 1
+    assert metrics["conflict_outdated_count"] == 1
+    assert metrics["gen_total"] == 1
+    assert metrics["false_injection_rate"] == 0.0
+    assert metrics["pna_total"] == 1
+    assert metrics["not_found_note_rate"] == 1.0
