@@ -1,0 +1,170 @@
+[
+  {
+    "id": "hard-test-001",
+    "question": "whats the max nightly hotel allowance for tier 1 cities like new york and san francisco? i know it was $160 before but did it increase?",
+    "relevant": ["travel_expense_policy_2026.md"],
+    "kind": "doc",
+    "tag": "conflict"
+  },
+  {
+    "id": "hard-test-002",
+    "question": "what is our current per-mile reimbursment rate if i drive my own car for a client visit?",
+    "relevant": ["travel_expense_policy_2026.md"],
+    "kind": "doc",
+    "tag": "conflict"
+  },
+  {
+    "id": "hard-test-003",
+    "question": "at what total dollar amount does an expense report need a manager's signoff nowadays, is it over $500 or $1000?",
+    "relevant": ["travel_expense_policy_2026.md"],
+    "kind": "doc",
+    "tag": "conflict"
+  },
+  {
+    "id": "hard-test-004",
+    "question": "what clearance tier is required to enter the vault annex room where Arthur Pendelton stores the HSM-9900 hardware module?",
+    "relevant": ["hardware_and_facilities_catalog.md", "security_access_control.md"],
+    "kind": "doc",
+    "tag": "multi"
+  },
+  {
+    "id": "hard-test-005",
+    "question": "what is the employee id and role of the QA engineer who reviews Step 1 of the Helios onboarding checklist?",
+    "relevant": ["project_helios_onboarding.md", "engineering_team_roster.md"],
+    "kind": "doc",
+    "tag": "multi"
+  },
+  {
+    "id": "hard-test-006",
+    "question": "which facility datacenter rack contains the crypto module that is currently delaying the Titan Phase 3 milestone?",
+    "relevant": ["project_titan_status.md", "hardware_and_facilities_catalog.md"],
+    "kind": "doc",
+    "tag": "multi"
+  },
+  {
+    "id": "hard-test-007",
+    "question": "when is the weekly triage or office hours for the team lead who manages the vector pipeline dependency for Helios?",
+    "relevant": ["project_helios_onboarding.md", "engineering_team_roster.md"],
+    "kind": "doc",
+    "tag": "multi"
+  },
+  {
+    "id": "hard-test-008",
+    "question": "what is the employee id number for principal architect Dr. Elena Rostova?",
+    "relevant": ["engineering_team_roster.md"],
+    "kind": "doc",
+    "tag": "identifier"
+  },
+  {
+    "id": "hard-test-009",
+    "question": "what is the jira tracking ticket number for the core engine deliverables on Project Titan?",
+    "relevant": ["project_titan_status.md"],
+    "kind": "doc",
+    "tag": "identifier"
+  },
+  {
+    "id": "hard-test-010",
+    "question": "what is the conference bridge line number for dialing into sev-1 security emergencies?",
+    "relevant": ["security_incident_response.md"],
+    "kind": "doc",
+    "tag": "identifier"
+  },
+  {
+    "id": "hard-test-011",
+    "question": "how much is our continuing education and tuition allowance per year for taking engineering courses or attending conferences?",
+    "relevant": ["hr_benefits_and_leave_policy.md"],
+    "kind": "doc",
+    "tag": "synonym"
+  },
+  {
+    "id": "hard-test-012",
+    "question": "what are the mandatory silence hours during the afternoon where loud phone conversations arent allowed on office floors?",
+    "relevant": ["remote_work_and_office_guidelines.md"],
+    "kind": "doc",
+    "tag": "synonym"
+  },
+  {
+    "id": "hard-test-013",
+    "question": "how often do we have to change our login passwords and rotate api tokens?",
+    "relevant": ["security_access_control.md"],
+    "kind": "doc",
+    "tag": "synonym"
+  },
+  {
+    "id": "hard-test-014",
+    "question": "hey there, so i was wondering, i just joined as a new software engineer and was looking at the hardware options, like do developers get thinkpads or macbooks and what kind of external displays come with that setup?",
+    "relevant": ["hardware_and_facilities_catalog.md"],
+    "kind": "doc",
+    "tag": "chatty"
+  },
+  {
+    "id": "hard-test-015",
+    "question": "hi assistant, so basically if there is ever like a super bad sev-1 security breach or server incident, what is the slack channel we are supposed to jump into and how fast does oncall have to respond according to the SLA?",
+    "relevant": ["security_incident_response.md"],
+    "kind": "doc",
+    "tag": "chatty"
+  },
+  {
+    "id": "hard-test-016",
+    "question": "hey um so i was checking our calendar and was kind of confused about working hours, like what are the official core hours during the day where everyone on the team is expected to be available for meetings?",
+    "relevant": ["hr_benefits_and_leave_policy.md"],
+    "kind": "doc",
+    "tag": "chatty"
+  },
+  {
+    "id": "hard-test-017",
+    "question": "can you tell me what my performance rating was in my last annual review cycle?",
+    "relevant": [],
+    "kind": "personal-no-answer",
+    "tag": "personal-no-answer"
+  },
+  {
+    "id": "hard-test-018",
+    "question": "which desk number on floor 3 did I reserve for this coming wednesday morning?",
+    "relevant": [],
+    "kind": "personal-no-answer",
+    "tag": "personal-no-answer"
+  },
+  {
+    "id": "hard-test-019",
+    "question": "did Dave reply to my email asking about the team offsite budget for Q4?",
+    "relevant": [],
+    "kind": "personal-no-answer",
+    "tag": "personal-no-answer"
+  },
+  {
+    "id": "hard-test-020",
+    "question": "what was the wifi password for my home guest network that i wrote down last week?",
+    "relevant": [],
+    "kind": "personal-no-answer",
+    "tag": "personal-no-answer"
+  },
+  {
+    "id": "hard-test-021",
+    "question": "why does ice float on liquid water instead of sinking to the bottom?",
+    "relevant": [],
+    "kind": "general",
+    "tag": "general"
+  },
+  {
+    "id": "hard-test-022",
+    "question": "what are three interesting facts about the Roman Colosseum?",
+    "relevant": [],
+    "kind": "general",
+    "tag": "general"
+  },
+  {
+    "id": "hard-test-023",
+    "question": "tell me a quick lighthearted joke to cheer me up!",
+    "relevant": [],
+    "kind": "general",
+    "tag": "general"
+  },
+  {
+    "id": "hard-test-024",
+    "question": "how does the speed of sound compare in air versus in water?",
+    "relevant": [],
+    "kind": "general",
+    "tag": "general"
+  }
+]

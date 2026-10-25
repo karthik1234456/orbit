@@ -229,7 +229,7 @@ def run_suite(
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "total_cases": len(cases),
         "repeats": repeats,
-        "cases_version": 5,
+        "cases_version": 6,
         "RAG_AUTO": getattr(settings, "RAG_AUTO", True),
         "RAG_AUTO_MIN_TERMS": getattr(settings, "RAG_AUTO_MIN_TERMS", 2),
         "RAG_AUTO_MIN_COVERAGE": getattr(settings, "RAG_AUTO_MIN_COVERAGE", 0.5),
@@ -239,7 +239,7 @@ def run_suite(
     if extra_meta:
         meta.update(extra_meta)
 
-    meta.setdefault("cases_version", 5)
+    meta.setdefault("cases_version", 6)
     meta.setdefault("RAG_AUTO", getattr(settings, "RAG_AUTO", True))
     meta.setdefault("RAG_AUTO_MIN_TERMS", getattr(settings, "RAG_AUTO_MIN_TERMS", 2))
     meta.setdefault("RAG_AUTO_MIN_COVERAGE", getattr(settings, "RAG_AUTO_MIN_COVERAGE", 0.5))

@@ -23,6 +23,24 @@ FAMILIES: dict[str, set[str]] = {
     },
 }
 
+NEGATION_WORDS: tuple[str, ...] = (
+    "not",
+    "n't",
+    "never",
+    "no",
+    "without",
+    "cannot",
+    "unable",
+    "wasn't",
+    "weren't",
+    "didn't",
+    "won't",
+    "can't",
+    "don't",
+    "couldn't",
+    "wouldn't",
+)
+
 _NEGATION_RE = re.compile(
     r"\b(can't|cannot|can\s+not|won't|will\s+not|don't|do\s+not|unable|never|not\s+able|not|couldn't|could\s+not|wouldn't|would\s+not)\b",
     re.IGNORECASE,

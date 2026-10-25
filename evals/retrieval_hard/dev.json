@@ -1,0 +1,170 @@
+[
+  {
+    "id": "hard-dev-001",
+    "question": "whats the daily food per diem limit for domestic trips now? i remember it used to be like $45 or something",
+    "relevant": ["travel_expense_policy_2026.md"],
+    "kind": "doc",
+    "tag": "conflict"
+  },
+  {
+    "id": "hard-dev-002",
+    "question": "do we still book flights through LegacyTravel using code TRV-901 or what portal are we supposed to use?",
+    "relevant": ["travel_expense_policy_2026.md"],
+    "kind": "doc",
+    "tag": "conflict"
+  },
+  {
+    "id": "hard-dev-003",
+    "question": "whast is the receipt requirement threshold for reimbursment under the current expense policy, is it still $50 or did it drop to $25?",
+    "relevant": ["travel_expense_policy_2026.md"],
+    "kind": "doc",
+    "tag": "conflict"
+  },
+  {
+    "id": "hard-dev-004",
+    "question": "who is the facilities manager i need to contact to authorize access for the hardware security module that is blocking Project Titan?",
+    "relevant": ["project_titan_status.md", "hardware_and_facilities_catalog.md"],
+    "kind": "doc",
+    "tag": "multi"
+  },
+  {
+    "id": "hard-dev-005",
+    "question": "what is the employee id and squad of the person who leads the vector pipeline that Project Helios syncs with?",
+    "relevant": ["project_helios_onboarding.md", "engineering_team_roster.md"],
+    "kind": "doc",
+    "tag": "multi"
+  },
+  {
+    "id": "hard-dev-006",
+    "question": "when are the weekly office hours for the technical lead who heads project titan?",
+    "relevant": ["project_titan_status.md", "engineering_team_roster.md"],
+    "kind": "doc",
+    "tag": "multi"
+  },
+  {
+    "id": "hard-dev-007",
+    "question": "what is the https port number that the helios service listens on locally?",
+    "relevant": ["project_helios_onboarding.md"],
+    "kind": "doc",
+    "tag": "identifier"
+  },
+  {
+    "id": "hard-dev-008",
+    "question": "what is the telephone extension for the gsoc desk if my security badge stops working?",
+    "relevant": ["security_access_control.md"],
+    "kind": "doc",
+    "tag": "identifier"
+  },
+  {
+    "id": "hard-dev-009",
+    "question": "whats the expense claim code for submitting quarterly wellness stipend reimbursments in OrbitPeople?",
+    "relevant": ["hr_benefits_and_leave_policy.md"],
+    "kind": "doc",
+    "tag": "identifier"
+  },
+  {
+    "id": "hard-dev-010",
+    "question": "which serial tag model is assigned to engineering yubikeys for multi-factor logins?",
+    "relevant": ["security_access_control.md"],
+    "kind": "doc",
+    "tag": "identifier"
+  },
+  {
+    "id": "hard-dev-011",
+    "question": "are cabs and rideshares to the airport covered while traveling on company business?",
+    "relevant": ["travel_expense_policy_2026.md"],
+    "kind": "doc",
+    "tag": "synonym"
+  },
+  {
+    "id": "hard-dev-012",
+    "question": "can i get a company gym subsidy or fitness allowance to pay for my local sports club membership?",
+    "relevant": ["hr_benefits_and_leave_policy.md"],
+    "kind": "doc",
+    "tag": "synonym"
+  },
+  {
+    "id": "hard-dev-013",
+    "question": "whats the furniture budget for buying an adjustable standing desk and chair for working from home?",
+    "relevant": ["remote_work_and_office_guidelines.md"],
+    "kind": "doc",
+    "tag": "synonym"
+  },
+  {
+    "id": "hard-dev-014",
+    "question": "hey so um i was talking to my manager earlier and i kind of forgot how our vacation days work, like how many paid days off do we actually get every year and how many days can i carry forward into next spring if i have extra left over?",
+    "relevant": ["hr_benefits_and_leave_policy.md"],
+    "kind": "doc",
+    "tag": "chatty"
+  },
+  {
+    "id": "hard-dev-015",
+    "question": "so basically quick question about my home setup, i know we have anchor days at HQ but like if i live more than thirty miles away do i still really have to commute in every tuesday and thursday or is it totally optional for fully remote folks?",
+    "relevant": ["remote_work_and_office_guidelines.md"],
+    "kind": "doc",
+    "tag": "chatty"
+  },
+  {
+    "id": "hard-dev-016",
+    "question": "hi there! so i was wondering, if someone is in the lab and borrows some testing instruments or scopes from room 304, like how many weeks are they allowed to keep the hardware before facilities flags it as overdue?",
+    "relevant": ["hardware_and_facilities_catalog.md"],
+    "kind": "doc",
+    "tag": "chatty"
+  },
+  {
+    "id": "hard-dev-017",
+    "question": "what time did my 1:1 meeting with Sarah get rescheduled to for tomorrow afternoon?",
+    "relevant": [],
+    "kind": "personal-no-answer",
+    "tag": "personal-no-answer"
+  },
+  {
+    "id": "hard-dev-018",
+    "question": "did our team finish reviewing my pull request on the auth-tokens branch yet?",
+    "relevant": [],
+    "kind": "personal-no-answer",
+    "tag": "personal-no-answer"
+  },
+  {
+    "id": "hard-dev-019",
+    "question": "where are we going for our sprint retrospective team lunch on friday?",
+    "relevant": [],
+    "kind": "personal-no-answer",
+    "tag": "personal-no-answer"
+  },
+  {
+    "id": "hard-dev-020",
+    "question": "can you check my current direct deposit bank account number saved in my payroll settings?",
+    "relevant": [],
+    "kind": "personal-no-answer",
+    "tag": "personal-no-answer"
+  },
+  {
+    "id": "hard-dev-021",
+    "question": "what is the capital city of Australia and when was it founded?",
+    "relevant": [],
+    "kind": "general",
+    "tag": "general"
+  },
+  {
+    "id": "hard-dev-022",
+    "question": "how do plants convert sunlight into chemical energy during photosynthesis?",
+    "relevant": [],
+    "kind": "general",
+    "tag": "general"
+  },
+  {
+    "id": "hard-dev-023",
+    "question": "good morning assistant! how are you doing today?",
+    "relevant": [],
+    "kind": "general",
+    "tag": "general"
+  },
+  {
+    "id": "hard-dev-024",
+    "question": "can you explain the difference between a solar eclipse and a lunar eclipse in simple terms?",
+    "relevant": [],
+    "kind": "general",
+    "tag": "general"
+  }
+]

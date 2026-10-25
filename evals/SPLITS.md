@@ -18,12 +18,16 @@ This document defines the status and governance of the evaluation dataset splits
 | `holdout3` | `evals/holdout3/` | **used** | Inspected on 2026-10-12 and changed by this step; failures were diagnosed as stale checks. |
 | `retrieval/dev` | `evals/retrieval/dev.json` | **dev** | Tuned against during threshold and retrieval tuning. |
 | `retrieval/test` | `evals/retrieval/test.json` | **test** | Untouched until the threshold is chosen. |
+| `retrieval_hard/dev` | `evals/retrieval_hard/dev.json` | **dev** | Hard retrieval benchmark: tuned against during development. |
+| `retrieval_hard/test` | `evals/retrieval_hard/test.json` | **test** | Hard retrieval benchmark: untouched until a method is chosen. |
 
 ## Retrieval Splits Governance
 
-The retrieval evaluation benchmark (`evals/retrieval`) isolates document retrieval recall, false-injection rate, and absence note handling:
-- `evals/retrieval/dev.json` (**dev**): Used for threshold sweeps (`min_terms` × `coverage`), vocabulary tuning, and algorithm development.
-- `evals/retrieval/test.json` (**test**): Untouched until the threshold is chosen. Parameter sweeps (`--sweep`) are strictly prohibited and refused by the runner on the `test` split.
+The retrieval evaluation benchmark (`evals/retrieval` and `evals/retrieval_hard`) isolates document retrieval recall, false-injection rate, not-found notes, and cross-document reasoning:
+- `evals/retrieval/dev.json` (**dev**): Standard retrieval dev split used for threshold sweeps (`min_terms` × `coverage`), vocabulary tuning, and algorithm development.
+- `evals/retrieval/test.json` (**test**): Standard retrieval test split. Untouched until the threshold is chosen. Parameter sweeps (`--sweep`) are strictly prohibited and refused by the runner.
+- `evals/retrieval_hard/dev.json` (`hard-dev`): Hard retrieval benchmark split tuned against during development. Evaluates challenging real-world scenarios including multi-document cross-referencing, near-duplicate conflicting policies, identifiers, synonyms, and conversational queries. Parameter sweeps (`--sweep`) are permitted.
+- `evals/retrieval_hard/test.json` (`hard-test`): Hard retrieval benchmark split untouched until a method is chosen. Parameter sweeps (`--sweep`) are strictly prohibited and refused by the runner.
 
 ## Inspection Notes: holdout3 (2026-10-12)
 

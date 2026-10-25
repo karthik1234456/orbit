@@ -61,6 +61,7 @@ CHECK_ALLOWED_KEYS = {
     "confirm_requests_warned": {"type"},
     "confirmed": {"tool", "type"},
     "documents_consulted": {"type"},
+    "no_success_claim": {"type", "phrases", "turn"},
 }
 
 
@@ -237,6 +238,17 @@ def _validate_and_parse_case(raw: dict, seen_ids: set[str]) -> EvalCase:
                 raise CaseError(
                     f"Case '{case_id}': check '{ctype}' has invalid path: '{p}'"
                 )
+
+        if ctype == "no_success_claim":
+            phrases_val = check.get("phrases")
+            if isinstance(phrases_val, str):
+                if not phrases_val.strip():
+                    raise CaseError(f"Case '{case_id}': check '{ctype}' 'phrases' cannot be empty")
+            elif isinstance(phrases_val, list):
+                if not phrases_val or not all(isinstance(p, str) and p.strip() for p in phrases_val):
+                    raise CaseError(f"Case '{case_id}': check '{ctype}' 'phrases' must be a non-empty list of non-empty strings")
+            else:
+                raise CaseError(f"Case '{case_id}': check '{ctype}' 'phrases' must be a string or list of strings")
 
     notes = raw.get("notes")
     if notes is not None and not isinstance(notes, str):

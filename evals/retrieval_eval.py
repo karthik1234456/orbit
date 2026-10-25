@@ -18,7 +18,8 @@ from rag.safety import scan_for_injection
 
 
 def get_git_commit() -> str:
-    """Retrieve current git HEAD commit hash, or 'unknown' if not in git repo."""
+    """Retrieve current git HEAD commit hash, with '-dirty' suffix if working tree has uncommitted changes."""
+    commit = "unknown"
     try:
         res = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -26,20 +27,34 @@ def get_git_commit() -> str:
             text=True,
             check=True,
         )
-        return res.stdout.strip()
+        commit = res.stdout.strip()
     except Exception:
-        return "unknown"
+        pass
+
+    try:
+        status_res = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        if status_res.stdout.strip():
+            return f"{commit}-dirty"
+    except Exception:
+        pass
+
+    return commit
 
 
 def load_retrieval_dataset(
     split: str,
-    base_dir: Union[str, Path] = "evals/retrieval",
+    base_dir: Optional[Union[str, Path]] = None,
 ) -> list[dict[str, Any]]:
-    """Load and validate a retrieval dataset split (dev.json or test.json).
+    """Load and validate a retrieval dataset split (dev, test, hard-dev, hard-test).
 
     Args:
-        split: Split identifier ('dev' or 'test').
-        base_dir: Directory containing retrieval dataset files.
+        split: Split identifier ('dev', 'test', 'hard-dev', or 'hard-test').
+        base_dir: Optional directory containing dataset JSON files.
 
     Returns:
         list[dict[str, Any]]: Parsed items from the split JSON.
@@ -48,7 +63,15 @@ def load_retrieval_dataset(
         FileNotFoundError: If split JSON file does not exist.
         ValueError: If JSON contents fail schema validation.
     """
-    path = Path(base_dir) / f"{split}.json"
+    clean_split = split.lower().strip()
+    if clean_split in ("hard-dev", "hard-test"):
+        file_stem = clean_split.replace("hard-", "")
+        eff_dir = Path(base_dir) if base_dir is not None else Path("evals/retrieval_hard")
+    else:
+        file_stem = clean_split
+        eff_dir = Path(base_dir) if base_dir is not None else Path("evals/retrieval")
+
+    path = eff_dir / f"{file_stem}.json"
     if not path.exists():
         raise FileNotFoundError(f"Retrieval split dataset not found: {path}")
 
@@ -133,6 +156,7 @@ def evaluate_item(
     """Evaluate a single question against the index using auto_retrieve."""
     question = item["question"]
     kind = item["kind"]
+    tag = item.get("tag", "")
     relevant_docs = item["relevant"]
 
     ret = auto_retrieve(
@@ -158,6 +182,14 @@ def evaluate_item(
             if f"[{doc_name}#" in ret.block or f"[{rel_doc}#" in ret.block:
                 matched_relevant.append(rel_doc)
 
+    # Detect if a passage from a document NOT in relevant was injected for a doc question
+    cited_docs: list[str] = []
+    if has_block and ret.block:
+        cited_docs = re.findall(r"\[([^\#\]\n]+)\#", ret.block)
+    relevant_names = {Path(r).name for r in relevant_docs}
+    wrong_docs = [c.strip() for c in cited_docs if Path(c.strip()).name not in relevant_names]
+    has_wrong_doc = (kind == "doc") and (len(wrong_docs) > 0)
+
     if kind == "doc":
         # Passed if at least one chunk of a relevant document was injected
         passed = len(matched_relevant) > 0 and injected_count > 0
@@ -173,6 +205,7 @@ def evaluate_item(
     return {
         "id": item["id"],
         "kind": kind,
+        "tag": tag,
         "question": question,
         "relevant": relevant_docs,
         "injected_count": injected_count,
@@ -180,6 +213,8 @@ def evaluate_item(
         "has_block": has_block,
         "has_note": has_note,
         "matched_relevant": matched_relevant,
+        "has_wrong_doc": has_wrong_doc,
+        "wrong_docs": wrong_docs,
         "passed": passed,
     }
 
@@ -197,31 +232,52 @@ def compute_retrieval_metrics(
     doc_passed = sum(1 for r in doc_results if r["passed"])
     recall = doc_passed / len(doc_results) if doc_results else 0.0
 
-    # 2. False-injection rate: fraction of general questions that received a document block
+    # 2. Recall broken down by tag (for doc questions)
+    recall_by_tag: dict[str, dict[str, Any]] = {}
+    for r in doc_results:
+        tag = r.get("tag")
+        if not tag:
+            continue
+        if tag not in recall_by_tag:
+            recall_by_tag[tag] = {"total": 0, "passed": 0, "recall": 0.0}
+        recall_by_tag[tag]["total"] += 1
+        if r["passed"]:
+            recall_by_tag[tag]["passed"] += 1
+    for tag, t_data in recall_by_tag.items():
+        t_data["recall"] = t_data["passed"] / t_data["total"] if t_data["total"] > 0 else 0.0
+
+    # 3. False-injection rate: fraction of general questions that received a document block
     gen_injected = sum(1 for r in gen_results if r["has_block"])
     false_injection_rate = gen_injected / len(gen_results) if gen_results else 0.0
 
-    # 3. Not-found-note rate for personal-no-answer questions
+    # 4. Not-found-note rate for personal-no-answer questions
     pna_with_note = sum(1 for r in pna_results if r["has_note"])
     not_found_note_rate = pna_with_note / len(pna_results) if pna_results else 0.0
 
-    # 4. Injected-passage count per doc question
+    # 5. Injected-wrong-document rate: fraction of doc questions where a passage from a doc not in relevant was injected
+    doc_with_wrong = sum(1 for r in doc_results if r.get("has_wrong_doc", False))
+    injected_wrong_doc_rate = doc_with_wrong / len(doc_results) if doc_results else 0.0
+
+    # 6. Injected-passage count per doc question
     total_doc_injected = sum(r["injected_count"] for r in doc_results)
     avg_injected_passages = total_doc_injected / len(doc_results) if doc_results else 0.0
 
-    # 5. Total flagged chunks withheld across all queries
+    # 7. Total flagged chunks withheld across all queries
     flagged_withheld = total_flagged_withheld
 
     return {
         "doc_total": len(doc_results),
         "doc_passed": doc_passed,
         "recall": recall,
+        "recall_by_tag": recall_by_tag,
         "gen_total": len(gen_results),
         "gen_injected": gen_injected,
         "false_injection_rate": false_injection_rate,
         "pna_total": len(pna_results),
         "pna_with_note": pna_with_note,
         "not_found_note_rate": not_found_note_rate,
+        "doc_with_wrong": doc_with_wrong,
+        "injected_wrong_doc_rate": injected_wrong_doc_rate,
         "avg_injected_passages": avg_injected_passages,
         "flagged_chunks_withheld": flagged_withheld,
     }
@@ -233,10 +289,7 @@ def run_retrieval_sweep(
     top_k: int = 3,
     max_chars: int = 1500,
 ) -> list[dict[str, Any]]:
-    """Tabulate threshold sweep over min_terms in {1,2,3} x coverage in {0.25, 0.34, 0.5}.
-
-    Allowed for dev split only.
-    """
+    """Tabulate threshold sweep over min_terms in {1,2,3} x coverage in {0.25, 0.34, 0.5}."""
     min_terms_grid = [1, 2, 3]
     coverage_grid = [0.25, 0.34, 0.5]
     sweep_table: list[dict[str, Any]] = []
@@ -262,6 +315,7 @@ def run_retrieval_sweep(
                     "recall": metrics["recall"],
                     "false_injection_rate": metrics["false_injection_rate"],
                     "not_found_note_rate": metrics["not_found_note_rate"],
+                    "injected_wrong_doc_rate": metrics["injected_wrong_doc_rate"],
                     "avg_injected_passages": metrics["avg_injected_passages"],
                 }
             )
@@ -279,12 +333,13 @@ def render_retrieval_report(
 ) -> str:
     """Render comprehensive markdown report for retrieval evaluation."""
     timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    dirty_marker = " (dirty)" if "-dirty" in commit_hash else ""
     lines = [
         f"# ORBIT Retrieval Benchmark Report ({split.upper()} split)",
         "",
         f"- **Execution Timestamp**: {timestamp_str}",
         f"- **Dataset Split**: `{split}`",
-        f"- **Git Commit Hash**: `{commit_hash}`",
+        f"- **Git Commit Hash**: `{commit_hash}`{dirty_marker}",
         f"- **Thresholds**: `min_terms={thresholds.get('min_terms')}`, `min_coverage={thresholds.get('min_coverage')}`, `top_k={thresholds.get('top_k')}`, `max_chars={thresholds.get('max_chars')}`",
         "",
         "## Headline Metrics",
@@ -294,23 +349,39 @@ def render_retrieval_report(
         f"| **Recall (doc questions)** | {metrics['recall'] * 100:.1f}% ({metrics['doc_passed']}/{metrics['doc_total']}) | Relevant document chunk injected |",
         f"| **False-Injection Rate (general)** | {metrics['false_injection_rate'] * 100:.1f}% ({metrics['gen_injected']}/{metrics['gen_total']}) | General questions receiving context block |",
         f"| **Not-Found-Note Rate (personal-no-answer)** | {metrics['not_found_note_rate'] * 100:.1f}% ({metrics['pna_with_note']}/{metrics['pna_total']}) | Missing personal docs flagged with note |",
+        f"| **Injected-Wrong-Document Rate (doc questions)** | {metrics['injected_wrong_doc_rate'] * 100:.1f}% ({metrics['doc_with_wrong']}/{metrics['doc_total']}) | Passage from non-relevant document injected |",
         f"| **Avg Injected Passages / Doc Question** | {metrics['avg_injected_passages']:.2f} | Bounded passage volume |",
         f"| **Flagged Chunks Withheld** | {metrics['flagged_chunks_withheld']} | Safety/prompt-injection chunks filtered |",
         "",
     ]
+
+    if metrics.get("recall_by_tag"):
+        lines.extend(
+            [
+                "## Recall by Tag (Doc Questions)",
+                "",
+                "| Tag | Passed | Total | Recall |",
+                "|---|---|---|---|",
+            ]
+        )
+        for tag, tag_stats in sorted(metrics["recall_by_tag"].items()):
+            lines.append(
+                f"| `{tag}` | {tag_stats['passed']} | {tag_stats['total']} | {tag_stats['recall'] * 100:.1f}% |"
+            )
+        lines.append("")
 
     if sweep_results:
         lines.extend(
             [
                 "## Threshold Sweep Matrix (min_terms × coverage)",
                 "",
-                "| min_terms | min_coverage | Recall (doc) | False-Injection (gen) | PNA Note Rate | Avg Passages |",
-                "|---|---|---|---|---|---|",
+                "| min_terms | min_coverage | Recall (doc) | False-Injection (gen) | PNA Note Rate | Injected-Wrong-Doc | Avg Passages |",
+                "|---|---|---|---|---|---|---|",
             ]
         )
         for s in sweep_results:
             lines.append(
-                f"| {s['min_terms']} | {s['min_coverage']:.2f} | {s['recall'] * 100:.1f}% | {s['false_injection_rate'] * 100:.1f}% | {s['not_found_note_rate'] * 100:.1f}% | {s['avg_injected_passages']:.2f} |"
+                f"| {s['min_terms']} | {s['min_coverage']:.2f} | {s['recall'] * 100:.1f}% | {s['false_injection_rate'] * 100:.1f}% | {s['not_found_note_rate'] * 100:.1f}% | {s['injected_wrong_doc_rate'] * 100:.1f}% | {s['avg_injected_passages']:.2f} |"
             )
         lines.append("")
 
@@ -318,8 +389,8 @@ def render_retrieval_report(
         [
             "## Per-Item Results",
             "",
-            "| ID | Kind | Status | Injected | Expected Relevant | Matched | Question |",
-            "|---|---|---|---|---|---|---|",
+            "| ID | Tag | Kind | Status | Injected | Expected Relevant | Matched | Wrong Docs Injected | Question |",
+            "|---|---|---|---|---|---|---|---|---|",
         ]
     )
 
@@ -327,10 +398,12 @@ def render_retrieval_report(
         status_icon = "✓ PASS" if r["passed"] else "✗ FAIL"
         expected = ", ".join(r["relevant"]) if r["relevant"] else "-"
         matched = ", ".join(r["matched_relevant"]) if r["matched_relevant"] else "-"
+        wrong = ", ".join(r.get("wrong_docs", [])) if r.get("wrong_docs") else "-"
+        tag_val = r.get("tag") or "-"
         # Escape pipe in question if present
         q_clean = r["question"].replace("|", "\\|")
         lines.append(
-            f"| `{r['id']}` | `{r['kind']}` | {status_icon} | {r['injected_count']} | {expected} | {matched} | {q_clean} |"
+            f"| `{r['id']}` | `{tag_val}` | `{r['kind']}` | {status_icon} | {r['injected_count']} | {expected} | {matched} | {wrong} | {q_clean} |"
         )
 
     lines.append("")
@@ -341,7 +414,8 @@ def run_retrieval_eval(
     split: str,
     sweep: bool = False,
     out_dir: str = "evals/results",
-    corpus_dir: str = "evals/retrieval/corpus",
+    corpus_dir: Optional[str] = None,
+    dataset_dir: Optional[str] = None,
     min_terms: Optional[int] = None,
     min_coverage: Optional[float] = None,
     top_k: Optional[int] = None,
@@ -349,20 +423,32 @@ def run_retrieval_eval(
 ) -> int:
     """Execute retrieval evaluation pipeline, compute metrics, and write report."""
     split = split.lower().strip()
-    if split not in ("dev", "test"):
-        print(f"Error: Invalid retrieval split '{split}'. Must be 'dev' or 'test'.", file=sys.stderr)
-        return 1
-
-    if sweep and split == "test":
+    valid_splits = ("dev", "test", "hard-dev", "hard-test")
+    if split not in valid_splits:
         print(
-            "Error: --sweep is refused on the 'test' split. The test split must remain unobserved until the final threshold is chosen.",
+            f"Error: Invalid retrieval split '{split}'. Must be one of: {', '.join(valid_splits)}.",
             file=sys.stderr,
         )
         return 1
 
+    if sweep and split in ("test", "hard-test"):
+        reason = "a method is chosen" if split == "hard-test" else "the final threshold is chosen"
+        print(
+            f"Error: --sweep is refused on the '{split}' split. The test split must remain unobserved until {reason}.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if split in ("hard-dev", "hard-test"):
+        eff_corpus_dir = corpus_dir if corpus_dir is not None else "evals/retrieval_hard/corpus"
+        eff_dataset_dir = dataset_dir if dataset_dir is not None else "evals/retrieval_hard"
+    else:
+        eff_corpus_dir = corpus_dir if corpus_dir is not None else "evals/retrieval/corpus"
+        eff_dataset_dir = dataset_dir if dataset_dir is not None else "evals/retrieval"
+
     # Load dataset split
     try:
-        items = load_retrieval_dataset(split)
+        items = load_retrieval_dataset(split, base_dir=eff_dataset_dir)
     except Exception as exc:
         print(f"Error loading retrieval dataset: {exc}", file=sys.stderr)
         return 1
@@ -387,7 +473,7 @@ def run_retrieval_eval(
     # Build temporary index in a clean temp directory
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_db = Path(temp_dir) / "retrieval_eval.db"
-        idx, total_chunks, total_flagged = build_retrieval_index(corpus_dir, temp_db)
+        idx, total_chunks, total_flagged = build_retrieval_index(eff_corpus_dir, temp_db)
         print(f"Corpus index built: {total_chunks} chunks, {total_flagged} flagged chunks.")
 
         # Evaluate each item under the effective thresholds
@@ -413,19 +499,20 @@ def run_retrieval_eval(
             print("\nRunning threshold parameter sweep ({1,2,3} x {0.25, 0.34, 0.5})...")
             sweep_results = run_retrieval_sweep(idx, items, top_k=eff_top_k, max_chars=eff_max_chars)
 
-            print("\n" + "=" * 80)
+            print("\n" + "=" * 90)
             print("SWEEP RESULTS MATRIX")
-            print("=" * 80)
-            print(f"{'min_terms':<10} {'coverage':<12} {'Recall':<14} {'False-Inj':<14} {'PNA-Note':<14} {'Avg Passages':<12}")
-            print("-" * 80)
+            print("=" * 90)
+            print(f"{'min_terms':<10} {'coverage':<12} {'Recall':<14} {'False-Inj':<14} {'PNA-Note':<14} {'Wrong-Doc':<14} {'Avg Passages':<12}")
+            print("-" * 90)
             for s in sweep_results:
                 rec_str = f"{s['recall'] * 100:.1f}%"
                 fi_str = f"{s['false_injection_rate'] * 100:.1f}%"
                 pna_str = f"{s['not_found_note_rate'] * 100:.1f}%"
+                wd_str = f"{s['injected_wrong_doc_rate'] * 100:.1f}%"
                 print(
-                    f"{s['min_terms']:<10} {s['min_coverage']:<12.2f} {rec_str:<14} {fi_str:<14} {pna_str:<14} {s['avg_injected_passages']:<12.2f}"
+                    f"{s['min_terms']:<10} {s['min_coverage']:<12.2f} {rec_str:<14} {fi_str:<14} {pna_str:<14} {wd_str:<14} {s['avg_injected_passages']:<12.2f}"
                 )
-            print("=" * 80)
+            print("=" * 90)
 
     # Format report
     report_content = render_retrieval_report(
@@ -447,11 +534,16 @@ def run_retrieval_eval(
     print("\n" + "=" * 40)
     print("RETRIEVAL EVALUATION SUMMARY")
     print("=" * 40)
-    print(f"Recall (doc questions):       {metrics['recall'] * 100:.1f}% ({metrics['doc_passed']}/{metrics['doc_total']})")
-    print(f"False-Injection Rate (gen):   {metrics['false_injection_rate'] * 100:.1f}% ({metrics['gen_injected']}/{metrics['gen_total']})")
-    print(f"Not-Found-Note Rate (pna):    {metrics['not_found_note_rate'] * 100:.1f}% ({metrics['pna_with_note']}/{metrics['pna_total']})")
-    print(f"Avg Injected Passages / Doc:  {metrics['avg_injected_passages']:.2f}")
-    print(f"Flagged Chunks Withheld:      {metrics['flagged_chunks_withheld']}")
+    print(f"Recall (doc questions):              {metrics['recall'] * 100:.1f}% ({metrics['doc_passed']}/{metrics['doc_total']})")
+    if metrics.get("recall_by_tag"):
+        for tag, tag_stats in sorted(metrics["recall_by_tag"].items()):
+            print(f"  - Tag '{tag}':{' ' * max(1, 14 - len(tag))} {tag_stats['recall'] * 100:.1f}% ({tag_stats['passed']}/{tag_stats['total']})")
+    print(f"False-Injection Rate (gen):          {metrics['false_injection_rate'] * 100:.1f}% ({metrics['gen_injected']}/{metrics['gen_total']})")
+    print(f"Not-Found-Note Rate (pna):           {metrics['not_found_note_rate'] * 100:.1f}% ({metrics['pna_with_note']}/{metrics['pna_total']})")
+    print(f"Injected-Wrong-Doc Rate (doc):       {metrics['injected_wrong_doc_rate'] * 100:.1f}% ({metrics['doc_with_wrong']}/{metrics['doc_total']})")
+    print(f"Avg Injected Passages / Doc:         {metrics['avg_injected_passages']:.2f}")
+    print(f"Flagged Chunks Withheld:             {metrics['flagged_chunks_withheld']}")
     print("=" * 40 + "\n")
 
     return 0
+

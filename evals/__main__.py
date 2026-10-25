@@ -123,15 +123,15 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--retrieval",
         type=str,
-        choices=["dev", "test"],
+        choices=["dev", "test", "hard-dev", "hard-test"],
         default=None,
-        help="Execute retrieval evaluation on the specified split ('dev' or 'test').",
+        help="Execute retrieval evaluation on the specified split ('dev', 'test', 'hard-dev', or 'hard-test').",
     )
     parser.add_argument(
         "--sweep",
         action="store_true",
         default=False,
-        help="Run threshold parameter sweep across min_terms and coverage (allowed for 'dev' split only).",
+        help="Run threshold parameter sweep across min_terms and coverage (allowed for 'dev' and 'hard-dev' splits only).",
     )
     return parser.parse_args(argv)
 
@@ -354,7 +354,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         "total_cases": total_dataset_cases,
         "is_partial": is_partial,
         "cases_sha256": cases_sha256,
-        "cases_version": 5,
+        "cases_version": 6,
         "RAG_AUTO": getattr(settings, "RAG_AUTO", True),
         "RAG_AUTO_MIN_TERMS": getattr(settings, "RAG_AUTO_MIN_TERMS", 2),
         "RAG_AUTO_MIN_COVERAGE": getattr(settings, "RAG_AUTO_MIN_COVERAGE", 0.5),
