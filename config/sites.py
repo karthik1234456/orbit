@@ -36,6 +36,10 @@ SITES: dict[str, dict[str, Any]] = {
         "url": "https://mail.google.com",
         "search": None,
     },
+    "maps": {
+        "url": "https://www.google.com/maps",
+        "search": "https://www.google.com/maps/search/{query}",
+    },
 }
 
 ALIASES: dict[str, str] = {
@@ -43,6 +47,7 @@ ALIASES: dict[str, str] = {
     "you tube": "youtube",
     "gh": "github",
     "wiki": "wikipedia",
+    "google maps": "maps",
 }
 
 

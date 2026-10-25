@@ -63,6 +63,7 @@ _SITE_DISPLAY_NAMES = {
     "github": "GitHub",
     "wikipedia": "Wikipedia",
     "gmail": "Gmail",
+    "maps": "Google Maps",
 }
 
 _CANDIDATE_SEP_PATTERN = re.compile(

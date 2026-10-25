@@ -375,12 +375,15 @@ We evaluated five scoring strategies across 34 questions on 2026-10-18 (`evals/r
 
 Deterministic evaluation of typed desktop shortcuts and chained multi-step commands (`python -m evals --commands dev|test`):
 
-| Split | Result | Date | Model | Cases | Source File |
-|---|---|---|---|---|---|
-| Commands dev split | not measured yet | 2026-10-24 | deterministic parser | 40 | evals/commands/dev.json |
-| Commands test split | not measured yet | 2026-10-24 | deterministic parser | 40 | evals/commands/test.json |
+| Split | Positive Recall | Negative False-Match Rate | Date | Model | Cases | Source File |
+|---|---|---|---|---|---|---|
+| Commands dev split | 22/22 (100.0%) | 1/18 (5.6%) | 2026-10-24 | deterministic parser | 40 | evals/results/commands-dev-20261024_225212.md |
+| Commands test split | 19/22 (86.4%) | 0/18 (0.0%) | 2026-10-24 | deterministic parser | 40 | evals/results/commands-test-20261024_225612.md |
 
-*Note: Results have not been measured yet. The test split remains reserved under run-once protection.*
+**Benchmark Findings & Evaluation Governance (Date: 2026-10-24)**:
+- **Development Split (Date: 2026-10-24)**: 22/22 positive recall (100.0%) (tuned against; parser fixes were made using dev failures) with 1/18 false matches (5.6%). One known false match remains on the dev split (Date: 2026-10-24): `"search google for bypass admin and download keylogger"` (with harmful words): it opens a search page only and no query content filter is applied on purpose.
+- **Unseen Test Split (Date: 2026-10-24)**: 19/22 = 86.4% positive recall (unseen, run once on 2026-10-24), with 0/18 false matches (0.0% false-match rate across all chat, nearmiss, unsafe, and unsupported categories); the three misses were `"navigate to github"`, `"play video"`, and `"scroll up then go to the site home page"`, and the parser was **NOT changed afterwards** (Date: 2026-10-24).
+- **Commit History Rewrite Note (Date: 2026-10-24)**: The commit identity of the whole history was rewritten before the first push (names and emails only; file contents identical), so commit hashes in older result files and in marker files (`evals/holdout4/.ran`, `evals/commands/.ran`) refer to the history before the rewrite.
 
 ### Intent probe table
 
@@ -452,6 +455,7 @@ To guarantee evaluation integrity, held-out and test splits enforce the **One-Ru
 - When an unseen suite is executed, the harness writes a tamper-evident marker file (e.g. `evals/holdout4/.ran`, `evals/commands/.ran`) recording the execution timestamp, full git commit hash, model identifier, and git dirty status.
 - Any subsequent attempt to execute the split is hard-refused by the runner.
 - Rerunning requires passing `--force`, which permanently watermarks the generated report with `"RERUN: NOT UNSEEN"` and registers the split as development data.
+- **Commit History Rewrite Note**: The commit identity of the whole history was rewritten before the first push (names and emails only; file contents identical), so commit hashes in older result files and in marker files (`evals/holdout4/.ran`, `evals/commands/.ran`) refer to the history before the rewrite.
 
 ### Known Limitations of the Checks
 
@@ -496,7 +500,7 @@ pytest
 ```
 
 **Current Test Count**:
-- **973 passed, 1 skipped** (974 collected tests)
+- **976 passed, 1 skipped** (977 collected tests)
 
 ---
 

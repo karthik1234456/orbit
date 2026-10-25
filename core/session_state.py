@@ -39,8 +39,13 @@ def _extract_site_key(url_str: str, sites: Optional[Mapping[str, Any]] = None) -
     host = (parsed.netloc or parsed.path).lower().split(":")[0]
     host_clean = host[4:] if host.startswith("www.") else host
 
-    # Try matching against sites in SITES
-    for k, v in sites.items():
+    # Try matching against sites in SITES (sorting by URL length descending for path specificity)
+    sorted_sites = sorted(
+        sites.items(),
+        key=lambda kv: len(kv[1].get("url", "") if isinstance(kv[1], dict) else str(kv[1])),
+        reverse=True,
+    )
+    for k, v in sorted_sites:
         key_lower = k.lower()
         if isinstance(v, dict):
             target_url = v.get("url", "")
@@ -50,7 +55,9 @@ def _extract_site_key(url_str: str, sites: Optional[Mapping[str, Any]] = None) -
         s_host = (p.netloc or p.path).lower().split(":")[0]
         s_host_clean = s_host[4:] if s_host.startswith("www.") else s_host
         if host_clean == s_host_clean or host == s_host:
-            return key_lower, clean_url
+            s_path = p.path.rstrip("/")
+            if not s_path or parsed.path.rstrip("/").startswith(s_path):
+                return key_lower, clean_url
 
     # Fall back to the hostname (or host_clean if available)
     fallback_host = parsed.netloc or host_clean or clean_url

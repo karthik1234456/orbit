@@ -481,6 +481,12 @@ def parse_shortcut(
                 cleaned,
                 re.IGNORECASE,
             )
+        if not click_ord_match:
+            click_ord_match = re.match(
+                rf"^(?:play|open|click)(?:\s+the)?\s+(?:video|result|item)\s+(?:number\s+)?{num_token_pattern}(?:\s+(.*))?$",
+                cleaned,
+                re.IGNORECASE,
+            )
 
         if click_ord_match:
             ord_map = {

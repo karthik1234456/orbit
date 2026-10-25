@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from config.sites import SITES
 
 # Only these site keys from SITES are permitted for interactive browser control.
-INTERACTIVE_SITES: list[str] = ["youtube", "google", "wikipedia", "github"]
+INTERACTIVE_SITES: list[str] = ["youtube", "google", "wikipedia", "github", "maps"]
 
 # Hostnames explicitly barred from interactive automation even if under an allowed domain.
 NON_INTERACTIVE_HOSTS: Set[str] = {
@@ -52,6 +52,12 @@ SELECTORS: dict[str, list[str]] = {
         ".repo-list-item a",
         ".search-title a",
         "a.v-align-middle",
+    ],
+    "maps": [
+        "a[href*='/maps/place/']",
+        "div[role='feed'] a[href]",
+        "div[role='article'] a[href]",
+        ".hfpxzc",
     ],
 }
 

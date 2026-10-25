@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Tuned and verified using the `dev` benchmark split (`evals/commands/dev.json`).
   - Strict evaluation governance maintained: `test` split was NOT touched or executed.
   - Added comprehensive test suite `tests/test_commands_coverage.py` with verified test isolation from `dev.json`.
+- **Google Maps Site & Non-Ordinal Click Result Support (cmd-dev-016 Fix)**:
+  - Added `"maps"` site configuration and `"google maps"` alias in `config/sites.py` with URL `https://www.google.com/maps` and search template `https://www.google.com/maps/search/{query}`.
+  - Added `"maps"` to interactive browser sites list (`INTERACTIVE_SITES`) and click selectors in `config/browser_sites.py`, and registered `"Google Maps"` in `_SITE_DISPLAY_NAMES` in `core/chains.py`.
+  - Prioritized path specificity in `_extract_site_key()` so `https://www.google.com/maps` cleanly resolves to `maps` rather than `google`.
+  - Extended Pattern D in `core/shortcuts.py` to support `click (the )?(result|video|item) [number ]?<num>` without an ordinal word (e.g. `click result 1`, `click result 2`, `open video 3`).
+  - Achieved 100.0% positive recall (22/22) and 100.0% step exact-match rate on the `dev` benchmark split.
 
 ---
 

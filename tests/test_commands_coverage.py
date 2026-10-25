@@ -305,6 +305,92 @@ def test_followup_simulated_state():
     assert steps[1].tool == "browser_media" and steps[1].args == {"action": "play"}
 
 
+def test_click_result_n_without_ordinal_word():
+    """Verify 'click result N' and related forms without an ordinal word map to browser_click_result."""
+    res1 = _parse("click result 1")
+    assert isinstance(res1, ToolCallSpec) and res1.name == "browser_click_result" and res1.args == {"n": 1}
+
+    res2 = _parse("click result 2")
+    assert isinstance(res2, ToolCallSpec) and res2.name == "browser_click_result" and res2.args == {"n": 2}
+
+    res3 = _parse("click the result 3")
+    assert isinstance(res3, ToolCallSpec) and res3.name == "browser_click_result" and res3.args == {"n": 3}
+
+    res4 = _parse("open result 4")
+    assert isinstance(res4, ToolCallSpec) and res4.name == "browser_click_result" and res4.args == {"n": 4}
+
+    res5 = _parse("play video 2")
+    assert isinstance(res5, ToolCallSpec) and res5.name == "browser_click_result" and res5.args == {"n": 2}
+
+    res6 = _parse("click item 5")
+    assert isinstance(res6, ToolCallSpec) and res6.name == "browser_click_result" and res6.args == {"n": 5}
+
+    res7 = _parse("click result number 2")
+    assert isinstance(res7, ToolCallSpec) and res7.name == "browser_click_result" and res7.args == {"n": 2}
+
+
+def test_chain_comma_plus_after_that_boundaries():
+    """Verify 'comma plus after that' boundaries are cleanly detected and chained."""
+    text1 = "open google, after that search google for python"
+    plan1 = _parse(text1)
+    assert isinstance(plan1, ShortcutPlan) and len(plan1.steps) == 2
+    assert plan1.steps[0].tool == "open_website" and plan1.steps[0].args == {"url": "https://www.google.com"}
+    assert plan1.steps[1].tool == "search_site" and plan1.steps[1].args == {"site": "google", "query": "python"}
+
+    text2 = "go to youtube, after that click result 1"
+    plan2 = _parse(text2)
+    assert isinstance(plan2, ShortcutPlan) and len(plan2.steps) == 2
+    assert plan2.steps[0].tool == "open_website" and plan2.steps[0].args == {"url": "https://www.youtube.com"}
+    assert plan2.steps[1].tool == "browser_click_result" and plan2.steps[1].args == {"n": 1}
+
+
+def test_chain_other_sites_form():
+    """Verify other sites in the 'go to <site>, search <site> for <q>, after that click result N' chain form."""
+    text_gh = "go to github, search github for rust, after that click result 2"
+    plan_gh = _parse(text_gh)
+    assert isinstance(plan_gh, ShortcutPlan) and len(plan_gh.steps) == 3
+    assert plan_gh.steps[0].tool == "open_website" and plan_gh.steps[0].args == {"url": "https://github.com"}
+    assert plan_gh.steps[1].tool == "search_site" and plan_gh.steps[1].args == {"site": "github", "query": "rust"}
+    assert plan_gh.steps[2].tool == "browser_click_result" and plan_gh.steps[2].args == {"n": 2}
+
+    text_wiki = "go to wikipedia, search wikipedia for compilers, after that click result 3"
+    plan_wiki = _parse(text_wiki)
+    assert isinstance(plan_wiki, ShortcutPlan) and len(plan_wiki.steps) == 3
+    assert plan_wiki.steps[0].tool == "open_website" and plan_wiki.steps[0].args == {"url": "https://www.wikipedia.org"}
+    assert plan_wiki.steps[1].tool == "search_site" and plan_wiki.steps[1].args == {"site": "wikipedia", "query": "compilers"}
+    assert plan_wiki.steps[2].tool == "browser_click_result" and plan_wiki.steps[2].args == {"n": 3}
+
+    text_yt = "go to youtube, search youtube for tutorials, after that click result 4"
+    plan_yt = _parse(text_yt)
+    assert isinstance(plan_yt, ShortcutPlan) and len(plan_yt.steps) == 3
+    assert plan_yt.steps[0].tool == "open_website" and plan_yt.steps[0].args == {"url": "https://www.youtube.com"}
+    assert plan_yt.steps[1].tool == "search_site" and plan_yt.steps[1].args == {"site": "youtube", "query": "tutorials"}
+    assert plan_yt.steps[2].tool == "browser_click_result" and plan_yt.steps[2].args == {"n": 4}
+
+    text_maps = "go to maps, search maps for restaurants, after that click result 1"
+    plan_maps = _parse(text_maps)
+    assert isinstance(plan_maps, ShortcutPlan) and len(plan_maps.steps) == 3
+    assert plan_maps.steps[0].tool == "open_website" and plan_maps.steps[0].args == {"url": "https://www.google.com/maps"}
+    assert plan_maps.steps[1].tool == "search_site" and plan_maps.steps[1].args == {"site": "maps", "query": "restaurants"}
+    assert plan_maps.steps[2].tool == "browser_click_result" and plan_maps.steps[2].args == {"n": 1}
+
+
+def test_near_misses_stay_none():
+    """Verify near-misses and unsafe chained actions stay None without falling through to shortcuts."""
+    # Near-miss with dangerous non-command verb
+    assert _parse("go to maps and delete my files") is None
+    assert _parse("go to wikipedia and format disk") is None
+
+    # Dangling follow-up boundary with no prior browser state
+    assert _parse("after that click result 1", state=None) is None
+    assert _parse_shortcut_only("after that click result 1", state=None) is None
+    assert parse_chain("after that click result 1", APPS, SITES_MAP, state=None, browser_enabled=True) is None
+
+    assert _parse("after that click result 2", state=None) is None
+    assert _parse_shortcut_only("after that click result 2", state=None) is None
+    assert parse_chain("after that click result 2", APPS, SITES_MAP, state=None, browser_enabled=True) is None
+
+
 def test_isolation_from_dev_json():
     """CRITICAL: Assert that none of the test phrases in this file exist in evals/commands/dev.json."""
     dev_path = Path(__file__).resolve().parent.parent / "evals" / "commands" / "dev.json"
