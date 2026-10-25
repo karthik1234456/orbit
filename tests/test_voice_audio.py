@@ -131,8 +131,9 @@ def test_recorder_closes_stream_when_callback_fails():
     assert created_stream.closed is True
 
 
-def test_recorder_no_microphone_raises_audio_error():
+def test_recorder_no_microphone_raises_audio_error(monkeypatch):
     """Recorder without hardware stream_factory raises AudioError when sounddevice is missing."""
+    monkeypatch.setattr("voice.audio.sd", None)
     recorder = Recorder(stream_factory=None)
     with pytest.raises(AudioError):
         recorder.record()

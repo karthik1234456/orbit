@@ -214,6 +214,7 @@ def make_browser_tools(sites: Optional[Mapping[str, Any]] = None) -> list[Tool]:
             name="search_web",
             description=(
                 "Perform a web search using Google in the default browser. "
+                "Use this for weather, news, prices, scores, schedules and any current information. "
                 "Query is automatically escaped and encoded. Max query length is 200 characters."
             ),
             parameters={

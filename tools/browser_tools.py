@@ -16,12 +16,21 @@ from tools.registry import Tool
 
 _MAX_QUERY_LENGTH = 200
 
+UNCONTROLLED_MESSAGE: str = (
+    "That page is open in your default browser, which I can't control. "
+    "Say 'restart the browser' to use ORBIT's browser."
+)
+
 
 def make_browser_tools(
     controller: BrowserController,
     sites: Optional[Mapping[str, Any]] = None,
+    state: Optional[Any] = None,
 ) -> list[Tool]:
     """Create and return managed browser tools executing through BrowserController."""
+    if state is not None and getattr(controller, "session_state", None) is None:
+        controller.session_state = state
+
     if sites is None:
         from config.sites import SITES
         sites = SITES
@@ -35,6 +44,23 @@ def make_browser_tools(
             clean_sites[key] = dict(v)
         else:
             clean_sites[key] = {"url": str(v), "search": None}
+
+    def _is_controlled() -> bool:
+        if state is not None and not getattr(state, "browser_controlled", True):
+            return False
+        if not getattr(controller, "browser_controlled", True):
+            return False
+        return True
+
+    def _mark_controlled() -> None:
+        controller.browser_controlled = True
+        if state is not None:
+            state.browser_controlled = True
+
+    def _mark_uncontrolled() -> None:
+        controller.browser_controlled = False
+        if state is not None:
+            state.browser_controlled = False
 
     def _resolve_url_candidate(url_val: Any) -> str:
         if isinstance(url_val, str):
@@ -72,16 +98,19 @@ def make_browser_tools(
 
         try:
             controller.navigate(norm_url)
+            _mark_controlled()
             return f"Opened website: {norm_url}"
         except BrowserRefused as exc:
             return f"ERROR: {exc}"
         except BrowserError as exc:
-            # Fall back once to system default browser
+            reason = str(exc)[:120]
+            controller.record_fallback(exc)
+            _mark_uncontrolled()
             try:
                 webbrowser.open(norm_url)
                 return (
                     f"Opened website: {norm_url} "
-                    f"(ORBIT's browser was unavailable, opened in your default browser)"
+                    f"(ORBIT's browser could not start: {reason}; opened in your default browser, which I cannot control)"
                 )
             except Exception as fb_err:
                 return f"ERROR: Failed to open browser: {exc}; fallback failed: {fb_err}"
@@ -121,6 +150,16 @@ def make_browser_tools(
         encoded = quote_plus(clean_query)
         search_url = f"https://www.google.com/search?q={encoded}"
 
+        from config import settings
+        use_controlled = bool(getattr(settings, "GOOGLE_SEARCH_IN_CONTROLLED_BROWSER", False))
+        if not use_controlled or controller.is_google_blocked():
+            try:
+                webbrowser.open(search_url)
+                _mark_uncontrolled()
+                return "Opened a Google search in your default browser; I can't click or scroll in it."
+            except Exception as fb_err:
+                return f"ERROR: Failed to open browser: {fb_err}"
+
         try:
             norm_url = check_url(search_url)
         except BrowserRefused as exc:
@@ -128,16 +167,19 @@ def make_browser_tools(
 
         try:
             controller.navigate(norm_url)
+            _mark_controlled()
             return f"Opened search for '{clean_query}' in browser."
         except BrowserRefused as exc:
             return f"ERROR: {exc}"
         except BrowserError as exc:
-            # Fall back once to system default browser
+            reason = str(exc)[:120]
+            controller.record_fallback(exc)
+            _mark_uncontrolled()
             try:
                 webbrowser.open(search_url)
                 return (
                     f"Opened search for '{clean_query}' in browser. "
-                    f"(ORBIT's browser was unavailable, opened in your default browser)"
+                    f"(ORBIT's browser could not start: {reason}; opened in your default browser, which I cannot control)"
                 )
             except Exception as fb_err:
                 return f"ERROR: Failed to open browser: {exc}; fallback failed: {fb_err}"
@@ -146,6 +188,7 @@ def make_browser_tools(
         name="search_web",
         description=(
             "Perform a web search using Google in the default browser. "
+            "Use this for weather, news, prices, scores, schedules and any current information. "
             "Query is automatically escaped and encoded. Max query length is 200 characters."
         ),
         parameters={
@@ -194,6 +237,17 @@ def make_browser_tools(
         encoded = quote_plus(clean_query)
         search_url = search_tmpl.format(query=encoded)
 
+        if clean_site == "google":
+            from config import settings
+            use_controlled = bool(getattr(settings, "GOOGLE_SEARCH_IN_CONTROLLED_BROWSER", False))
+            if not use_controlled or controller.is_google_blocked():
+                try:
+                    webbrowser.open(search_url)
+                    _mark_uncontrolled()
+                    return "Opened a Google search in your default browser; I can't click or scroll in it."
+                except Exception as fb_err:
+                    return f"ERROR: Failed to open browser: {fb_err}"
+
         try:
             norm_url = check_url(search_url)
         except BrowserRefused as exc:
@@ -201,15 +255,19 @@ def make_browser_tools(
 
         try:
             controller.navigate(norm_url)
+            _mark_controlled()
             return f"Opened search for '{clean_query}' on {clean_site} in browser."
         except BrowserRefused as exc:
             return f"ERROR: {exc}"
         except BrowserError as exc:
+            reason = str(exc)[:120]
+            controller.record_fallback(exc)
+            _mark_uncontrolled()
             try:
                 webbrowser.open(search_url)
                 return (
                     f"Opened search for '{clean_query}' on {clean_site} in browser. "
-                    f"(ORBIT's browser was unavailable, opened in your default browser)"
+                    f"(ORBIT's browser could not start: {reason}; opened in your default browser, which I cannot control)"
                 )
             except Exception as fb_err:
                 return f"ERROR: Failed to open browser: {exc}; fallback failed: {fb_err}"
@@ -251,6 +309,8 @@ def make_browser_tools(
         return None
 
     def browser_click_result(n: int, next_video: bool = False) -> str:
+        if not _is_controlled():
+            return UNCONTROLLED_MESSAGE
         err = precheck_click_result({"n": n, "next_video": next_video})
         if err:
             return err
@@ -297,6 +357,8 @@ def make_browser_tools(
         return None
 
     def browser_media(action: str) -> str:
+        if not _is_controlled():
+            return UNCONTROLLED_MESSAGE
         err = precheck_media({"action": action})
         if err:
             return err
@@ -348,6 +410,8 @@ def make_browser_tools(
         return None
 
     def browser_scroll(direction: str, screens: int = 1) -> str:
+        if not _is_controlled():
+            return UNCONTROLLED_MESSAGE
         err = precheck_scroll({"direction": direction, "screens": screens})
         if err:
             return err
@@ -396,6 +460,8 @@ def make_browser_tools(
         return None
 
     def browser_history(action: str) -> str:
+        if not _is_controlled():
+            return UNCONTROLLED_MESSAGE
         err = precheck_history({"action": action})
         if err:
             return err
@@ -430,6 +496,8 @@ def make_browser_tools(
     # --- 8. browser_read_page ---
 
     def browser_read_page() -> str:
+        if not _is_controlled():
+            return UNCONTROLLED_MESSAGE
         try:
             res = controller.read_page()
             title = res.get("title", "")
@@ -490,6 +558,8 @@ def make_browser_tools(
         return None
 
     def browser_key(name: str) -> str:
+        if not _is_controlled():
+            return UNCONTROLLED_MESSAGE
         err = precheck_key({"name": name})
         if err:
             return err
@@ -520,6 +590,31 @@ def make_browser_tools(
         precheck=precheck_key,
     )
 
+    # --- 11. browser_restart ---
+
+    def browser_restart() -> str:
+        try:
+            controller.restart()
+            _mark_controlled()
+            return "Restarted ORBIT's browser."
+        except (BrowserRefused, BrowserError) as exc:
+            return f"ERROR: {exc}"
+
+    browser_restart_tool = Tool(
+        name="browser_restart",
+        description=(
+            "Restart ORBIT's automated browser. "
+            "Use when the browser failed to start, became unavailable, or when instructed to restart the browser."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+        func=browser_restart,
+        permission=PermissionLevel.SAFE,
+    )
+
     return [
         open_website_tool,
         search_web_tool,
@@ -531,4 +626,5 @@ def make_browser_tools(
         browser_key_tool,
         browser_read_page_tool,
         browser_close_tool,
+        browser_restart_tool,
     ]

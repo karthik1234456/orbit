@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.3.3] - 2026-10-25
+
+### Added & Enhanced
+- **Browser Recovery & Profile Process Cleanup (`browser/controller.py`, `main.py`)**:
+  - Implemented `BrowserController.restart()`: safely closes active browser backend/context, selectively terminates orphan Chrome/Chromium processes matching ORBIT's user profile path (`data/browser_profile`) via `psutil`, retries launch with clean recovery, resets `last_error = None`, and restores `browser_controlled = True`.
+  - Added `BROWSER_AUTO_RESTART = True` configuration setting to automatically retry launching the browser once on recoverable errors (crashes, disconnects, launch timeouts).
+  - Added `browser_restart` tool and `/browser restart` interactive CLI command.
+- **Graceful Playwright Route Cancellation (`browser/playwright_backend.py`)**:
+  - Bound route interception handler to instance method on `PlaywrightBackend`.
+  - Handled `(asyncio.CancelledError, Exception, BaseException)`, captured diagnostics in `last_route_diagnostic`, and invoked `route.abort()` safely without spewing unhandled tracebacks to the terminal.
+  - Implemented graceful `unroute_all(behavior="ignoreErrors")` on browser closure with fallback to parameterless `unroute_all()`.
+- **Fallback Reason Tracking & Controller-Only Tool Guards (`browser/controller.py`, `tools/browser_tools.py`, `core/session_state.py`)**:
+  - Added `last_error` tracking on `BrowserController` to preserve actionable failure causes across lifecycle operations.
+  - Formatted browser fallback notifications: `(ORBIT's browser could not start: <reason, 120 chars>; opened in your default browser, which I cannot control)`.
+  - Added `SessionState.browser_controlled` tracking: set to `False` whenever navigation falls back to the system default browser, and restored to `True` on controlled browser actions or restarts.
+  - Guarded controller-only interactive browser tools (`browser_click_result`, `browser_scroll`, `browser_media`, `browser_read_page`, `browser_history`) to immediately return `UNCONTROLLED_MESSAGE`: `"That page is open in your default browser, which I can't control. Say 'restart the browser' to use ORBIT's browser."` when `browser_controlled` is `False`.
+- **Google Verification Detection & Cooldown (`browser/guards.py`, `browser/backend.py`, `browser/playwright_backend.py`)**:
+  - Guarded URL checking for Google verification `/sorry/` endpoints across international Google domains.
+  - Added DOM inspection for `"unusual traffic"` verification strings.
+  - Automatically initiates a 30-minute block cooldown (`BROWSER_BLOCK_COOLDOWN_MINUTES = 30`), rolls back navigation history (`history("back")`) to protect session integrity, and raises `BrowserRefused("Google showed a verification page for automated browsing, so I stopped. I will not try to get around it.")`.
+  - Categorized blocked pages with `"google_blocked"` `page_type`.
+- **Default Google Searches to Default Browser (`config/settings.py`, `tools/browser_tools.py`)**:
+  - Added `GOOGLE_SEARCH_IN_CONTROLLED_BROWSER = False` setting.
+  - General web searches (`search_web`) and `search_site(google)` default to opening in the system default browser via `webbrowser.open`, notifying the user: `"Opened a Google search in your default browser; I can't click or scroll in it."` and setting `browser_controlled = False`.
+  - Controlled browser is only used for Google searches when explicitly enabled and not in cooldown; other allowlisted domains (e.g. YouTube, GitHub, Wikipedia) remain in ORBIT's controlled browser.
+- **Shortcut & Chain Parser Enhancements (`core/shortcuts.py`, `core/chains.py`)**:
+  - Expanded accepted nouns in Pattern D: `video, result, item, one, link, website, site, page, article, short, story`.
+  - Restricted ordinal search queries to only follow `video/result/one/short` or explicit prepositions `of|for|from|about`.
+  - Added `is_valid_ordinal_query()` boundary validation: rejects queries starting with conjunctions/sequencing words, containing ordinal words or forbidden substrings (`"in my default browser"`, `"in chrome"`, `"in a new tab"`, `"in the same browser"`, `"in this browser"`, `"on this page"`, `"or"`), or ending with command verbs.
+  - Strips trailing filler (`"in the same browser|tab|window"`, `"in this browser|tab|window"`, `"on this page"`) safely without corrupting page read commands (`"what's on this page"`).
+  - Early rejection of uncontrolled browser targets (`"in my default browser"`, `"in chrome"`, `"in a new tab"`) and ambiguous disjunctions (`"open|click the first link|website|page"` with `"or"`).
+  - Added shortcut pattern `"restart the browser"` and `"restart browser"` executing `browser_restart`.
+- **Diagnostics Reporting (`core/diagnostics.py`)**:
+  - Added browser telemetry to `/diag` command: `Browser Controlled`, `Fallback Count`, `Restart Count`, `Cooldown Status`, and `Last Error`.
+- **Evaluation & Verification**:
+  - Evaluated on `dev` benchmark split (`evals/commands/dev.json`): 100.0% positive recall (22/22), 100.0% step exact-match rate (38/38), 5.6% negative false-match (1/18). Zero regressions.
+  - Documented comparison in `evals/results/commands-dev-compare.md`.
+  - Added comprehensive test suite `tests/test_browser_recovery_and_shortcuts.py` (16 new tests passing).
+  - Maintained full test suite health: 1011 passed, 1 skipped. Held-out test split (`evals/commands/test.json`) preserved completely untouched.
+
+---
+
+## [2.3.2] - 2026-10-24
+
+### Changed & Enhanced
+- **Command Parser Changes After Test-Split Run**:
+  - Parser changes after the command test-split run.
+  - The test result (19/22) refers to the parser before this change and was NOT re-measured.
+  - The new patterns came from the intent probe, not from the test split.
+  - Added shortcut pattern `"look up <query>"` routing to `search_web(query)`.
+  - Added weather shortcut patterns (`"what's the weather in <place>"`, `"what is the weather in <place>"`, `"weather in <place>"`, `"weather <place>"`) producing `search_web(query=f"weather in {place}")`.
+  - Idiom `"look up to <anything>"` and standalone `"look up"` strictly return `None`.
+  - Added `"look"` to `COMMAND_VERBS` and `COMMAND_VERBS_SET`, with `"book", "cook", "hook", "took", "lock"` added to `NON_VERB_TYPOS`.
+  - Query constraints preserved: 1-8 words, no command verb or conjunction at either end, no URLs, no newlines, no shell characters, and no content filtering of queries.
+- **Teaching Error Messages & Sandbox Preservation**:
+  - Absolute paths strictly refused: sandbox rules are NOT relaxed.
+  - Improved teaching error message on precheck rejection of absolute or escaping paths across file and folder operations: `"ERROR: use a path relative to the workspace, or '.' for the workspace root (for example 'notes')."`.
+  - Updated tool descriptions for `open_workspace_folder` and `list_files` with: `"If the user does not name a folder, pass '.'."`. Missing or empty paths default to `"."`.
+  - Updated `search_web` tool description to state it should be used for weather, news, prices, scores, schedules, and any current information.
+
+---
+
 ## [2.3.1] - 2026-10-24
 
 ### Fixed & Enhanced

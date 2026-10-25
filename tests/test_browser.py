@@ -17,7 +17,7 @@ class ToolDict(dict):
 
 
 @pytest.fixture(params=["classic", "controller"])
-def browser_tools(request):
+def browser_tools(request, monkeypatch):
     """Fixture providing browser tools mapped by name, parametrized over classic and controller."""
     impl_type = request.param
     controller = None
@@ -25,6 +25,7 @@ def browser_tools(request):
     if impl_type == "classic":
         tools = make_classic_browser_tools()
     else:
+        monkeypatch.setattr("config.settings.GOOGLE_SEARCH_IN_CONTROLLED_BROWSER", True)
         from browser.backend import FakeBackend
         from browser.controller import BrowserController
         from tools.browser_tools import make_browser_tools as make_controller_browser_tools

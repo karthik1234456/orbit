@@ -39,21 +39,25 @@ def test_fallback_to_webbrowser_on_controller_error() -> None:
         res = tools["open_website"].func("https://docs.python.org/3/")
         mock_open.assert_called_once_with("https://docs.python.org/3/")
         assert "opened website: https://docs.python.org/3/" in res.lower()
-        assert "(ORBIT's browser was unavailable, opened in your default browser)" in res
+        assert "(ORBIT's browser could not start:" in res
+        assert "opened in your default browser, which I cannot control)" in res
 
-    # 2. search_web fallback
-    with patch("webbrowser.open") as mock_open:
-        res = tools["search_web"].func("asyncio tutorial")
-        mock_open.assert_called_once_with("https://www.google.com/search?q=asyncio+tutorial")
-        assert "opened search for 'asyncio tutorial' in browser." in res.lower()
-        assert "(ORBIT's browser was unavailable, opened in your default browser)" in res
+    # 2. search_web fallback (with GOOGLE_SEARCH_IN_CONTROLLED_BROWSER = True)
+    with patch("config.settings.GOOGLE_SEARCH_IN_CONTROLLED_BROWSER", True):
+        with patch("webbrowser.open") as mock_open:
+            res = tools["search_web"].func("asyncio tutorial")
+            mock_open.assert_called_once_with("https://www.google.com/search?q=asyncio+tutorial")
+            assert "opened search for 'asyncio tutorial' in browser." in res.lower()
+            assert "(ORBIT's browser could not start:" in res
+            assert "opened in your default browser, which I cannot control)" in res
 
     # 3. search_site fallback
     with patch("webbrowser.open") as mock_open:
         res = tools["search_site"].func("youtube", "lofi hip hop")
         mock_open.assert_called_once_with("https://www.youtube.com/results?search_query=lofi+hip+hop")
         assert "opened search for 'lofi hip hop' on youtube in browser." in res.lower()
-        assert "(ORBIT's browser was unavailable, opened in your default browser)" in res
+        assert "(ORBIT's browser could not start:" in res
+        assert "opened in your default browser, which I cannot control)" in res
 
 
 def test_new_tools_argument_validation_and_prechecks() -> None:

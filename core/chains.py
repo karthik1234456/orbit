@@ -25,6 +25,7 @@ COMMAND_VERBS = (
     "pause", "resume", "mute", "unmute", "go", "back", "forward",
     "reload", "refresh", "close", "come", "home", "shorts", "next",
     "previous", "wait", "read", "run", "fire", "bring", "pull", "show",
+    "look", "restart",
 )
 
 NON_VERB_TYPOS: set[str] = {
@@ -36,6 +37,7 @@ NON_VERB_TYPOS: set[str] = {
     "plan", "pray", "plat", "ploy", "plea", "clay", "flay", "slay", "pay", "lay", "plays",
     "stroll", "scrawl", "scrolls",
     "stop", "shop", "step", "store", "car", "safe", "money", "files",
+    "book", "cook", "hook", "took", "lock",
 }
 
 _EXPLICIT_SEQUENCING_PATTERN = re.compile(
@@ -186,6 +188,9 @@ def describe_step(tool: str, args: Optional[dict[str, Any]] = None) -> str:
     if t == "browser_close":
         return "Close browser"
 
+    if t == "browser_restart":
+        return "Restart the browser"
+
     if t == "browser_key":
         key_name = str(args.get("name", "")).strip()
         if key_name == "ArrowDown":
@@ -227,6 +232,7 @@ def _clone_state(state: Optional[Any]) -> SessionState:
             _last_folder=state._last_folder,
             _last_url=state._last_url,
             _last_tool=state._last_tool,
+            browser_controlled=state.browser_controlled,
             updated_at=state.updated_at,
             clock=state.clock,
             ttl=state.ttl,
@@ -540,8 +546,11 @@ def format_step_text(tool: str, args: dict, result: Any = "", redact: bool = Fal
         act = str(args.get("action", "back")).lower()
         return f"Went {act}."
 
-    elif t == "close_browser":
+    elif t in ("close_browser", "browser_close"):
         return "Closed browser."
+
+    elif t == "browser_restart":
+        return "Restarted ORBIT's browser."
 
     elif t == "wait":
         secs = args.get("seconds", 1)

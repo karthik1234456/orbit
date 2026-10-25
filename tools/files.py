@@ -58,16 +58,25 @@ def resolve_safe(workspace_root: Union[str, Path], relative_path: Union[str, Pat
     return target
 
 
+def _format_precheck_path_error(exc: Exception) -> str:
+    """Format path resolution error for prechecks, teaching relative workspace paths."""
+    msg = str(exc).lower()
+    if "drive letters" in msg or "absolute" in msg or "escapes" in msg:
+        return "ERROR: use a path relative to the workspace, or '.' for the workspace root (for example 'notes')."
+    return f"ERROR: {exc}"
+
+
 def make_file_tools(workspace_root: Union[str, Path]) -> list[Tool]:
     """Create and return file management tools scoped strictly to workspace_root."""
     root = Path(workspace_root).resolve()
 
     def precheck_list_files(args: dict) -> Optional[str]:
-        path = args.get("path", ".")
+        raw_path = args.get("path")
+        path = raw_path.strip() if isinstance(raw_path, str) and raw_path.strip() else "."
         try:
             target = resolve_safe(root, path)
         except Exception as exc:
-            return f"ERROR: {exc}"
+            return _format_precheck_path_error(exc)
         if not target.exists():
             return f"ERROR: Path '{path}' does not exist."
         if not target.is_dir():
@@ -79,7 +88,7 @@ def make_file_tools(workspace_root: Union[str, Path]) -> list[Tool]:
         try:
             target = resolve_safe(root, path)
         except Exception as exc:
-            return f"ERROR: {exc}"
+            return _format_precheck_path_error(exc)
         if not target.exists():
             return f"ERROR: File '{path}' does not exist."
         if target.is_dir():
@@ -93,7 +102,7 @@ def make_file_tools(workspace_root: Union[str, Path]) -> list[Tool]:
         try:
             target = resolve_safe(root, path)
         except Exception as exc:
-            return f"ERROR: {exc}"
+            return _format_precheck_path_error(exc)
         if target.exists() and not target.is_dir():
             return f"ERROR: Cannot create folder '{path}': a file already exists at this path."
         return None
@@ -104,7 +113,7 @@ def make_file_tools(workspace_root: Union[str, Path]) -> list[Tool]:
         try:
             target = resolve_safe(root, path)
         except Exception as exc:
-            return f"ERROR: {exc}"
+            return _format_precheck_path_error(exc)
         if isinstance(content, str):
             content_bytes = content.encode("utf-8")
             if len(content_bytes) > _MAX_FILE_SIZE:
@@ -119,10 +128,16 @@ def make_file_tools(workspace_root: Union[str, Path]) -> list[Tool]:
         try:
             src = resolve_safe(root, source)
         except Exception as exc:
+            msg = str(exc).lower()
+            if "drive letters" in msg or "absolute" in msg or "escapes" in msg:
+                return "ERROR: use a path relative to the workspace, or '.' for the workspace root (for example 'notes')."
             return f"ERROR: Invalid source path: {exc}"
         try:
             dst = resolve_safe(root, destination)
         except Exception as exc:
+            msg = str(exc).lower()
+            if "drive letters" in msg or "absolute" in msg or "escapes" in msg:
+                return "ERROR: use a path relative to the workspace, or '.' for the workspace root (for example 'notes')."
             return f"ERROR: Invalid destination path: {exc}"
         if not src.exists():
             return f"ERROR: Source file '{source}' does not exist."
@@ -132,11 +147,12 @@ def make_file_tools(workspace_root: Union[str, Path]) -> list[Tool]:
 
     def list_files(path: str = ".") -> str:
         """List contents of a directory within the workspace, marking folders."""
-        target = resolve_safe(root, path)
+        path_clean = path.strip() if isinstance(path, str) and path.strip() else "."
+        target = resolve_safe(root, path_clean)
         if not target.exists():
-            return f"ERROR: Path '{path}' does not exist."
+            return f"ERROR: Path '{path_clean}' does not exist."
         if not target.is_dir():
-            return f"ERROR: Path '{path}' is a file, not a directory."
+            return f"ERROR: Path '{path_clean}' is a file, not a directory."
 
         entries = sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
         if not entries:
@@ -216,7 +232,8 @@ def make_file_tools(workspace_root: Union[str, Path]) -> list[Tool]:
             description=(
                 "List files and folders within a directory in the workspace. "
                 "All paths must be relative to the workspace root (defaults to '.'). "
-                "Folders are indicated with a trailing slash ('/'). Output is capped at 100 entries."
+                "Folders are indicated with a trailing slash ('/'). Output is capped at 100 entries. "
+                "If the user does not name a folder, pass '.'."
             ),
             parameters={
                 "type": "object",

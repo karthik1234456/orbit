@@ -101,6 +101,44 @@ class FakeBackend(BrowserBackend):
         self._scroll_y: int = 0
         self._max_scroll_y: int = 1000
         self.last_failure: Optional[dict[str, Any]] = None
+        self.google_blocked_until: float = 0.0
+
+    def start_google_cooldown(self, duration_minutes: Optional[int] = None) -> None:
+        from config import settings
+        mins = duration_minutes if duration_minutes is not None else getattr(settings, "BROWSER_BLOCK_COOLDOWN_MINUTES", 30)
+        self.google_blocked_until = time.time() + (mins * 60)
+
+    def is_google_blocked(self) -> bool:
+        return time.time() < self.google_blocked_until
+
+    def _check_verification_page(self) -> None:
+        from browser.guards import BrowserRefused, is_blocked_url
+        curr_url = self.current_url() if hasattr(self, "current_url") else self._current_url
+        allow_lb = getattr(self, "allow_loopback", False)
+        is_blocked = is_blocked_url(curr_url, allow_loopback=allow_lb)
+
+        if not is_blocked:
+            matched_page = None
+            for p_url, p_data in self.pages.items():
+                if curr_url == p_url or curr_url.startswith(p_url) or p_url.startswith(curr_url):
+                    matched_page = p_data
+                    break
+            text_sample = ""
+            if matched_page:
+                text_sample = str(matched_page.get("text", matched_page.get("body", "")))[:300]
+            if "unusual traffic" in text_sample.lower():
+                is_blocked = True
+
+        if is_blocked:
+            self.start_google_cooldown()
+            try:
+                self.history("back")
+            except Exception:
+                pass
+            raise BrowserRefused(
+                "Google showed a verification page for automated browsing, so I stopped. I will not try to get around it."
+            )
+
 
     def key(self, name: str) -> str:
         self._record("key", name=name)
@@ -161,6 +199,9 @@ class FakeBackend(BrowserBackend):
             else:
                 self._items = []
             self._has_video = (pt in ("youtube_watch", "youtube_home"))
+
+        self._check_verification_page()
+
 
     def current_url(self) -> str:
         self._record("current_url")
@@ -393,6 +434,7 @@ class FakeBackend(BrowserBackend):
                 return page_type(self._current_url)
             return "No earlier page."
         elif act == "reload":
+            self._check_verification_page()
             return page_type(self._current_url)
 
         raise BrowserRefused(f"Invalid history action '{action}'.")

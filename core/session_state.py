@@ -77,6 +77,7 @@ class SessionState:
     _last_folder: Optional[str] = None
     _last_url: Optional[str] = None
     _last_tool: Optional[str] = None
+    browser_controlled: bool = True
     updated_at: Optional[float] = None
     clock: Callable[[], float] = field(default=time.time)
     ttl: float = field(
@@ -159,6 +160,7 @@ class SessionState:
         self._last_folder = None
         self._last_url = None
         self._last_tool = None
+        self.browser_controlled = True
         self.updated_at = None
 
     def is_empty(self) -> bool:
@@ -177,7 +179,7 @@ class SessionState:
     def to_dict(self) -> dict[str, Any]:
         """Return a snapshot dict of active session state without document text."""
         if self.is_empty():
-            return {}
+            return {"browser_controlled": self.browser_controlled}
         return {
             "last_site": self.last_site,
             "last_query": self.last_query,
@@ -185,6 +187,7 @@ class SessionState:
             "last_folder": self.last_folder,
             "last_url": self.last_url,
             "last_tool": self.last_tool,
+            "browser_controlled": self.browser_controlled,
             "updated_at": self.updated_at,
             "age": self.age,
         }

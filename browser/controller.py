@@ -62,6 +62,7 @@ class BrowserController:
         backend_factory: Optional[Callable[[], BrowserBackend]] = None,
         timeout_s: Optional[float] = None,
         clock: Optional[Callable[[], float]] = None,
+        profile_dir: Optional[Any] = None,
     ):
         if backend_factory is None:
             def _default_factory() -> BrowserBackend:
@@ -73,6 +74,7 @@ class BrowserController:
             backend_factory = _default_factory
 
         self.backend_factory = backend_factory
+        self.profile_dir = profile_dir
 
         if timeout_s is None:
             from config import settings
@@ -89,6 +91,162 @@ class BrowserController:
         self._shutdown: bool = False
         self._respawn_count: int = 0
         self.last_failure: Optional[dict[str, Any]] = None
+        self.last_error: Optional[Any] = None
+        self.fallback_count: int = 0
+        self.restart_count: int = 0
+        self.browser_controlled: bool = True
+        self.google_blocked_until: float = 0.0
+        self.session_state: Any = None
+
+    def record_error(self, exc: Exception) -> None:
+        self.last_error = {
+            "type": exc.__class__.__name__,
+            "message": str(exc),
+            "time": self.clock(),
+            "fallback_count": self.fallback_count,
+            "restart_count": self.restart_count,
+        }
+
+    def record_fallback(self, exc: Exception) -> None:
+        self.fallback_count += 1
+        self.browser_controlled = False
+        if self.session_state is not None:
+            self.session_state.browser_controlled = False
+        self.record_error(exc)
+
+    def _mark_controlled(self) -> None:
+        self.browser_controlled = True
+        if self.session_state is not None:
+            self.session_state.browser_controlled = True
+
+    def start_google_cooldown(self, duration_minutes: Optional[int] = None) -> None:
+        from config import settings
+        mins = duration_minutes if duration_minutes is not None else getattr(settings, "BROWSER_BLOCK_COOLDOWN_MINUTES", 30)
+        self.google_blocked_until = self.clock() + (mins * 60)
+        if self._backend is not None and hasattr(self._backend, "start_google_cooldown"):
+            try:
+                self._backend.start_google_cooldown(duration_minutes=mins)
+            except Exception:
+                pass
+
+    def is_google_blocked(self) -> bool:
+        if self._backend is not None and getattr(self._backend, "is_google_blocked", None):
+            try:
+                if self._backend.is_google_blocked():
+                    return True
+            except Exception:
+                pass
+        return self.clock() < self.google_blocked_until
+
+    def cooldown_remaining_s(self) -> float:
+        rem = self.google_blocked_until - self.clock()
+        return max(0.0, rem)
+
+    def _is_recoverable_launch_error(self, exc: Exception) -> bool:
+        msg = str(exc).lower()
+        if isinstance(exc, (BrowserTimeout, TimeoutError)):
+            return True
+        if any(
+            w in msg
+            for w in (
+                "profile",
+                "user data directory",
+                "already in use",
+                "singleton",
+                "lock",
+                "target closed",
+                "closed",
+                "timeout",
+            )
+        ):
+            return True
+        return False
+
+    def _terminate_profile_processes(self, profile_dir: Optional[str] = None) -> list[int]:
+        from pathlib import Path
+        import psutil
+        from config import settings
+
+        pdir = profile_dir or self.profile_dir or getattr(settings, "BROWSER_PROFILE_DIR", "data/browser_profile")
+        resolved_profile = str(Path(pdir).resolve()).lower()
+
+        matched_procs = []
+        for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+            try:
+                cmdline = proc.info.get("cmdline") or []
+                cmdline_str = " ".join(cmdline).lower()
+                if resolved_profile in cmdline_str:
+                    matched_procs.append(proc)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+
+        terminated_pids = []
+        for proc in matched_procs:
+            try:
+                proc.terminate()
+                terminated_pids.append(proc.pid)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+        if matched_procs:
+            try:
+                psutil.wait_procs(matched_procs, timeout=3.0)
+            except Exception:
+                pass
+
+        return terminated_pids
+
+    def _launch_backend_with_recovery(self) -> BrowserBackend:
+        from config import settings
+        auto_restart = bool(getattr(settings, "BROWSER_AUTO_RESTART", True))
+
+        try:
+            backend = self.backend_factory()
+            backend.start()
+            return backend
+        except Exception as exc:
+            self.record_error(exc)
+            if not auto_restart or not self._is_recoverable_launch_error(exc):
+                raise
+
+            try:
+                self._terminate_profile_processes(self.profile_dir)
+            except Exception:
+                pass
+
+            try:
+                backend = self.backend_factory()
+                backend.start()
+                return backend
+            except Exception as second_exc:
+                self.record_error(second_exc)
+                if isinstance(second_exc, BrowserError):
+                    raise
+                raise BrowserError(f"Browser launch failed on retry: {second_exc}") from second_exc
+
+    def restart(self) -> str:
+        """Restart ORBIT's browser backend, cleaning up processes and resetting state."""
+        self.restart_count += 1
+
+        def _do_restart(backend: Any) -> str:
+            return "Restarted ORBIT's browser."
+
+        with self._lock:
+            self._suspect = True
+
+        try:
+            self._terminate_profile_processes(self.profile_dir)
+        except Exception:
+            pass
+
+        try:
+            res = self._dispatch(_do_restart)
+            self._mark_controlled()
+            self.last_error = None
+            return res
+        except Exception as exc:
+            self.record_error(exc)
+            raise
 
     def _ensure_worker(self) -> None:
         """Start or respawn the dedicated daemon thread if not already running."""
@@ -135,8 +293,7 @@ class BrowserController:
                     self._backend = None
 
                 try:
-                    self._backend = self.backend_factory()
-                    self._backend.start()
+                    self._backend = self._launch_backend_with_recovery()
                     self._suspect = False
                 except Exception as exc:
                     self._suspect = True
@@ -165,15 +322,19 @@ class BrowserController:
         got_result = event.wait(timeout=self.timeout_s)
         if not got_result:
             self._suspect = True
-            raise BrowserTimeout(f"Browser command timed out after {self.timeout_s}s.")
+            exc = BrowserTimeout(f"Browser command timed out after {self.timeout_s}s.")
+            self.record_error(exc)
+            raise exc
 
         res, exc = result_box
         if exc is not None:
+            self.record_error(exc)
             if isinstance(exc, (BrowserRefused, BrowserTimeout)):
                 raise exc
             self._suspect = True
             raise BrowserError(f"Browser operation failed: {exc}")
 
+        self._mark_controlled()
         return res
 
     @staticmethod
@@ -423,6 +584,11 @@ class BrowserController:
                     "alive": False,
                     "url": "",
                     "title": "",
+                    "browser_controlled": self.browser_controlled,
+                    "fallback_count": self.fallback_count,
+                    "restart_count": self.restart_count,
+                    "last_error": self.last_error,
+                    "google_blocked": self.is_google_blocked(),
                 }
                 if not sandbox_enabled:
                     res["warning"] = "Chromium sandbox is disabled (BROWSER_CHROMIUM_SANDBOX=False)."
@@ -433,6 +599,11 @@ class BrowserController:
                 "alive": backend.is_alive(),
                 "url": backend.current_url(),
                 "title": backend.title(),
+                "browser_controlled": self.browser_controlled,
+                "fallback_count": self.fallback_count,
+                "restart_count": self.restart_count,
+                "last_error": self.last_error,
+                "google_blocked": self.is_google_blocked(),
             }
             if not sandbox_enabled:
                 st["warning"] = "Chromium sandbox is disabled (BROWSER_CHROMIUM_SANDBOX=False)."

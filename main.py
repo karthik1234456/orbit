@@ -279,6 +279,20 @@ def main() -> None:
                         print(f"Age: {age_s}s")
                     continue
 
+                if user_input.strip().lower() == "/browser restart":
+                    ctrl = getattr(app, "browser_controller", None) if app else None
+                    if ctrl is None and agent:
+                        ctrl = getattr(agent, "browser_controller", None)
+                    if ctrl is not None:
+                        try:
+                            ctrl.restart()
+                            print("Browser restarted.")
+                        except Exception as exc:
+                            print(f"Error restarting browser: {exc}")
+                    else:
+                        print("Browser is not open.")
+                    continue
+
                 if user_input.strip().lower() == "/browser close":
                     ctrl = getattr(app, "browser_controller", None) if app else None
                     if ctrl is None and agent:
@@ -496,7 +510,7 @@ def main() -> None:
                     print("  /plan <task>       - Plan and execute a multi-step task with the model")
                     print("  /chains on|off     - Enable or disable command shortcut chaining")
                     print("  /shortcuts on|off  - Enable or disable single command shortcuts")
-                    print("  /browser [close]   - Inspect browser status or close browser")
+                    print("  /browser [close|restart] - Inspect browser status, restart, or close browser")
                     print("  /last              - Show summary of the most recent task run")
                     print("  /memories          - List long-term memory entries")
                     print("  /forget <id>       - Delete a stored memory by ID")

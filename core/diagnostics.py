@@ -212,6 +212,29 @@ def build_diagnostics_text(
                 browser_lines.append(f"Title: {title[:120]}")
             else:
                 browser_lines.append("Status: closed / not running")
+
+            b_controlled = stat.get("browser_controlled") if (stat and "browser_controlled" in stat) else getattr(browser_ctrl, "browser_controlled", True)
+            fb_count = stat.get("fallback_count") if (stat and "fallback_count" in stat) else getattr(browser_ctrl, "fallback_count", 0)
+            rst_count = stat.get("restart_count") if (stat and "restart_count" in stat) else getattr(browser_ctrl, "restart_count", 0)
+            l_err = stat.get("last_error") if (stat and "last_error" in stat) else getattr(browser_ctrl, "last_error", None)
+
+            is_blocked = False
+            if stat and "google_blocked" in stat:
+                is_blocked = bool(stat["google_blocked"])
+            elif hasattr(browser_ctrl, "is_google_blocked"):
+                is_blocked = bool(browser_ctrl.is_google_blocked())
+
+            if is_blocked:
+                rem = browser_ctrl.cooldown_remaining_s() if hasattr(browser_ctrl, "cooldown_remaining_s") else 0
+                cooldown_str = f"active ({rem}s remaining)" if rem > 0 else "active"
+            else:
+                cooldown_str = "inactive"
+
+            browser_lines.append(f"Browser Controlled: {b_controlled}")
+            browser_lines.append(f"Fallback Count: {fb_count}")
+            browser_lines.append(f"Restart Count: {rst_count}")
+            browser_lines.append(f"Cooldown Status: {cooldown_str}")
+            browser_lines.append(f"Last Error: {l_err or 'none'}")
         except Exception as exc:
             browser_lines.append(f"Status: error inspecting browser: {exc}")
     else:

@@ -15,15 +15,24 @@ _DISALLOWED_CHARS = set(";&|`$><")
 BARE_BROWSER_VERBS = ("back", "forward", "pause", "play", "mute", "unmute", "scroll", "home")
 
 CONJUNCTIONS_SEQUENCING: set[str] = {
-    "and", "then", "also", "after", "afterwards", "now",
+    "and", "then", "also", "after", "afterwards", "now", "or", "but", "plus", "instead",
 }
 
 COMMAND_VERBS_SET: set[str] = {
     "open", "launch", "start", "play", "search", "click", "scroll",
     "pause", "resume", "mute", "unmute", "go", "back", "forward",
     "reload", "refresh", "close", "come", "read", "wait", "next",
-    "previous", "home", "shorts", "run",
+    "previous", "home", "shorts", "run", "look", "restart",
 }
+
+ORDINAL_WORDS_SET: set[str] = {
+    "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth",
+    "1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th", "top",
+}
+
+FORBIDDEN_QUERY_SUBSTRINGS: tuple[str, ...] = (
+    "browser", "tab", "window", "link", "links", "website", "websites", "result", "results", "the same", "default",
+)
 
 TYPO_VERBS: set[str] = {
     "open", "launch", "start", "search", "close", "play", "scroll",
@@ -38,6 +47,7 @@ NON_VERB_TYPOS: set[str] = {
     "plan", "pray", "plat", "ploy", "plea", "clay", "flay", "slay", "pay", "lay", "plays",
     "stroll", "scrawl", "scrolls",
     "stop", "shop", "step", "store", "car", "safe", "money", "files",
+    "book", "cook", "hook", "took", "lock",
 }
 
 
@@ -127,6 +137,48 @@ def is_valid_search_query(query: str, require_clean_tail: bool = False) -> bool:
         return False
     if require_clean_tail and _is_invalid_query_boundary_word(words[-1]):
         return False
+    return True
+
+
+def is_valid_ordinal_query(query: str) -> bool:
+    """Validate query after an ordinal expression per Requirement 7.
+
+    Query rejected (None) when:
+    - starting with conjunction/sequencing word (and, then, also, after, afterwards, now, or, but, plus, instead),
+    - containing any of: ordinal words, "browser", "tab", "window", "link", "links", "website", "websites", "result", "results", "the same", "default",
+    - or ending with a command verb.
+    """
+    if not query or not isinstance(query, str):
+        return False
+    words = query.split()
+    if not (1 <= len(words) <= 8):
+        return False
+
+    first_word = words[0].lower()
+    if (
+        first_word in CONJUNCTIONS_SEQUENCING
+        or first_word in COMMAND_VERBS_SET
+        or any(_match_typo_verb(first_word, v) for v in TYPO_VERBS)
+    ):
+        return False
+
+    last_word = words[-1].lower()
+    if (
+        last_word in COMMAND_VERBS_SET
+        or any(_match_typo_verb(last_word, v) for v in TYPO_VERBS)
+    ):
+        return False
+
+    lower_q = query.lower()
+    for forbidden in FORBIDDEN_QUERY_SUBSTRINGS:
+        if re.search(rf"\b{re.escape(forbidden)}\b", lower_q):
+            return False
+
+    for w in words:
+        w_clean = re.sub(r"[^\w]", "", w.lower())
+        if w_clean in ORDINAL_WORDS_SET:
+            return False
+
     return True
 
 
@@ -253,11 +305,37 @@ def parse_shortcut(
             cleaned,
             flags=re.IGNORECASE,
         ).strip()
+        if not re.match(r"^what(?:'?s|\s+is)\b", cleaned, re.IGNORECASE):
+            cleaned = re.sub(
+                r"[,:\s]+(?:in\s+(?:the\s+same|this)\s+(?:browser|tab|window)|on\s+this\s+page)[.!?,:\s]*$",
+                "",
+                cleaned,
+                flags=re.IGNORECASE,
+            ).strip()
+        else:
+            cleaned = re.sub(
+                r"[,:\s]+in\s+(?:the\s+same|this)\s+(?:browser|tab|window)[.!?,:\s]*$",
+                "",
+                cleaned,
+                flags=re.IGNORECASE,
+            ).strip()
         cleaned = re.sub(r"[.!?,:\s]+$", "", cleaned).strip()
         if cleaned == prev:
             break
 
     if not cleaned:
+        return None
+
+    # Early rejections per Requirement 7:
+    # "in my default browser", "in chrome", and "in a new tab" return None
+    if re.search(r"\b(?:in\s+(?:my\s+)?default\s+browser|in\s+chrome|in\s+a\s+new\s+tab)\b", cleaned, re.IGNORECASE):
+        return None
+
+    # "open|click the first link|website|page" containing "or" returns None
+    if (
+        re.search(r"\b(?:open|click|play)\b.*\b(?:link|website|site|page)\b.*\bor\b", cleaned, re.IGNORECASE)
+        or re.search(r"\bor\b.*\b(?:open|click|play)\b.*\b(?:link|website|site|page)\b", cleaned, re.IGNORECASE)
+    ):
         return None
 
     if browser_enabled:
@@ -266,6 +344,14 @@ def parse_shortcut(
             sites = SITES
         from config.sites import resolve_site
         clean_sites_map = {k.lower(): k for k in sites}
+
+        # Restart shortcut
+        if re.match(r"^restart\s+(?:the\s+)?browser$", cleaned, re.IGNORECASE):
+            return ToolCallSpec(
+                name="browser_restart",
+                args={},
+                target_name="browser",
+            )
 
         words = cleaned.split()
         lower_cleaned = cleaned.lower()
@@ -467,43 +553,60 @@ def parse_shortcut(
             return None
 
         # Pattern D: Click Result & Ordinal Search Chains
-        # "play|open|click (the)? <ordinal> (video|result|one)? [of|for|from]? <query> [on|in <site>]"
+        # "play|open|click (the)? <ordinal> (noun)? [of|for|from|about]? <query> [on|in <site>]"
         ord_token_pattern = r"(10th|[1-9](?:st|nd|rd|th)?|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|top)"
         num_token_pattern = r"(10th|10|[1-9](?:st|nd|rd|th)?|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|top|one|two|three|four|five|six|seven|eight|nine|ten)"
+        noun_pattern = r"(video|result|item|one|link|website|site|page|article|short|story)"
+        post_noun_pattern = r"(video|result|item|link|website|site|page|article|short|story)"
+
+        ord_map = {
+            "first": 1, "1st": 1, "top": 1, "one": 1, "1": 1,
+            "second": 2, "2nd": 2, "two": 2, "2": 2,
+            "third": 3, "3rd": 3, "three": 3, "3": 3,
+            "fourth": 4, "4th": 4, "four": 4, "4": 4,
+            "fifth": 5, "5th": 5, "five": 5, "5": 5,
+            "sixth": 6, "6th": 6, "six": 6, "6": 6,
+            "seventh": 7, "7th": 7, "seven": 7, "7": 7,
+            "eighth": 8, "8th": 8, "eight": 8, "8": 8,
+            "ninth": 9, "9th": 9, "nine": 9, "9": 9,
+            "tenth": 10, "10th": 10, "ten": 10, "10": 10,
+        }
+
         click_ord_match = re.match(
-            rf"^(?:play|open|click)(?:\s+the)?\s+{ord_token_pattern}(?:\s+(?:video|result|one))?(?:\s+(.*))?$",
+            rf"^(?:play|open|click)(?:\s+the)?\s+{ord_token_pattern}(?:\s+{noun_pattern})?(?:\s+(.*))?$",
             cleaned,
             re.IGNORECASE,
         )
-        if not click_ord_match:
-            click_ord_match = re.match(
+        matched_noun = None
+        if click_ord_match:
+            n = ord_map[click_ord_match.group(1).lower()]
+            matched_noun = click_ord_match.group(2).lower() if click_ord_match.group(2) else None
+            rem = (click_ord_match.group(3) or "").strip()
+        else:
+            click_num_match = re.match(
                 rf"^(?:play|open|click)\s+number\s+{num_token_pattern}(?:\s+(.*))?$",
                 cleaned,
                 re.IGNORECASE,
             )
-        if not click_ord_match:
-            click_ord_match = re.match(
-                rf"^(?:play|open|click)(?:\s+the)?\s+(?:video|result|item)\s+(?:number\s+)?{num_token_pattern}(?:\s+(.*))?$",
-                cleaned,
-                re.IGNORECASE,
-            )
+            if click_num_match:
+                n = ord_map[click_num_match.group(1).lower()]
+                matched_noun = None
+                rem = (click_num_match.group(2) or "").strip()
+            else:
+                click_noun_match = re.match(
+                    rf"^(?:play|open|click)(?:\s+the)?\s+{post_noun_pattern}\s+(?:number\s+)?{num_token_pattern}(?:\s+(.*))?$",
+                    cleaned,
+                    re.IGNORECASE,
+                )
+                if click_noun_match:
+                    matched_noun = click_noun_match.group(1).lower()
+                    n = ord_map[click_noun_match.group(2).lower()]
+                    rem = (click_noun_match.group(3) or "").strip()
+                else:
+                    n = None
+                    rem = None
 
-        if click_ord_match:
-            ord_map = {
-                "first": 1, "1st": 1, "top": 1, "one": 1, "1": 1,
-                "second": 2, "2nd": 2, "two": 2, "2": 2,
-                "third": 3, "3rd": 3, "three": 3, "3": 3,
-                "fourth": 4, "4th": 4, "four": 4, "4": 4,
-                "fifth": 5, "5th": 5, "five": 5, "5": 5,
-                "sixth": 6, "6th": 6, "six": 6, "6": 6,
-                "seventh": 7, "7th": 7, "seven": 7, "7": 7,
-                "eighth": 8, "8th": 8, "eight": 8, "8": 8,
-                "ninth": 9, "9th": 9, "nine": 9, "9": 9,
-                "tenth": 10, "10th": 10, "ten": 10, "10": 10,
-            }
-            n = ord_map[click_ord_match.group(1).lower()]
-            rem = (click_ord_match.group(2) or "").strip()
-
+        if n is not None:
             if not rem:
                 return ToolCallSpec(
                     name="browser_click_result",
@@ -511,14 +614,21 @@ def parse_shortcut(
                     target_name=f"result #{n}",
                 )
 
-            if rem.lower() in ("of", "for", "from"):
+            if rem.lower() in ("of", "for", "from", "about"):
                 return None
 
-            conn_match = re.match(r"^(?:of|for|from)\s+(.+)$", rem, re.IGNORECASE)
-            if conn_match:
-                rem = conn_match.group(1).strip()
+            explicit_prep = False
+            prep_match = re.match(r"^(?:of|for|from|about)\s+(.+)$", rem, re.IGNORECASE)
+            if prep_match:
+                rem = prep_match.group(1).strip()
+                explicit_prep = True
 
             if not rem:
+                return None
+
+            # Search query after ordinal allowed ONLY after nouns video/result/one/short, or after explicit of|for|from|about
+            allowed_query_nouns = {"video", "result", "one", "short"}
+            if not explicit_prep and (matched_noun not in allowed_query_nouns):
                 return None
 
             target_site = None
@@ -535,6 +645,9 @@ def parse_shortcut(
                         query_candidate = rem[: site_suffix_match.start()].strip()
 
             if not is_valid_search_query(query_candidate, require_clean_tail=True):
+                return None
+
+            if not is_valid_ordinal_query(query_candidate):
                 return None
 
             if target_site is None:
@@ -929,6 +1042,45 @@ def parse_shortcut(
                     args={"site": site_key, "query": cand_query},
                     target_name=site_key,
                 )
+
+    # Pattern 4(a): Web search via "look up <query>"
+    # Idiom guard: "look up to <anything>" must return None, as must "look up" alone.
+    look_up_match = re.match(r"^look\s+up(?:\s+(.*))?$", cleaned, re.IGNORECASE)
+    if look_up_match:
+        cand_query = (look_up_match.group(1) or "").strip()
+        if not cand_query:
+            return None
+        # Reject "look up to <anything>" idiom
+        if cand_query.lower() == "to" or cand_query.lower().startswith("to "):
+            return None
+        if is_valid_search_query(cand_query, require_clean_tail=True):
+            return ToolCallSpec(
+                name="search_web",
+                args={"query": cand_query},
+                target_name="google",
+            )
+        return None
+
+    # Pattern 4(b): Weather queries
+    # "what's the weather in <place>", "what is the weather in <place>",
+    # "weather in <place>", "weather <place>"
+    # All produce search_web(query=f"weather in {place}").
+    weather_match = re.match(
+        r"^(?:what(?:'?s|\s+is)\s+the\s+weather\s+in\s+|weather\s+in\s+|weather\s+)(.+)$",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if weather_match:
+        place = weather_match.group(1).strip()
+        if place.lower() == "in" or place.lower().startswith("in "):
+            return None
+        if place and is_valid_search_query(place, require_clean_tail=True):
+            return ToolCallSpec(
+                name="search_web",
+                args={"query": f"weather in {place}"},
+                target_name="google",
+            )
+        return None
 
     return None
 

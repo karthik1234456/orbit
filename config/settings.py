@@ -206,6 +206,10 @@ BROWSER_PROFILE_DIR: str = _parse_str(os.getenv("BROWSER_PROFILE_DIR"), "data/br
 BROWSER_COMMAND_TIMEOUT_S: int = _parse_int(os.getenv("BROWSER_COMMAND_TIMEOUT_S"), 20)
 BROWSER_ALLOW_SIGNIN: bool = _parse_bool(os.getenv("BROWSER_ALLOW_SIGNIN"), False)
 BROWSER_CHROMIUM_SANDBOX: bool = _parse_bool(os.getenv("BROWSER_CHROMIUM_SANDBOX"), True)
+BROWSER_AUTO_RESTART: bool = _parse_bool(os.getenv("BROWSER_AUTO_RESTART"), True)
+BROWSER_BLOCK_COOLDOWN_MINUTES: int = _parse_int(os.getenv("BROWSER_BLOCK_COOLDOWN_MINUTES"), 30)
+GOOGLE_SEARCH_IN_CONTROLLED_BROWSER: bool = _parse_bool(os.getenv("GOOGLE_SEARCH_IN_CONTROLLED_BROWSER"), False)
+
 
 
 def require_api_key() -> str:

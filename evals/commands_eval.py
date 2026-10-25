@@ -24,6 +24,7 @@ ALLOWED_TOOLS = {
     "close_application",
     "open_website",
     "search_site",
+    "search_web",
     "open_workspace_folder",
     "browser_click_result",
     "browser_media",
@@ -76,6 +77,7 @@ ALLOWED_PRIOR_KEYS = {"last_site", "last_query", "last_app"}
 #    - `open_application` / `close_application`: argument `name` maps to `app`.
 #    - `open_website`: argument `url` is resolved to `site` key using SITES.
 #    - `search_site`: arguments `site` and `query` map directly.
+#    - `search_web`: argument `query` maps directly.
 #    - `browser_click_result`: argument `n` maps directly.
 #    - `browser_media`: argument `action` maps directly.
 #    - `browser_scroll`: argument `direction` maps directly.
@@ -88,6 +90,7 @@ TOOL_MAPPING: dict[str, str] = {
     "close_application": "close_application",
     "open_website": "open_website",
     "search_site": "search_site",
+    "search_web": "search_web",
     "open_workspace_folder": "open_workspace_folder",
     "browser_click_result": "browser_click_result",
     "browser_media": "browser_media",
@@ -104,6 +107,7 @@ ARG_MAPPING: dict[str, dict[str, str]] = {
     "close_application": {"name": "app"},
     "open_website": {"url": "site"},
     "search_site": {"site": "site", "query": "query"},
+    "search_web": {"query": "query"},
     "open_workspace_folder": {"path": "path"},
     "browser_click_result": {"n": "n"},
     "browser_media": {"action": "action"},

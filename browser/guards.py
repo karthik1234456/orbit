@@ -25,6 +25,28 @@ def is_google_host(hostname: str) -> bool:
     return bool(_GOOGLE_HOST_RE.match(hostname.strip().lower()))
 
 
+def is_blocked_url(url: Any, allow_loopback: bool = False) -> bool:
+    """Return True if URL matches google.com/sorry verification paths or Google country domain sorry paths."""
+    if not url or not isinstance(url, str):
+        return False
+    try:
+        parsed = urlparse(url.strip())
+        host = (parsed.hostname or "").lower()
+        path = parsed.path or ""
+    except Exception:
+        return False
+
+    norm_path = path.rstrip("/") if path != "/" else path
+    if is_google_host(host) or host == "google.com" or host.endswith(".google.com"):
+        if norm_path == "/sorry" or norm_path.startswith("/sorry/"):
+            return True
+    if allow_loopback and host in ("127.0.0.1", "localhost"):
+        if norm_path == "/sorry" or norm_path.startswith("/sorry/"):
+            return True
+    return False
+
+
+
 class BrowserRefused(Exception):
     """Raised when a browser action, URL, or interaction is refused for security or policy reasons."""
     pass
@@ -306,12 +328,16 @@ def page_type(url: Any, allow_loopback: bool = False) -> str:
             return "youtube_shorts"
         return "youtube_other"
 
+    if is_blocked_url(url, allow_loopback=allow_loopback):
+        return "google_blocked"
+
     # Google
     if is_google_host(host) or host == "google.com" or host.endswith(".google.com"):
         norm_path = path.rstrip("/") if path != "/" else path
         if norm_path == "/search" or norm_path.startswith("/search/"):
             return "google_results"
         return "google_other"
+
 
     # Wikipedia
     if host == "wikipedia.org" or host.endswith(".wikipedia.org"):

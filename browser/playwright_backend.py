@@ -25,7 +25,7 @@ this backend follows the documented sync API of Playwright:
 - `Page.keyboard.press(key)`: Keyboard navigation (Home/End, k for play).
 - `Page.go_back()`, `Page.go_forward()`, `Page.reload()`: History navigation.
 """
-
+import asyncio
 import inspect
 from pathlib import Path
 import time
@@ -505,6 +505,8 @@ _READ_PAGE_SCRIPT = """() => {
     };
 }"""
 
+_GET_BODY_TEXT_SAMPLE_SCRIPT = "() => (document.body ? (document.body.innerText || document.body.textContent || '') : '').slice(0, 300)"
+
 # Frozen set of all permitted JavaScript evaluation scripts
 _ALLOWED_EVALUATE_SCRIPTS: set[str] = {
     _MEDIA_PLAY_SCRIPT,
@@ -518,6 +520,7 @@ _ALLOWED_EVALUATE_SCRIPTS: set[str] = {
     _SCROLL_BY_SCRIPT,
     _TAG_RESULTS_SCRIPT,
     _READ_PAGE_SCRIPT,
+    _GET_BODY_TEXT_SAMPLE_SCRIPT,
 }
 
 _MAX_OPEN_PAGES: int = 5
@@ -552,6 +555,42 @@ class PlaywrightBackend(BrowserBackend):
         self._pages: list[Any] = []
         self._active_page: Any = None
         self.last_failure: Optional[dict[str, Any]] = None
+        self.google_blocked_until: float = 0.0
+        self.last_route_diagnostic: Optional[str] = None
+
+    def start_google_cooldown(self) -> None:
+        mins = getattr(settings, "BROWSER_BLOCK_COOLDOWN_MINUTES", 30)
+        self.google_blocked_until = time.time() + (mins * 60)
+
+    def is_google_blocked(self) -> bool:
+        return time.time() < self.google_blocked_until
+
+    def _check_verification_page(self) -> None:
+        from browser.guards import BrowserRefused, is_blocked_url
+        curr_url = self.current_url()
+        is_blocked = is_blocked_url(curr_url, allow_loopback=self.allow_loopback)
+        if not is_blocked:
+            page = self._active_page
+            text_sample = ""
+            if page is not None and not getattr(page, "is_closed", lambda: False)():
+                try:
+                    assert _GET_BODY_TEXT_SAMPLE_SCRIPT in _ALLOWED_EVALUATE_SCRIPTS
+                    text_sample = str(page.evaluate(_GET_BODY_TEXT_SAMPLE_SCRIPT) or "")[:300]
+                except Exception:
+                    pass
+            if "unusual traffic" in text_sample.lower():
+                is_blocked = True
+
+        if is_blocked:
+            self.start_google_cooldown()
+            try:
+                page = self._get_active_page()
+                page.go_back(wait_until="domcontentloaded", timeout=3000)
+            except Exception:
+                pass
+            raise BrowserRefused(
+                "Google showed a verification page for automated browsing, so I stopped. I will not try to get around it."
+            )
 
     def _map_error(self, exc: Exception) -> Exception:
         """Map Playwright-specific exceptions to friendly ORBIT BrowserErrors."""
@@ -633,6 +672,42 @@ class PlaywrightBackend(BrowserBackend):
         except Exception as exc:
             raise self._map_error(exc) from exc
 
+    def _route_handler(self, route: Any, request: Any = None) -> None:
+        """Network route handler for interception, security filtering, and graceful cancellation."""
+        try:
+            req_obj = request if request is not None else getattr(route, "request", None)
+            url = getattr(req_obj, "url", "") if req_obj is not None else ""
+            res_type = getattr(req_obj, "resource_type", "") if req_obj is not None else ""
+            is_nav = False
+            if hasattr(req_obj, "is_navigation_request"):
+                try:
+                    is_nav = req_obj.is_navigation_request()
+                except Exception:
+                    pass
+            if not is_nav and res_type in ("document",):
+                is_nav = True
+
+            if not getattr(settings, "BROWSER_ALLOW_SIGNIN", False):
+                if is_nav and is_signin_url(url, allow_loopback=False):
+                    try:
+                        route.abort()
+                    except BaseException:
+                        pass
+                    return
+
+            if request_allowed(url, allow_loopback=self.allow_loopback):
+                route.continue_()
+            else:
+                route.abort()
+        except (asyncio.CancelledError, Exception, BaseException) as exc:
+            self.last_route_diagnostic = (
+                f"Route handler intercepted {exc.__class__.__name__}: {str(exc)[:80]}"
+            )
+            try:
+                route.abort()
+            except BaseException:
+                pass
+
     def start(self) -> None:
         """Initialize and launch Playwright persistent browser context."""
         profile_path = Path(self.profile_dir).resolve()
@@ -669,41 +744,7 @@ class PlaywrightBackend(BrowserBackend):
 
             self._context = self._playwright.chromium.launch_persistent_context(**launch_kwargs)
 
-            def _route_handler(route: Any, request: Any = None) -> None:
-                req_obj = request if request is not None else getattr(route, "request", None)
-                url = getattr(req_obj, "url", "") if req_obj is not None else ""
-                res_type = getattr(req_obj, "resource_type", "") if req_obj is not None else ""
-                is_nav = False
-                if hasattr(req_obj, "is_navigation_request"):
-                    try:
-                        is_nav = req_obj.is_navigation_request()
-                    except Exception:
-                        pass
-                if not is_nav and res_type in ("document",):
-                    is_nav = True
-
-                try:
-                    if not getattr(settings, "BROWSER_ALLOW_SIGNIN", False):
-                        # In production (allow_loopback=False), navigation requests to sign-in / consent URLs
-                        # are strictly aborted at the network route level.
-                        # In test-only loopback mode (self.allow_loopback=True), allow local mock sign-in fixtures
-                        # (e.g. http://127.0.0.1/signin) through the network layer so _check_signin_guard can
-                        # inspect and refuse them via browser history rollback.
-                        if is_nav and is_signin_url(url, allow_loopback=False):
-                            route.abort()
-                            return
-
-                    if request_allowed(url, allow_loopback=self.allow_loopback):
-                        route.continue_()
-                    else:
-                        route.abort()
-                except Exception:
-                    try:
-                        route.abort()
-                    except Exception:
-                        pass
-
-            self._context.route("**/*", _route_handler)
+            self._context.route("**/*", self._route_handler)
 
             self._context.on("page", self._on_new_page)
 
@@ -741,6 +782,7 @@ class PlaywrightBackend(BrowserBackend):
             page.bring_to_front()
         except Exception as exc:
             raise self._map_error(exc) from exc
+        self._check_verification_page()
 
     def current_url(self) -> str:
         """Return the current URL of the active browser page."""
@@ -844,6 +886,7 @@ class PlaywrightBackend(BrowserBackend):
             raise self._map_error(exc) from exc
 
         url_after = self.current_url()
+        self._check_verification_page()
         valid, reason = verify_click_result(curr_url, url_after, allow_loopback=self.allow_loopback)
         if not valid:
             if reason == "signin":
@@ -1081,6 +1124,7 @@ class PlaywrightBackend(BrowserBackend):
         elif act == "forward" and url_after == url_before:
             return "No earlier page."
 
+        self._check_verification_page()
         return page_type(url_after, allow_loopback=self.allow_loopback)
 
     def read_page(self) -> dict[str, Any]:
@@ -1107,6 +1151,14 @@ class PlaywrightBackend(BrowserBackend):
     def close(self) -> None:
         """Close browser context and stop Playwright driver."""
         if self._context is not None:
+            try:
+                if hasattr(self._context, "unroute_all"):
+                    try:
+                        self._context.unroute_all(behavior="ignoreErrors")
+                    except TypeError:
+                        self._context.unroute_all()
+            except Exception:
+                pass
             try:
                 self._context.close()
             except Exception:
