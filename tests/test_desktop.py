@@ -114,7 +114,7 @@ def test_main_system_prompt_instructions():
 
 def test_startup_message_contains_version():
     """Verify that STARTUP_MESSAGE in main.py contains the single VERSION constant."""
-    assert VERSION == "2.4.0"
+    assert VERSION == "2.10.1"
     assert VERSION in STARTUP_MESSAGE
     assert f"ORBIT v{VERSION}" in STARTUP_MESSAGE
 

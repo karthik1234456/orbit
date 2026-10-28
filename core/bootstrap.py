@@ -1,6 +1,8 @@
 """Application bootstrap module for wiring tools, permissions, loggers, and agent."""
 
 from dataclasses import dataclass
+from datetime import datetime
+import os
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Union
 
@@ -53,6 +55,8 @@ class AppPaths:
     rag_db: Path
     audit_log: Path
     runs_log: Path
+    reminders_db: Path = Path("data/reminders.db")
+    routines_db: Path = Path("data/routines.db")
 
     def __post_init__(self) -> None:
         self.workspace = Path(self.workspace)
@@ -61,6 +65,8 @@ class AppPaths:
         self.rag_db = Path(self.rag_db)
         self.audit_log = Path(self.audit_log)
         self.runs_log = Path(self.runs_log)
+        self.reminders_db = Path(self.reminders_db)
+        self.routines_db = Path(self.routines_db)
 
     @classmethod
     def from_settings(cls) -> "AppPaths":
@@ -72,6 +78,8 @@ class AppPaths:
             rag_db=Path(settings.RAG_DB_PATH).resolve(),
             audit_log=Path("logs/audit.jsonl").resolve(),
             runs_log=Path("logs/runs.jsonl").resolve(),
+            reminders_db=Path(getattr(settings, "REMINDERS_DB_PATH", "data/reminders.db")).resolve(),
+            routines_db=Path(getattr(settings, "ROUTINES_DB_PATH", "data/routines.db")).resolve(),
         )
 
     @classmethod
@@ -85,6 +93,8 @@ class AppPaths:
             rag_db=r / "data" / "rag.db",
             audit_log=r / "logs" / "audit.jsonl",
             runs_log=r / "logs" / "runs.jsonl",
+            reminders_db=r / "data" / "reminders.db",
+            routines_db=r / "data" / "routines.db",
         )
 
 
@@ -120,6 +130,8 @@ class App:
     provider: Any
     retriever: Optional[Callable[[str], Any]] = None
     browser_controller: Optional[Any] = None
+    reminder_store: Optional[Any] = None
+    routine_store: Optional[Any] = None
 
     def shutdown(self) -> None:
         """Clean up and shut down application resources."""
@@ -144,6 +156,10 @@ def build_app(
     sites: Optional[Mapping[str, Any]] = None,
     browser_controller: Any = _OMITTED,
     browser_backend_factory: Optional[Callable[[], Any]] = None,
+    clock: Optional[Callable[[], datetime]] = None,
+    reminders_enabled: Optional[bool] = None,
+    tool_routing: Optional[bool] = None,
+    routines_enabled: Optional[bool] = None,
 ) -> App:
     """Build and wire an ORBIT application instance with configured tools, policy, and logging."""
     if paths is None:
@@ -185,6 +201,41 @@ def build_app(
     for tool in make_memory_tools(memory_store):
         registry.register(tool)
 
+    # Initialize reminders and register tools if REMINDERS_ENABLED
+    reminder_store = None
+    if reminders_enabled is not None:
+        reminders_on = bool(reminders_enabled)
+    else:
+        reminders_on = getattr(settings, "REMINDERS_ENABLED", True)
+        env_rem = os.getenv("REMINDERS_ENABLED")
+        if env_rem is not None:
+            reminders_on = env_rem.strip().lower() not in ("0", "false", "no", "off")
+
+    if reminders_on:
+        from reminders.store import ReminderStore
+        from tools.reminder_tools import make_reminder_tools
+
+        paths.reminders_db.parent.mkdir(parents=True, exist_ok=True)
+        reminder_store = ReminderStore(path=paths.reminders_db, clock=clock)
+        for tool in make_reminder_tools(reminder_store, clock=clock):
+            registry.register(tool)
+
+    # Initialize routines store if ROUTINES_ENABLED
+    routine_store = None
+    if routines_enabled is not None:
+        routines_on = bool(routines_enabled)
+    else:
+        routines_on = getattr(settings, "ROUTINES_ENABLED", True)
+        env_rout = os.getenv("ROUTINES_ENABLED")
+        if env_rout is not None:
+            routines_on = env_rout.strip().lower() not in ("0", "false", "no", "off")
+
+    if routines_on:
+        from routines.store import RoutineStore
+
+        paths.routines_db.parent.mkdir(parents=True, exist_ok=True)
+        routine_store = RoutineStore(path=paths.routines_db, clock=clock)
+
     # Initialize RAG document index and doc tools if FTS5 available
     if doc_index is None:
         try:
@@ -225,6 +276,12 @@ def build_app(
         allowed_apps=allowed_apps,
         sites=sites,
         browser_controller=browser_ctrl,
+        reminder_store=reminder_store,
+        routine_store=routine_store,
+        clock=clock,
+        reminders_enabled=reminders_on,
+        routines_enabled=routines_on,
+        tool_routing=tool_routing,
     )
 
     return App(
@@ -238,4 +295,6 @@ def build_app(
         provider=provider,
         retriever=retriever,
         browser_controller=browser_ctrl,
+        reminder_store=reminder_store,
+        routine_store=routine_store,
     )

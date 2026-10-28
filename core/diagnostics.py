@@ -8,6 +8,7 @@ Redacts credentials, secrets, tokens, and caps file size at 20 KB.
 
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import platform
 import re
@@ -122,6 +123,10 @@ def build_diagnostics_text(
     audit_logger: Optional[AuditLogger] = None,
     git_commit_override: Optional[str] = None,
     last_plan: Optional[dict] = None,
+    reminder_store: Optional[Any] = None,
+    doctor_checks: Optional[list[Any]] = None,
+    doctor_probes: Optional[Any] = None,
+    routine_store: Optional[Any] = None,
 ) -> str:
     """Gather diagnostic info and construct the sanitized report string."""
     sections: list[str] = []
@@ -167,6 +172,8 @@ def build_diagnostics_text(
     voice_ctrl = voice_controller
     if voice_ctrl is None and app is not None:
         voice_ctrl = getattr(app, "voice_ctrl", None)
+    if voice_ctrl is None and chat_controller is not None:
+        voice_ctrl = getattr(chat_controller, "voice_controller", None)
 
     mic_available = "unknown"
     try:
@@ -212,14 +219,152 @@ def build_diagnostics_text(
         "PLAN_MAX_SECONDS",
         "SPEAK_REPLIES",
         "VOICE_IN_UI",
-    ):
         "SESSION_CONTEXT",
         "OLLAMA_NUM_CTX",
+        "REMINDERS_ENABLED",
+        "TOOL_ROUTING",
+        "ROUTINES_ENABLED",
+        "ROUTINE_PREVIEW",
     ):
         val = getattr(settings, key, "not_configured")
         settings_lines.append(f"{key}: {val}")
 
+    # Settings store items whose source is environment or value differs from default
+    try:
+        from config.settings_store import is_secret_like, read_effective
+
+        effective = read_effective()
+        for key, eff in sorted(effective.items()):
+            if is_secret_like(key):
+                continue
+            if eff.source == "environment" or eff.value != eff.spec.default:
+                source_tag = f" (source: {eff.source})"
+                override_tag = " [overridden]" if eff.overridden_by_env else ""
+                entry_line = f"{key}: {eff.value}{source_tag}{override_tag}"
+                if entry_line not in settings_lines:
+                    settings_lines.append(entry_line)
+    except Exception:
+        pass
+
     sections.append("\n".join(settings_lines))
+
+    # Reminders Status
+    rem_store = reminder_store
+    if rem_store is None and app is not None and hasattr(app, "reminder_store"):
+        rem_store = getattr(app, "reminder_store")
+    if rem_store is None and agent is not None and hasattr(agent, "reminder_store"):
+        rem_store = getattr(agent, "reminder_store")
+    if rem_store is None and chat_controller is not None:
+        rem_store = getattr(chat_controller, "reminder_store", None)
+        if rem_store is None and hasattr(chat_controller, "agent"):
+            rem_store = getattr(chat_controller.agent, "reminder_store", None)
+
+    rem_enabled = getattr(settings, "REMINDERS_ENABLED", True)
+    env_rem = os.getenv("REMINDERS_ENABLED")
+    if env_rem is not None:
+        rem_enabled = env_rem.strip().lower() not in ("0", "false", "no", "off")
+
+    rem_lines = ["=== REMINDERS ==="]
+    rem_lines.append(f"REMINDERS_ENABLED: {rem_enabled}")
+    if rem_store is not None:
+        try:
+            counts = rem_store.count_by_status()
+            for st in ("active", "fired", "missed", "dismissed", "cancelled"):
+                rem_lines.append(f"{st.capitalize()}: {counts.get(st, 0)}")
+            active_items = rem_store.list_active()
+            if active_items:
+                sorted_items = sorted(active_items, key=lambda x: x.due_at)
+                next_due_dt = sorted_items[0].due_at
+                due_val = next_due_dt if isinstance(next_due_dt, str) else next_due_dt.isoformat()
+                rem_lines.append(f"Next Due: {due_val}")
+            else:
+                rem_lines.append("Next Due: none")
+        except Exception as exc:
+            rem_lines.append(f"Error reading reminder store: {exc}")
+    else:
+        rem_lines.append("Store: not configured")
+    sections.append("\n".join(rem_lines))
+
+    # Routines Telemetry
+    r_store = routine_store
+    if r_store is None and app is not None and hasattr(app, "routine_store"):
+        r_store = getattr(app, "routine_store")
+    if r_store is None and agent is not None and hasattr(agent, "routine_store"):
+        r_store = getattr(agent, "routine_store")
+    if r_store is None and chat_controller is not None:
+        r_store = getattr(chat_controller, "routine_store", None)
+        if r_store is None and hasattr(chat_controller, "agent"):
+            r_store = getattr(chat_controller.agent, "routine_store", None)
+
+    routines_on = getattr(settings, "ROUTINES_ENABLED", True)
+    env_routines = os.getenv("ROUTINES_ENABLED")
+    if env_routines is not None:
+        routines_on = env_routines.strip().lower() not in ("0", "false", "no", "off")
+
+    routine_count = 0
+    if r_store is not None:
+        try:
+            items = r_store.list()
+            routine_count = len(items)
+        except Exception:
+            pass
+
+    routine_lines = ["=== ROUTINES ==="]
+    routine_lines.append(f"ROUTINES_ENABLED: {routines_on}")
+    routine_lines.append(f"Count: {routine_count}")
+    sections.append("\n".join(routine_lines))
+
+    # Tool Routing Status
+    routing_lines = ["=== TOOL ROUTING ==="]
+    routing_on = getattr(settings, "TOOL_ROUTING", False)
+    eff_agent = agent
+    if eff_agent is None and app is not None and hasattr(app, "agent"):
+        eff_agent = app.agent
+    if eff_agent is None and chat_controller is not None and hasattr(chat_controller, "agent"):
+        eff_agent = chat_controller.agent
+
+    if eff_agent is not None and hasattr(eff_agent, "tool_routing_enabled"):
+        try:
+            routing_on = eff_agent.tool_routing_enabled()
+        except Exception:
+            pass
+    routing_lines.append(f"TOOL_ROUTING: {routing_on}")
+
+    last_run = getattr(eff_agent, "last_run", None) if eff_agent else None
+    if last_run is not None:
+        routing_lines.append(f"Last Turn Routing Active: {last_run.routing_on}")
+        routing_lines.append(f"Tools Offered: {last_run.tools_offered_count}")
+        routing_lines.append(f"Tools Registered: {last_run.tools_registered_count}")
+        routing_lines.append(f"Groups: {', '.join(sorted(last_run.routing_groups)) if last_run.routing_groups else 'none'}")
+        routing_lines.append(f"Off-Route Calls: {last_run.off_route_call}")
+        routing_lines.append(f"Routing Retry: {last_run.routing_retry}")
+        prompt_tokens_str = str(last_run.prompt_tokens) if last_run.prompt_tokens is not None else "none"
+        routing_lines.append(f"Prompt Tokens: {prompt_tokens_str}")
+    else:
+        routing_lines.append("Last Turn: none")
+    sections.append("\n".join(routing_lines))
+
+    # Doctor Summary and Failing Check Names
+    doc_lines = ["=== DOCTOR ==="]
+    try:
+        from core.doctor import run_checks
+
+        d_checks = doctor_checks
+        if d_checks is None:
+            d_checks = run_checks(probes=doctor_probes, fast=True)
+        ok_count = sum(1 for c in d_checks if getattr(c, "status", "").upper() == "OK")
+        warn_count = sum(1 for c in d_checks if getattr(c, "status", "").upper() == "WARN")
+        fail_count = sum(1 for c in d_checks if getattr(c, "status", "").upper() == "FAIL")
+        doc_lines.append(f"Summary: {ok_count} OK, {warn_count} warnings, {fail_count} failures")
+        failing_names = [getattr(c, "name", "") for c in d_checks if getattr(c, "status", "").upper() == "FAIL"]
+        if failing_names:
+            doc_lines.append(f"Failing Checks: {', '.join(failing_names)}")
+        else:
+            doc_lines.append("Failing Checks: none")
+    except Exception as exc:
+        doc_lines.append(f"Summary: unavailable ({exc.__class__.__name__})")
+        doc_lines.append("Failing Checks: none")
+    sections.append("\n".join(doc_lines))
 
     # 4. Browser Status (host, page type, title sanitized)
     browser_ctrl = getattr(app, "browser_controller", None) if app else None
@@ -489,7 +634,11 @@ def generate_diagnostics(
     audit_logger: Optional[AuditLogger] = None,
     output_dir: str = "logs",
     git_commit_override: Optional[str] = None,
-    last_plan: Optional[dict] = None,
+    last_plan: Optional[Any] = None,
+    reminder_store: Optional[Any] = None,
+    doctor_checks: Optional[list[Any]] = None,
+    doctor_probes: Optional[Any] = None,
+    routine_store: Optional[Any] = None,
 ) -> tuple[Path, str]:
     """Generate and write sanitized diagnostics report to logs/diag-<timestamp>.txt.
 
@@ -507,6 +656,10 @@ def generate_diagnostics(
         audit_logger=audit_logger,
         git_commit_override=git_commit_override,
         last_plan=last_plan,
+        reminder_store=reminder_store,
+        doctor_checks=doctor_checks,
+        doctor_probes=doctor_probes,
+        routine_store=routine_store,
     )
 
     out_dir = Path(output_dir)
@@ -519,3 +672,7 @@ def generate_diagnostics(
         f.write(report_text)
 
     return file_path, report_text
+
+
+# Backward-compatible alias
+build_diagnostics = build_diagnostics_text

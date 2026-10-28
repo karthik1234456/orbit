@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -18,6 +18,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any, Callable, Optional, Sequence, Union
 
 # Ensure project root is in sys.path when executed directly
@@ -27,7 +28,23 @@ from config import settings
 from core.bootstrap import AppPaths, build_app, default_system_prompt
 from core.llm import LLMProvider, LLMResponse
 from core.ollama_provider import OllamaProvider
+from core.routing import matches_inability, offered_tools, select_groups
 from tools.registry import ToolRegistry
+
+
+def compute_percentile(data: Sequence[Union[int, float]], pct: float) -> float:
+    """Compute percentile value from sequence."""
+    if not data:
+        return 0.0
+    sorted_d = sorted(data)
+    if len(sorted_d) == 1:
+        return float(sorted_d[0])
+    k = (len(sorted_d) - 1) * (pct / 100.0)
+    f = int(k)
+    c = min(f + 1, len(sorted_d) - 1)
+    d = k - f
+    return float(sorted_d[f] + d * (sorted_d[c] - sorted_d[f]))
+
 
 # Fixed probe evaluation phrases and their acceptable tool calls.
 # Phrases with ["none"] expect no tool calls from the model.
@@ -88,6 +105,12 @@ class SingleRunResult:
     validation_passed: bool
     final_text: str
     passed: bool
+    tools_offered_count: int = 0
+    tools_registered_count: int = 0
+    routing_retry: bool = False
+    off_route_call: bool = False
+    prompt_tokens: Optional[int] = None
+    ttft_ms: Optional[float] = None
 
 
 @dataclass
@@ -99,11 +122,25 @@ class PhraseSummary:
     pass_count: int
     total_runs: int
     runs: list[SingleRunResult] = field(default_factory=list)
+    prior_tools: Optional[list[str]] = None
 
     @property
     def is_none_phrase(self) -> bool:
         """Return True if phrase expects no tool call."""
-        return self.accept_list == ["none"]
+        return self.accept_list == ["none"] or len(self.accept_list) == 0
+
+    @property
+    def median_tools_offered(self) -> float:
+        counts = [r.tools_offered_count for r in self.runs]
+        return compute_percentile(counts, 50.0) if counts else 0.0
+
+    @property
+    def has_retry(self) -> bool:
+        return any(r.routing_retry for r in self.runs)
+
+    @property
+    def has_off_route(self) -> bool:
+        return any(r.off_route_call for r in self.runs)
 
 
 @dataclass
@@ -127,6 +164,16 @@ class ProbeReport:
     total_count: int
     output_path: Optional[Path] = None
     browser_enabled: bool = False
+    reminders_enabled: bool = False
+    routing_enabled: bool = False
+    routines_enabled: bool = False
+    median_tools_offered: float = 0.0
+    p95_tools_offered: float = 0.0
+    median_prompt_size: Optional[float] = None
+    median_ttft: Optional[float] = None
+    retry_count: int = 0
+    off_route_call_count: int = 0
+    rerun_warning: Optional[str] = None
 
 
 def get_git_info() -> str:
@@ -199,6 +246,108 @@ def validate_tool_call(registry: ToolRegistry, tool_name: str, args: dict[str, A
     return True, "valid"
 
 
+def check_test_split_protection(
+    phrases_path: Optional[Union[str, Path]],
+    final_test: bool = False,
+    force: bool = False,
+    routing_enabled: bool = False,
+    ran_path: Optional[Path] = None,
+) -> tuple[bool, Optional[str]]:
+    """Check test split protection for evals/routing/test.json.
+
+    Returns (is_test_split, rerun_warning).
+    Raises PermissionError if access is refused.
+    """
+    if not phrases_path:
+        return False, None
+
+    p_str = str(phrases_path).replace("\\", "/")
+    test_target = (Path(__file__).resolve().parent.parent / "evals" / "routing" / "test.json").resolve()
+    is_test_split = (
+        p_str.endswith("evals/routing/test.json")
+        or Path(phrases_path).resolve() == test_target
+    )
+    if not is_test_split:
+        return False, None
+
+    if not final_test:
+        raise PermissionError(
+            "Refusing to run reserved test split 'evals/routing/test.json' without --final-test."
+        )
+
+    if ran_path is None:
+        ran_path = (Path(__file__).resolve().parent.parent / "evals" / "routing" / ".ran").resolve()
+
+    setting_str = "routing_on" if routing_enabled else "routing_off"
+    rerun_warning = None
+
+    if ran_path.exists():
+        try:
+            content = ran_path.read_text(encoding="utf-8")
+            already_ran = any(setting_str in line for line in content.splitlines())
+            if already_ran:
+                if not force:
+                    raise PermissionError(
+                        f"Refusing second --final-test for '{setting_str}'. Use --force to rerun."
+                    )
+                rerun_warning = "RERUN: NOT UNSEEN"
+        except PermissionError:
+            raise
+        except Exception:
+            pass
+
+    return True, rerun_warning
+
+
+def record_test_run(
+    routing_enabled: bool = False,
+    ran_path: Optional[Path] = None,
+) -> None:
+    """Record execution in evals/routing/.ran."""
+    if ran_path is None:
+        ran_path = (Path(__file__).resolve().parent.parent / "evals" / "routing" / ".ran").resolve()
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    commit_info = get_git_info()
+    is_dirty = commit_info.endswith("-dirty")
+    setting_str = "routing_on" if routing_enabled else "routing_off"
+    line = f"date={now_iso} commit={commit_info} dirty={is_dirty} setting={setting_str}\n"
+    ran_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(ran_path, "a", encoding="utf-8") as f:
+        f.write(line)
+
+
+def load_probe_phrases(
+    phrases_path: Optional[Union[str, Path]],
+    browser_enabled: bool = False,
+) -> list[tuple[str, list[str], Optional[list[str]]]]:
+    """Load phrases for probing from file or built-in lists."""
+    if phrases_path:
+        path = Path(phrases_path).resolve()
+        if not path.exists():
+            raise FileNotFoundError(f"Phrase file not found: {phrases_path}")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        result: list[tuple[str, list[str], Optional[list[str]]]] = []
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict):
+                    txt = item.get("text") or item.get("phrase", "")
+                    accept = item.get("accept", [])
+                    prior = item.get("prior_tools")
+                    result.append((txt, accept, prior))
+                elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                    txt = str(item[0])
+                    accept = list(item[1])
+                    prior = list(item[2]) if len(item) > 2 and item[2] else None
+                    result.append((txt, accept, prior))
+        return result
+
+    base = [(p, acc, None) for p, acc in PROBE_PHRASES]
+    if browser_enabled:
+        base.extend([(p, acc, None) for p, acc in BROWSER_PROBE_PHRASES])
+    return base
+
+
 def run_single_phrase(
     provider: LLMProvider,
     registry: ToolRegistry,
@@ -206,24 +355,58 @@ def run_single_phrase(
     phrase: str,
     accept_list: list[str],
     seed: int,
+    prior_tools: Optional[list[str]] = None,
+    routing_enabled: bool = False,
 ) -> SingleRunResult:
-    """Send one message to the model and record tool intent without executing tools.
+    """Send one message to the model and record tool intent without executing tools."""
+    all_tools = registry.list_tools()
+    registered_count = len(all_tools)
 
-    Runs ONLY the tool's precheck (if any) and the registry's argument validation,
-    and returns 'ok (dry run)' to the model to retrieve its final conversational text.
-    """
-    tools = registry.list_tools()
+    if routing_enabled and all_tools:
+        groups = select_groups(phrase, prior_tools=prior_tools, state=None)
+        tools = offered_tools(all_tools, groups)
+    else:
+        tools = all_tools
+
+    offered_names = {t.name for t in tools} if tools else set()
+    offered_count = len(tools) if tools else 0
+
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": phrase},
     ]
 
-    response = provider.generate(messages, tools=tools)
+    t0 = time.perf_counter()
+    response = provider.generate(messages, tools=tools or None)
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    prompt_tokens = getattr(response, "prompt_tokens", None)
+
+    routing_retry = False
+    raw_text = response.text or ""
+
+    # Miss recovery retry: retry ONCE with full tool list if routing narrowed tools and model expresses inability
+    if (
+        routing_enabled
+        and not response.tool_calls
+        and len(tools) < registered_count
+        and matches_inability(raw_text)
+    ):
+        routing_retry = True
+        tools = all_tools
+        offered_names = {t.name for t in tools}
+        t1 = time.perf_counter()
+        response = provider.generate(messages, tools=tools or None)
+        elapsed_ms = (time.perf_counter() - t1) * 1000.0
+        prompt_tokens = getattr(response, "prompt_tokens", None)
+        raw_text = response.text or ""
+
+    is_none = (accept_list == ["none"] or len(accept_list) == 0)
 
     if response.tool_calls:
         first_tc = response.tool_calls[0]
         tool_name = first_tc.name
         tool_args = first_tc.args if isinstance(first_tc.args, dict) else {}
+        off_route_call = bool(routing_enabled and (tool_name not in offered_names))
 
         val_passed, val_result = validate_tool_call(registry, tool_name, tool_args)
 
@@ -240,14 +423,11 @@ def run_single_phrase(
                 "content": "ok (dry run)",
             })
 
-        followup_resp = provider.generate(followup_messages, tools=tools)
+        followup_resp = provider.generate(followup_messages, tools=tools or None)
         raw_final = followup_resp.text or ""
         final_text = raw_final[:150]
 
-        # Pass criteria:
-        # Pass if the first tool call is in the phrase's accept list, validation passes,
-        # and (for "none" phrases) no tool was called.
-        if accept_list == ["none"]:
+        if is_none:
             passed = False
         else:
             passed = (tool_name in accept_list) and val_passed
@@ -262,16 +442,21 @@ def run_single_phrase(
             validation_passed=val_passed,
             final_text=final_text,
             passed=passed,
+            tools_offered_count=offered_count,
+            tools_registered_count=registered_count,
+            routing_retry=routing_retry,
+            off_route_call=off_route_call,
+            prompt_tokens=prompt_tokens,
+            ttft_ms=round(elapsed_ms, 2),
         )
     else:
-        # No tool was called by the model
-        raw_final = response.text or ""
-        final_text = raw_final[:150]
-
+        # No tool called
+        final_text = raw_text[:150]
         val_passed = True
         val_result = "n/a"
+        off_route_call = False
 
-        if accept_list == ["none"]:
+        if is_none:
             passed = True
         else:
             passed = False
@@ -286,21 +471,37 @@ def run_single_phrase(
             validation_passed=val_passed,
             final_text=final_text,
             passed=passed,
+            tools_offered_count=offered_count,
+            tools_registered_count=registered_count,
+            routing_retry=routing_retry,
+            off_route_call=off_route_call,
+            prompt_tokens=prompt_tokens,
+            ttft_ms=round(elapsed_ms, 2),
         )
 
 
 def format_markdown_report(report: ProbeReport) -> str:
     """Format full probe results into a clean markdown document."""
     lines: list[str] = []
-    lines.append(f"# ORBIT Intent Probe Report: {report.label}\n")
+    title = f"# ORBIT Intent Probe Report: {report.label}"
+    if report.rerun_warning:
+        title += f" - {report.rerun_warning}"
+    lines.append(f"{title}\n")
     lines.append(f"- **Timestamp**: `{report.timestamp}`")
     lines.append(f"- **Git Commit**: `{report.commit}`")
     lines.append(f"- **Model**: `{report.model}`")
     lines.append(f"- **Temperature**: `{report.temperature}`")
     lines.append("- **RAG_AUTO**: `False`")
     lines.append(f"- **BROWSER_ENABLED**: `{'on' if report.browser_enabled else 'off'}`")
+    lines.append(f"- **REMINDERS_ENABLED**: `{'on' if report.reminders_enabled else 'off'}`")
+    lines.append(f"- **TOOL_ROUTING**: `{'on' if report.routing_enabled else 'off'}`")
+    lines.append(f"- **ROUTINES_ENABLED**: `{'on' if report.routines_enabled else 'off'}`")
     lines.append(f"- **Seeds Evaluated**: `{report.seeds}`")
     lines.append(f"- **System Prompt Source**: `{report.system_prompt_source}`\n")
+
+    if report.rerun_warning:
+        lines.append(f"> [!WARNING]\n> **{report.rerun_warning}**: This is a rerun of a reserved test set.\n")
+
     lines.append(
         "> [!NOTE]\n"
         "> **Notice**: The probe is a dev tool (not a held-out set). "
@@ -325,44 +526,71 @@ def format_markdown_report(report: ProbeReport) -> str:
     )
 
     lines.append("## Summary Metrics\n")
-    lines.append("| Metric | Passed / Total | Pass Rate |")
+    lines.append("| Metric | Value | Detail |")
     lines.append("|---|---|---|")
     lines.append(
-        f"| **Overall Action Pass Rate** (all except [none]) | "
-        f"{report.action_pass_count} / {report.action_total_count} | {action_pct:.1f}% |"
+        f"| **Overall Action Pass Rate** (action phrases) | "
+        f"{action_pct:.1f}% | {report.action_pass_count} / {report.action_total_count} |"
     )
     lines.append(
         f"| **No-Tool Pass Rate** ([none] phrases) | "
-        f"{report.notool_pass_count} / {report.notool_total_count} | {notool_pct:.1f}% |"
+        f"{notool_pct:.1f}% | {report.notool_pass_count} / {report.notool_total_count} |"
     )
     lines.append(
         f"| **Overall Pass Rate** (all phrases) | "
-        f"{report.total_pass_count} / {report.total_count} | {total_pct:.1f}% |\n"
+        f"{total_pct:.1f}% | {report.total_pass_count} / {report.total_count} |"
     )
+    lines.append(f"| **Median Tools Offered** | {report.median_tools_offered:.1f} | per turn |")
+    lines.append(f"| **P95 Tools Offered** | {report.p95_tools_offered:.1f} | per turn |")
+    prompt_str = f"{report.median_prompt_size:.0f} tokens" if report.median_prompt_size is not None else "n/a"
+    lines.append(f"| **Median Prompt Size** | {prompt_str} | input tokens |")
+    ttft_str = f"{report.median_ttft:.1f} ms" if report.median_ttft is not None else "n/a"
+    lines.append(f"| **Median Time to First Token / Latency** | {ttft_str} | generation latency |")
+    lines.append(f"| **Routing Retry Count** | {report.retry_count} | miss recovery retries |")
+    lines.append(f"| **Off-Route Calls** | {report.off_route_call_count} | unoffered tools called |")
+    lines.append("")
 
     lines.append("## Per-Phrase Results\n")
-    lines.append("| # | Phrase | Accept List | Pass Count | Status |")
-    lines.append("|---|---|---|---|---|")
+    lines.append("| # | Phrase | Accept List | Tools Offered | Tool Called | Pass | Retry | Off-Route |")
+    lines.append("|---|---|---|---|---|---|---|---|")
 
     for idx, ps in enumerate(report.phrase_summaries, start=1):
         status = "PASS" if ps.pass_count == ps.total_runs else ("PARTIAL" if ps.pass_count > 0 else "FAIL")
-        accept_str = ", ".join(f"`{a}`" for a in ps.accept_list)
-        lines.append(f"| {idx} | {ps.phrase} | {accept_str} | {ps.pass_count}/{ps.total_runs} | {status} |")
+        accept_str = ", ".join(f"`{a}`" for a in ps.accept_list) if ps.accept_list else "*(none)*"
+        offered_str = f"{int(ps.median_tools_offered)}"
+        last_tool = ps.runs[-1].tool_called if ps.runs else None
+        called_str = f"`{last_tool}`" if last_tool else "*(none)*"
+        retry_str = "yes" if ps.has_retry else "no"
+        off_route_str = "yes" if ps.has_off_route else "no"
+        lines.append(
+            f"| {idx} | {ps.phrase} | {accept_str} | {offered_str} | {called_str} | {status} | {retry_str} | {off_route_str} |"
+        )
 
     lines.append("\n## Detailed Run Logs\n")
     for idx, ps in enumerate(report.phrase_summaries, start=1):
-        accept_str = ", ".join(ps.accept_list)
+        accept_str = ", ".join(ps.accept_list) if ps.accept_list else "(none)"
         lines.append(f"### {idx}. {ps.phrase}")
         lines.append(f"- **Accept List**: `{accept_str}`")
+        if ps.prior_tools:
+            lines.append(f"- **Prior Tools**: `{ps.prior_tools}`")
         lines.append(f"- **Pass Rate**: {ps.pass_count}/{ps.total_runs}")
+        lines.append(f"- **Tools Offered**: {int(ps.median_tools_offered)}")
+        lines.append(f"- **Routing Retry**: {'yes' if ps.has_retry else 'no'}")
+        lines.append(f"- **Off-Route Call**: {'yes' if ps.has_off_route else 'no'}")
         for run in ps.runs:
             status_badge = "**PASS**" if run.passed else "**FAIL**"
             tool_str = f"`{run.tool_called}`" if run.tool_called else "*(none)*"
             args_str = json.dumps(run.args, ensure_ascii=False)
             safe_final = run.final_text.replace("\n", " ").strip()
+            extra_bits = []
+            if run.prompt_tokens is not None:
+                extra_bits.append(f"prompt_tokens={run.prompt_tokens}")
+            if run.ttft_ms is not None:
+                extra_bits.append(f"latency={run.ttft_ms}ms")
+            extra_line = f" ({', '.join(extra_bits)})" if extra_bits else ""
             lines.append(
                 f"  - **Seed {run.seed}**: {status_badge} | Tool: {tool_str} | "
-                f"Validation: `{run.validation_result}`\n"
+                f"Validation: `{run.validation_result}`{extra_line}\n"
                 f"    - Args: `{args_str}`\n"
                 f"    - Final text (first 150 chars): {json.dumps(safe_final)}"
             )
@@ -375,7 +603,7 @@ def run_intent_probe(
     provider_factory: Union[Callable[[int], LLMProvider], LLMProvider],
     registry: ToolRegistry,
     system_prompt: str,
-    phrases: Sequence[tuple[str, list[str]]] = PROBE_PHRASES,
+    phrases: Sequence[Union[tuple[str, list[str]], tuple[str, list[str], Optional[list[str]]]]] = PROBE_PHRASES,
     seeds: Sequence[int] = (1, 2, 3),
     on_single_result: Optional[Callable[[SingleRunResult], None]] = None,
     label: str = "baseline",
@@ -384,11 +612,21 @@ def run_intent_probe(
     write_report: bool = True,
     output_path: Optional[Union[Path, str]] = None,
     browser_enabled: bool = False,
+    reminders_enabled: bool = False,
+    routing_enabled: bool = False,
+    routines_enabled: bool = False,
+    rerun_warning: Optional[str] = None,
 ) -> ProbeReport:
     """Execute intent probe across phrases and seeds, recording dry-run tool calls and summary metrics."""
     phrase_summaries: list[PhraseSummary] = []
 
-    for phrase, accept_list in phrases:
+    for item in phrases:
+        if len(item) == 2:
+            phrase, accept_list = item  # type: ignore[misc]
+            prior_tools = None
+        else:
+            phrase, accept_list, prior_tools = item  # type: ignore[misc]
+
         runs: list[SingleRunResult] = []
         for seed in seeds:
             if callable(provider_factory):
@@ -403,6 +641,8 @@ def run_intent_probe(
                 phrase=phrase,
                 accept_list=accept_list,
                 seed=seed,
+                prior_tools=prior_tools,
+                routing_enabled=routing_enabled,
             )
             runs.append(res)
             if on_single_result:
@@ -416,6 +656,7 @@ def run_intent_probe(
                 pass_count=pass_count,
                 total_runs=len(runs),
                 runs=runs,
+                prior_tools=prior_tools,
             )
         )
 
@@ -425,6 +666,17 @@ def run_intent_probe(
     notool_total_count = sum(ps.total_runs for ps in phrase_summaries if ps.is_none_phrase)
     total_pass_count = sum(ps.pass_count for ps in phrase_summaries)
     total_count = sum(ps.total_runs for ps in phrase_summaries)
+
+    all_tools_offered = [r.tools_offered_count for ps in phrase_summaries for r in ps.runs]
+    all_prompt_tokens = [r.prompt_tokens for ps in phrase_summaries for r in ps.runs if r.prompt_tokens is not None]
+    all_ttft = [r.ttft_ms for ps in phrase_summaries for r in ps.runs if r.ttft_ms is not None]
+    retry_count = sum(1 for ps in phrase_summaries for r in ps.runs if r.routing_retry)
+    off_route_call_count = sum(1 for ps in phrase_summaries for r in ps.runs if r.off_route_call)
+
+    median_tools_offered = compute_percentile(all_tools_offered, 50.0) if all_tools_offered else 0.0
+    p95_tools_offered = compute_percentile(all_tools_offered, 95.0) if all_tools_offered else 0.0
+    median_prompt_size = compute_percentile(all_prompt_tokens, 50.0) if all_prompt_tokens else None
+    median_ttft = compute_percentile(all_ttft, 50.0) if all_ttft else None
 
     commit = get_git_info()
     now = datetime.now()
@@ -460,6 +712,16 @@ def run_intent_probe(
         total_count=total_count,
         output_path=dest_file,
         browser_enabled=browser_enabled,
+        reminders_enabled=reminders_enabled,
+        routing_enabled=routing_enabled,
+        routines_enabled=routines_enabled,
+        median_tools_offered=median_tools_offered,
+        p95_tools_offered=p95_tools_offered,
+        median_prompt_size=median_prompt_size,
+        median_ttft=median_ttft,
+        retry_count=retry_count,
+        off_route_call_count=off_route_call_count,
+        rerun_warning=rerun_warning,
     )
 
     if write_report and dest_file is not None:
@@ -510,12 +772,56 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         default=False,
         help="Enable browser automation tools using FakeBackend (dry run).",
     )
+    parser.add_argument(
+        "--reminders",
+        action="store_true",
+        default=False,
+        help="Enable reminders tools in the probe (default: disabled).",
+    )
+    parser.add_argument(
+        "--routing",
+        action="store_true",
+        default=False,
+        help="Enable optional tool routing using core.routing (default: disabled).",
+    )
+    parser.add_argument(
+        "--phrases",
+        type=str,
+        default=None,
+        help="Path to JSON file containing phrases to evaluate (e.g. evals/routing/dev.json).",
+    )
+    parser.add_argument(
+        "--final-test",
+        action="store_true",
+        default=False,
+        help="Authorize running the reserved test split (evals/routing/test.json).",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="Force rerun of reserved test split if already executed.",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     """Run intent probe CLI."""
     args = parse_args(argv)
+
+    routing_enabled = bool(args.routing or os.getenv("TOOL_ROUTING", "0").lower() in ("1", "true", "yes", "on"))
+
+    # Verify test split protection
+    try:
+        is_test_split, rerun_warning = check_test_split_protection(
+            phrases_path=args.phrases,
+            final_test=args.final_test,
+            force=args.force,
+            routing_enabled=routing_enabled,
+        )
+    except PermissionError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
     if args.system_prompt_file:
         prompt_path = Path(args.system_prompt_file)
@@ -546,6 +852,22 @@ def main(argv: Optional[list[str]] = None) -> int:
             os.environ["BROWSER_ENABLED"] = "0"
         browser_enabled = os.getenv("BROWSER_ENABLED", "0").lower() in ("1", "true", "yes", "on")
 
+    if args.reminders:
+        os.environ["REMINDERS_ENABLED"] = "1"
+        reminders_enabled = True
+    else:
+        os.environ["REMINDERS_ENABLED"] = "0"
+        reminders_enabled = False
+
+    os.environ["ROUTINES_ENABLED"] = "0"
+    routines_enabled = False
+
+    try:
+        active_phrases = load_probe_phrases(args.phrases, browser_enabled=browser_enabled)
+    except Exception as exc:
+        print(f"Error loading phrases: {exc}", file=sys.stderr)
+        return 1
+
     with tempfile.TemporaryDirectory() as tmp_dir:
         registry = build_probe_registry(tmp_dir, browser_enabled=browser_enabled)
 
@@ -557,23 +879,31 @@ def main(argv: Optional[list[str]] = None) -> int:
                 think=False,
             )
 
-        active_phrases = PROBE_PHRASES + (BROWSER_PROBE_PHRASES if browser_enabled else [])
-
         print("=" * 70)
         print("ORBIT INTENT PROBE")
         print("Note: The probe is a dev tool (not a held-out set)")
         print(f"Model: {model} | Temp: 0.2 | Seeds: {seeds}")
         print(f"System prompt: {prompt_source}")
         print(f"Browser tools: {'ENABLED (FakeBackend)' if browser_enabled else 'DISABLED'}")
+        print(f"Reminders tools: {'ENABLED' if reminders_enabled else 'DISABLED'}")
+        print(f"Tool routing: {'ENABLED' if routing_enabled else 'DISABLED'}")
+        if rerun_warning:
+            print(f"Warning: {rerun_warning}")
         print(f"Phrases: {len(active_phrases)} | Total turns: {len(active_phrases) * len(seeds)}")
         print("=" * 70)
 
         def on_single_result(res: SingleRunResult) -> None:
             status = "PASS" if res.passed else "FAIL"
             tool_info = f"tool={res.tool_called or '(none)'}"
+            offered_info = f"offered={res.tools_offered_count}"
             val_info = f"val={res.validation_result[:30]}"
+            retry_info = " [RETRY]" if res.routing_retry else ""
+            off_route_info = " [OFF_ROUTE]" if res.off_route_call else ""
             final_snip = res.final_text.replace("\n", " ").strip()[:60]
-            print(f"  [{status}] '{res.phrase}' (seed {res.seed}) -> {tool_info} {val_info} final=\"{final_snip}\"")
+            print(
+                f"  [{status}] '{res.phrase}' (seed {res.seed}) -> "
+                f"{offered_info} {tool_info}{retry_info}{off_route_info} {val_info} final=\"{final_snip}\""
+            )
 
         report = run_intent_probe(
             provider_factory=provider_factory,
@@ -588,7 +918,14 @@ def main(argv: Optional[list[str]] = None) -> int:
             write_report=True,
             output_path=args.output,
             browser_enabled=browser_enabled,
+            reminders_enabled=reminders_enabled,
+            routing_enabled=routing_enabled,
+            routines_enabled=routines_enabled,
+            rerun_warning=rerun_warning,
         )
+
+        if is_test_split:
+            record_test_run(routing_enabled=routing_enabled)
 
         print("\n" + "=" * 70)
         print("INTENT PROBE SUMMARY")
@@ -621,6 +958,14 @@ def main(argv: Optional[list[str]] = None) -> int:
             f"Total Pass Rate (all phrases):                "
             f"{report.total_pass_count}/{report.total_count} ({total_pct:.1f}%)"
         )
+        print(f"Median Tools Offered:                         {report.median_tools_offered:.1f}")
+        print(f"P95 Tools Offered:                            {report.p95_tools_offered:.1f}")
+        if report.median_prompt_size is not None:
+            print(f"Median Prompt Tokens:                         {report.median_prompt_size:.0f}")
+        if report.median_ttft is not None:
+            print(f"Median Generation Latency:                    {report.median_ttft:.1f} ms")
+        print(f"Routing Retries:                              {report.retry_count}")
+        print(f"Off-Route Calls:                              {report.off_route_call_count}")
         print("-" * 70)
         print("Phrase Pass Counts:")
         for ps in report.phrase_summaries:
@@ -629,9 +974,12 @@ def main(argv: Optional[list[str]] = None) -> int:
                 if ps.pass_count == ps.total_runs
                 else ("PARTIAL" if ps.pass_count > 0 else "FAIL")
             )
+            accept_display = ", ".join(ps.accept_list) if ps.accept_list else "(none)"
+            last_tool = ps.runs[-1].tool_called if ps.runs else None
+            tool_display = last_tool or "(none)"
             print(
-                f"  [{status:7s}] {ps.pass_count}/{ps.total_runs} - "
-                f"'{ps.phrase}' (accept: {', '.join(ps.accept_list)})"
+                f"  [{status:7s}] {ps.pass_count}/{ps.total_runs} (offered={int(ps.median_tools_offered)}) - "
+                f"'{ps.phrase}' -> called: {tool_display} (accept: {accept_display})"
             )
 
         if report.output_path:

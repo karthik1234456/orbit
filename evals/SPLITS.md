@@ -24,6 +24,8 @@ This document defines the status and governance of the evaluation dataset splits
 | `retrieval_guard/test` | `evals/retrieval_guard/test.json` | **reserved** | Guard retrieval benchmark: reserved and unused. Untouched until a method is chosen. |
 | `commands/dev` | `evals/commands/dev.json` | **dev** | Command shortcut and chain benchmark: tuned against during development. |
 | `commands/test` | `evals/commands/test.json` | **reserved** | Command shortcut and chain benchmark: reserved, run once. |
+| `routing/dev` | `evals/routing/dev.json` | **dev** | Tool routing benchmark: tuned against during development. |
+| `routing/test` | `evals/routing/test.json` | **reserved** | Tool routing benchmark: reserved, run once per setting. |
 
 ## Retrieval Splits Governance
 
@@ -34,6 +36,12 @@ The retrieval evaluation benchmark (`evals/retrieval`, `evals/retrieval_hard`, a
 - `evals/retrieval_hard/test.json` (`hard-test`): Hard retrieval benchmark split reserved and unused. Untouched until a method is chosen. Parameter sweeps (`--sweep`, `--sweep-methods`) are strictly prohibited and refused by the runner.
 - `evals/retrieval_guard/dev.json` (`guard-dev`): Guard retrieval benchmark split tuned against during development. Evaluates false-injection rates on conversational and general queries using the hard corpus index. Parameter sweeps (`--sweep`, `--sweep-methods`) are permitted.
 - `evals/retrieval_guard/test.json` (`guard-test`): Guard retrieval benchmark split reserved and unused. Untouched until a method is chosen. Parameter sweeps (`--sweep`, `--sweep-methods`) are strictly prohibited and refused by the runner.
+
+## Routing Splits Governance
+
+The routing evaluation benchmark (`evals/routing/dev.json` and `evals/routing/test.json`) tests tool group selection, keyword matching, and miss recovery:
+- `evals/routing/dev.json` (`routing dev`): **dev** split tuned against during active development. Dev runs are unlimited.
+- `evals/routing/test.json` (`routing test`): **reserved**, run once per setting (once with routing off, once with routing on). The intent probe refuses `--phrases evals/routing/test.json` unless `--final-test` is supplied. After a run, it records date, commit hash, dirty flag, and routing setting (on or off) in `evals/routing/.ran`. A second run for the same routing setting is refused unless `--force` is provided, which marks the report "RERUN: NOT UNSEEN".
 
 ## Commands Splits Governance
 

@@ -2,7 +2,8 @@ import os
 import sys
 import threading
 import time
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any, Callable, Optional, Union
 
 from config.settings import (
     MAX_RECORD_SECONDS,
@@ -114,15 +115,34 @@ def format_status(info: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def confirm_plan(labels: list[str], permissions: list[str], monitor: Any = None) -> bool:
+def confirm_plan(
+    labels: list[str],
+    permissions: list[str],
+    monitor: Any = None,
+    kind: str = "plan",
+    name: Optional[str] = None,
+) -> bool:
     """Prompt the user in the terminal to preview and authorize a multi-step plan."""
     try:
-        print(f"\nORBIT wants to run this plan ({len(labels)} steps):")
-        for idx, (lbl, perm) in enumerate(zip(labels, permissions), 1):
-            note = " (asks for approval)" if perm in ("asks for approval", "confirm", True) else ""
-            print(f"  {idx}. {lbl}{note}")
-        print("Each step that opens apps or sites may still ask for its own approval.")
-        prompt = "Run this plan? (y/n): "
+        if kind == "save_routine":
+            print(f"\nSave routine '{name}' with these steps?")
+            for idx, (lbl, _) in enumerate(zip(labels, permissions), 1):
+                print(f"  {idx}. {lbl}")
+            prompt = "Save this routine? (y/n): "
+        elif kind == "routine":
+            print(f"\nRoutine '{name}' ({len(labels)} steps):")
+            for idx, (lbl, perm) in enumerate(zip(labels, permissions), 1):
+                note = " (asks for approval)" if perm in ("asks for approval", "confirm", True) else ""
+                print(f"  {idx}. {lbl}{note}")
+            print("Each step that opens apps or sites may still ask for its own approval.")
+            prompt = "Run this routine? (y/n): "
+        else:
+            print(f"\nORBIT wants to run this plan ({len(labels)} steps):")
+            for idx, (lbl, perm) in enumerate(zip(labels, permissions), 1):
+                note = " (asks for approval)" if perm in ("asks for approval", "confirm", True) else ""
+                print(f"  {idx}. {lbl}{note}")
+            print("Each step that opens apps or sites may still ask for its own approval.")
+            prompt = "Run this plan? (y/n): "
         if monitor and hasattr(monitor, "paused"):
             with monitor.paused():
                 answer = input(prompt).strip().lower()
@@ -131,6 +151,98 @@ def confirm_plan(labels: list[str], permissions: list[str], monitor: Any = None)
         return answer == "y"
     except (KeyboardInterrupt, EOFError):
         return False
+
+
+def print_settings_table(
+    env_path: Union[str, Path] = ".env",
+    environ: Optional[dict[str, str]] = None,
+    print_func: Callable[..., None] = print,
+) -> None:
+    """Print tabular overview of whitelisted non-secret settings, source, and restart markers."""
+    from config.settings_store import read_effective
+
+    effective = read_effective(env_path=env_path, environ=environ)
+    header = f"{'Key':<20} {'Effective Value':<18} {'Source':<20} {'Restart Needed':<14}"
+    print_func(header)
+    print_func("-" * len(header))
+    for k, eff in effective.items():
+        src_str = eff.source
+        if eff.overridden_by_env:
+            src_str += " (overridden)"
+        rst_str = "yes" if eff.spec.restart_required else "no"
+        print_func(f"{k:<20} {eff.value:<18} {src_str:<20} {rst_str:<14}")
+
+
+def handle_set_command(
+    raw_cmd: str,
+    agent: Optional[Any] = None,
+    env_path: Union[str, Path] = ".env",
+    environ: Optional[dict[str, str]] = None,
+    input_func: Callable[[str], str] = input,
+    print_func: Callable[..., None] = print,
+) -> None:
+    """Validate, confirm, and atomically persist an editable setting from the CLI."""
+    parts = raw_cmd.split(maxsplit=2)
+    if len(parts) < 3:
+        print_func("Usage: /set KEY VALUE")
+        return
+
+    target_key = parts[1].strip()
+    raw_val = parts[2].strip()
+
+    from config.settings_store import (
+        SPECS,
+        SettingsError,
+        is_secret_like,
+        read_effective,
+        save,
+        validate,
+    )
+
+    if target_key not in SPECS or is_secret_like(target_key):
+        print_func("That setting can't be changed here.")
+        return
+
+    try:
+        norm_val = validate(target_key, raw_val)
+    except SettingsError as exc:
+        print_func(f"Validation error: {exc}")
+        return
+
+    eff = read_effective(env_path=env_path, environ=environ)
+    current_val = eff[target_key].value if target_key in eff else SPECS[target_key].default
+
+    try:
+        confirm = input_func(
+            f"Change {target_key} from {current_val} to {norm_val}? (y/n): "
+        ).strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        print_func("\nCancelled.")
+        return
+
+    if confirm in ("y", "yes"):
+        try:
+            save_res = save(env_path, {target_key: norm_val})
+            if agent and getattr(agent, "audit", None):
+                agent.audit.log(
+                    tool="settings",
+                    args={
+                        "key": target_key,
+                        "old_value": current_val,
+                        "new_value": norm_val,
+                    },
+                    decision="settings_change",
+                    outcome="success",
+                )
+            print_func(f"Setting updated: {target_key}={norm_val}")
+            print_func(".env.bak was created.")
+            print_func("Restart ORBIT to apply.")
+            for w in save_res.warnings:
+                print_func(f"Warning: {w}")
+        except SettingsError as exc:
+            print_func(f"Error saving setting: {exc}")
+    else:
+        print_func("Setting unchanged.")
 
 
 def main() -> None:
@@ -176,7 +288,9 @@ def main() -> None:
         app = build_app(
             provider=provider,
             confirm_callback=confirm_tool,
-            plan_callback=lambda labels, permissions: confirm_plan(labels, permissions, monitor=monitor),
+            plan_callback=lambda labels, permissions, kind="plan", name=None: confirm_plan(
+                labels, permissions, monitor=monitor, kind=kind, name=name
+            ),
             on_event=print_event,
         )
 
@@ -226,6 +340,54 @@ def main() -> None:
         print(f"Initialization error: {exc}")
         sys.exit(1)
 
+    rem_stop_event = threading.Event()
+    if getattr(app, "reminder_store", None) is not None:
+        from reminders.scheduler import ReminderScheduler, format_missed_message
+
+        def on_terminal_due(item):
+            print(f"\n[reminder] {item.text}\nYou: ", end="", flush=True)
+
+        scheduler = ReminderScheduler(
+            store=app.reminder_store,
+            on_due=on_terminal_due,
+        )
+        missed = scheduler.startup()
+        if missed:
+            print(format_missed_message(missed))
+
+        def reminder_poll_worker():
+            while not rem_stop_event.is_set():
+                try:
+                    scheduler.tick()
+                except Exception:
+                    pass
+                rem_stop_event.wait(2.0)
+
+        rem_thread = threading.Thread(target=reminder_poll_worker, daemon=True)
+        rem_thread.start()
+
+    # Doctor startup check on background daemon thread
+    if getattr(settings, "DOCTOR_ON_START", True):
+        def _doctor_startup_worker():
+            try:
+                from core.doctor import run_checks
+                fast_checks = run_checks(fast=True)
+                warn_count = sum(1 for c in fast_checks if c.status == "WARN")
+                fail_count = sum(1 for c in fast_checks if c.status == "FAIL")
+                if warn_count > 0 or fail_count > 0:
+                    parts = []
+                    if fail_count > 0:
+                        parts.append(f"{fail_count} failure" if fail_count == 1 else f"{fail_count} failures")
+                    if warn_count > 0:
+                        parts.append(f"{warn_count} warning" if warn_count == 1 else f"{warn_count} warnings")
+                    summary_str = ", ".join(parts)
+                    print(f"Doctor: {summary_str} (run /doctor)")
+            except Exception:
+                pass
+
+        doc_thread = threading.Thread(target=_doctor_startup_worker, daemon=True)
+        doc_thread.start()
+
     print(STARTUP_MESSAGE)
 
     recent_chat_lines: list[str] = []
@@ -235,6 +397,12 @@ def main() -> None:
             try:
                 user_input = input("You: ").strip()
                 if not user_input:
+                    continue
+
+                if user_input.lower() == "/doctor":
+                    from core.doctor import format_report, run_checks
+                    checks = run_checks(fast=False)
+                    print(format_report(checks))
                     continue
 
                 if user_input.lower() == "/diag":
@@ -247,6 +415,14 @@ def main() -> None:
                     )
                     print(f"Diagnostics written to: {file_path}")
                     print("This file is safe to share after a quick look.")
+                    continue
+
+                if user_input.lower() == "/settings":
+                    print_settings_table()
+                    continue
+
+                if user_input.lower().startswith("/set"):
+                    handle_set_command(user_input, agent=agent)
                     continue
 
                 if user_input.lower() == "quit":
@@ -503,7 +679,10 @@ def main() -> None:
                 if user_input.lower() in ("/help", "help", "/?"):
                     print("Available commands:")
                     print("  /help              - Show this help guide")
+                    print("  /doctor            - Run environment doctor checks")
                     print("  /diag              - Save and view diagnostic report")
+                    print("  /settings          - Display editable configuration settings table")
+                    print("  /set <key> <val>   - Update a configuration setting in .env")
                     print("  /status            - Show provider and local Ollama model reachability")
                     print("  /context           - Inspect active session context (last site, app, query)")
                     print("  /plan on|off|always- Configure plan preview gate ('on' means auto)")
@@ -722,6 +901,7 @@ def main() -> None:
                 print("\nGoodbye!")
                 break
     finally:
+        rem_stop_event.set()
         if app is not None and hasattr(app, "shutdown") and callable(app.shutdown):
             try:
                 app.shutdown()

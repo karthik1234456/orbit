@@ -11,6 +11,7 @@ for _k in list(os.environ):
         del os.environ[_k]
 
 import sys
+from typing import Any
 
 # Ensure Tcl/Tk libraries are located reliably on Windows
 if sys.platform == "win32":
@@ -57,16 +58,22 @@ def check_tk_available():
     except Exception as exc:
         pytest.skip(f"Tkinter/Tcl unavailable in environment (intermittent/environmental): {exc}")
 
-# PART A.2: Guard against real browser launches during tests
-try:
-    import playwright.sync_api
+# PART A.2: Guard against real browser launches during tests without eager importing
+import builtins
 
-    def _blocked_sync_playwright(*args, **kwargs):
-        raise RuntimeError("Real Playwright browser launch is blocked in tests.")
+_orig_import = builtins.__import__
 
-    playwright.sync_api.sync_playwright = _blocked_sync_playwright
-except (ImportError, AttributeError):
-    pass
+
+def _guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if name == "playwright" or name.startswith("playwright."):
+        existing = sys.modules.get("playwright")
+        if existing is not None and getattr(existing, "__file__", None) is None:
+            return _orig_import(name, globals, locals, fromlist, level)
+        raise ImportError("Real Playwright browser launch is blocked in tests.")
+    return _orig_import(name, globals, locals, fromlist, level)
+
+
+builtins.__import__ = _guarded_import
 
 
 @pytest.fixture(autouse=True)
@@ -80,6 +87,14 @@ def default_test_settings(monkeypatch):
     monkeypatch.setenv("BROWSER_ENABLED", "0")
     monkeypatch.setattr(settings, "PLAN_PREVIEW", "auto")
     monkeypatch.setattr(settings, "CHAINS_ENABLED", True)
+    monkeypatch.delenv("REMINDERS_ENABLED", raising=False)
+    monkeypatch.delenv("COMMAND_SHORTCUTS", raising=False)
+    monkeypatch.delenv("TOOL_ROUTING", raising=False)
+    monkeypatch.setattr(settings, "REMINDERS_ENABLED", True)
+    monkeypatch.setattr(settings, "COMMAND_SHORTCUTS", True)
+    monkeypatch.setattr(settings, "TOOL_ROUTING", False)
+    monkeypatch.setenv("DOCTOR_ON_START", "0")
+    monkeypatch.setattr(settings, "DOCTOR_ON_START", False)
 
 
 @pytest.fixture
@@ -100,3 +115,67 @@ def browser_mode(monkeypatch):
 
     monkeypatch.setattr(BrowserController, "__init__", _patched_init)
     return factory
+
+
+# Process protection: tests must never touch real system processes
+@pytest.fixture(autouse=True)
+def guard_process_iter(monkeypatch):
+    """Ensure tests never touch the real process list on the system."""
+    import psutil
+
+    def _blocked_process_iter(*args, **kwargs):
+        raise AssertionError("test touched real processes; patch core.procs or psutil.process_iter in the test")
+
+    monkeypatch.setattr(psutil, "process_iter", _blocked_process_iter)
+
+
+# Tk hygiene: track every tkinter.Tk instance and clean up leftovers on main thread
+_CREATED_TK_ROOTS: list[Any] = []
+_LEFTOVER_TK_TESTS: list[str] = []
+
+try:
+    import tkinter as tk
+
+    _orig_tk_init = tk.Tk.__init__
+
+    def _tracking_tk_init(self, *args, **kwargs):
+        _orig_tk_init(self, *args, **kwargs)
+        _CREATED_TK_ROOTS.append(self)
+
+    tk.Tk.__init__ = _tracking_tk_init
+
+    _orig_var_del = tk.Variable.__del__
+
+    def _safe_var_del(self):
+        try:
+            _orig_var_del(self)
+        except Exception:
+            pass
+
+    tk.Variable.__del__ = _safe_var_del
+except Exception:
+    pass
+
+
+@pytest.fixture(autouse=True)
+def track_tk_roots(request):
+    """Track every tkinter.Tk created in a test and destroy leftovers on the main thread."""
+    _CREATED_TK_ROOTS.clear()
+    yield
+    leftovers = []
+    for root in list(_CREATED_TK_ROOTS):
+        try:
+            if root.winfo_exists():
+                leftovers.append(root)
+        except Exception:
+            pass
+
+    if leftovers:
+        _LEFTOVER_TK_TESTS.append(request.node.nodeid)
+        for root in leftovers:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+    _CREATED_TK_ROOTS.clear()
+

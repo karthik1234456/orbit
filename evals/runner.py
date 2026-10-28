@@ -41,14 +41,20 @@ from contextlib import contextmanager
 
 @contextmanager
 def _isolated_eval_environment():
-    """Ensure eval runs with browser disabled and clean defaults, restoring env on exit."""
-    keys = ["COMMAND_SHORTCUTS", "SESSION_CONTEXT", "BROWSER_ENABLED"]
+    """Ensure eval runs with browser and reminders disabled and clean defaults, restoring env on exit."""
+    keys = ["COMMAND_SHORTCUTS", "SESSION_CONTEXT", "BROWSER_ENABLED", "REMINDERS_ENABLED", "TOOL_ROUTING", "ROUTINES_ENABLED"]
     prev = {k: os.environ.get(k) for k in keys}
     try:
         if "COMMAND_SHORTCUTS" not in os.environ:
             os.environ["COMMAND_SHORTCUTS"] = "0"
         if "SESSION_CONTEXT" not in os.environ:
             os.environ["SESSION_CONTEXT"] = "0"
+        if "REMINDERS_ENABLED" not in os.environ:
+            os.environ["REMINDERS_ENABLED"] = "0"
+        if "TOOL_ROUTING" not in os.environ:
+            os.environ["TOOL_ROUTING"] = "0"
+        if "ROUTINES_ENABLED" not in os.environ:
+            os.environ["ROUTINES_ENABLED"] = "0"
         os.environ["BROWSER_ENABLED"] = "0"
         yield
     finally:
@@ -276,6 +282,18 @@ def run_suite(
             os.environ["BROWSER_ENABLED"] = "0"
         browser_on = os.getenv("BROWSER_ENABLED", "0").lower() in ("1", "true", "yes", "on")
 
+        if "REMINDERS_ENABLED" not in os.environ:
+            os.environ["REMINDERS_ENABLED"] = "0"
+        reminders_on = os.getenv("REMINDERS_ENABLED", "0").lower() in ("1", "true", "yes", "on")
+
+        if "TOOL_ROUTING" not in os.environ:
+            os.environ["TOOL_ROUTING"] = "0"
+        routing_on = os.getenv("TOOL_ROUTING", "0").lower() in ("1", "true", "yes", "on")
+
+        if "ROUTINES_ENABLED" not in os.environ:
+            os.environ["ROUTINES_ENABLED"] = "0"
+        routines_on = os.getenv("ROUTINES_ENABLED", "0").lower() in ("1", "true", "yes", "on")
+
         meta: dict[str, Any] = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "total_cases": len(cases),
@@ -289,6 +307,9 @@ def run_suite(
             "COMMAND_SHORTCUTS": shortcuts_on,
             "SESSION_CONTEXT": context_on,
             "BROWSER_ENABLED": browser_on,
+            "REMINDERS_ENABLED": reminders_on,
+            "TOOL_ROUTING": routing_on,
+            "ROUTINES_ENABLED": routines_on,
         }
         if extra_meta:
             meta.update(extra_meta)
@@ -302,6 +323,9 @@ def run_suite(
         meta.setdefault("COMMAND_SHORTCUTS", shortcuts_on)
         meta.setdefault("SESSION_CONTEXT", context_on)
         meta.setdefault("BROWSER_ENABLED", browser_on)
+        meta.setdefault("REMINDERS_ENABLED", reminders_on)
+        meta.setdefault("TOOL_ROUTING", routing_on)
+        meta.setdefault("ROUTINES_ENABLED", routines_on)
 
         if "cases_sha256" not in meta:
             from evals.schema import compute_cases_sha256

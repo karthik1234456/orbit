@@ -1,14 +1,12 @@
 # ORBIT: Safe Local Desktop AI Assistant
 
-> A security-first, local AI desktop assistant with human-in-the-loop permission controls, controlled browser automation, deterministic command chaining, persistent memory, document retrieval with citations, and terminal voice interaction.
+> A security-first, local AI desktop assistant with human-in-the-loop permission controls, controlled browser automation, deterministic command chaining, persistent memory, document retrieval with citations, and terminal and desktop voice interaction.
 
 ---
 
 ## Demo
 
-*Demo video link: coming soon (placeholder)*
-
-![ORBIT Demo Placeholder](https://via.placeholder.com/800x450.png?text=ORBIT+Interactive+Demo+GIF)
+_Demo video: TODO_
 
 ---
 
@@ -16,7 +14,7 @@
 
 ORBIT is an autonomous, security-first desktop AI assistant built to run locally on your workstation while keeping **you firmly in control**.
 
-Desktop AI agents are often polarized: they are either passive chat windows without real-world utility, or unconstrained scripts that execute arbitrary terminal commands and file edits with minimal oversight. ORBIT bridges this divide: it delivers agentic multi-step reasoning, workspace file management, application launching, controlled browser automation, deterministic command chaining, persistent memory, and local document Q&A—while enforcing an uncompromising **human-in-the-loop security perimeter**.
+Desktop AI agents are often polarized: they are either passive chat windows without real-world utility, or unconstrained scripts that execute arbitrary terminal commands and file edits with minimal oversight. ORBIT bridges this divide: it delivers agentic multi-step reasoning, workspace file management, application launching, controlled browser automation, deterministic command chaining, persistent routines, natural language reminders, persistent memory, and local document Q&A—while enforcing an uncompromising **human-in-the-loop security perimeter**.
 
 Key design tenets:
 - **Zero Unverified Privilege**: Tools that modify the filesystem, launch desktop applications, or navigate the web require explicit, fail-closed human confirmation before execution.
@@ -69,6 +67,46 @@ Key design tenets:
 - Hard safety limits: `PLAN_MAX_STEPS=10` and `PLAN_MAX_SECONDS=180.0` prevent runaway execution.
 - Strict privacy: only step labels and execution statuses are recorded in history and diagnostics; untrusted page text is never logged.
 
+### Routines (Named Multi-Step Sequences)
+- **Deterministic Action Sequences**: Named, reusable routines stored in local SQLite (`data/routines.db`) that execute through the existing plan machinery (`ShortcutPlan`) with zero LLM calls.
+- **Natural Language Interaction**:
+  - *Create*: `"create a routine morning: open notepad then open calculator"`, `"save a routine named dev that open vscode then wait 5 seconds"`
+  - *Save Last Plan*: `"save that as a routine focus"`, `"save the last plan as a routine named work"`
+  - *Run*: `"run routine morning"`, `"start my routine dev"`, `"routine morning"`
+  - *Manage*: `"list routines"`, `"show routine morning"`, `"delete routine dev"`
+- **Allowed Step Types**: Restricted to 12 safe tools (`ALLOWED_ROUTINE_TOOLS`):
+  - Desktop: `open_application`, `close_application`, `open_workspace_folder`
+  - Web & Search: `open_website`, `search_site`
+  - Browser Automation: `browser_click_result`, `browser_media`, `browser_scroll`, `browser_history`, `browser_read_page`, `browser_close`
+  - Timing: `wait`
+- **Approval on Save**: Saving a routine requires upfront user approval via `PlanDialog` (or CLI confirmation) displaying the numbered steps and action button "Save".
+- **Preview on Every Run**: Every execution triggers an upfront preview gate displaying `Routine '<name>' (n steps)` with `(asks for approval)` annotations (`ROUTINE_PREVIEW="always"` default; setting to `"never"` requires an explicit warning confirmation). Fails closed if denied.
+- **Per-Step Approval Preserved**: Approving a routine does not bypass per-step confirmations for launching applications or external sites.
+- **Hard Boundaries & Limits**:
+  - Maximum of 20 routines in store.
+  - Maximum of 10 steps per routine.
+  - Maximum cumulative wait budget of 60 seconds per routine.
+  - Naming: 1 to 30 characters (letters, digits, spaces, hyphens, underscores); cannot start with command verbs or reserved keywords.
+  - No raw URLs stored; converted to explicit site allowlist references.
+  - Dual validation: re-validated against current live allowlists at runtime before step 1.
+- **Desktop UI Management**: Dedicated "Routines" tab in GUI displaying Name, Steps, Last Run, and Runs count, with Run, Show steps, and Delete (with confirmation dialog) actions.
+- **Complete Isolation**: No tool in `tools/` can touch `data/routines.db`; routine contents are never placed into model prompts, memory, or diagnostics (`=== ROUTINES ===` outputs routine count and status only).
+
+### Reminders and Timers
+- Natural language scheduling via deterministic shortcuts and tools (`set_reminder`, `set_timer`, `list_reminders`, `cancel_reminder`, `cancel_all_reminders`).
+- Example sentences:
+  - `"remind me in 10 minutes to check the oven"`
+  - `"remind me at 5:30 pm to call mom"`
+  - `"set a timer for 15 minutes"`
+  - `"what reminders do i have"`
+  - `"cancel reminder 2"`
+- Human approval step: setting, cancelling, or snoozing reminders and timers requires explicit confirmation (`CONFIRM`), displaying the full arguments so the user verifies the text and time before scheduling.
+- Hard limits: reminder text is validated to 1–100 characters after sanitization (collapsing whitespace, removing `< > `` and control characters); due times must be between 5 seconds and 7 days ahead; at most 20 active items can be stored concurrently (raises `ReminderLimit`); maximum of 3 snoozes per reminder.
+- Lifecycle and storage: reminders only fire while ORBIT is running. If ORBIT was closed when an item became due, it is marked as missed and reported upon next startup. All reminder data stays in a local SQLite database at `data/reminders.db` which is git-ignored.
+- Non-modal desktop toasts: fired reminders display a small, non-modal `ReminderToast` popup with "Dismiss" and "Snooze 5 min" buttons that never steals keyboard focus or interrupts typing in the main window. At most 3 toasts are displayed concurrently; additional reminders or reminders firing while a confirmation dialog is open are delivered as chat lines.
+- Dedicated Reminders tab: lists active reminders and timers (ID, Kind, Reminder Text, Due In) with "Cancel" (with confirmation) and "Refresh" buttons. The status bar displays the soonest upcoming reminder (`Next: <text> in <mm:ss>`).
+- Privacy and model isolation: reminder text is plain text only, never fed to the LLM, never included in the system prompt, and never added to conversation history as instructions (turn history records only `"Set a reminder for <time>."`). Fired reminders never trigger tool calls or model inference.
+
 ### Session Context
 - Cross-turn conversational state tracking (`core/session_state.py`) preserving active entities across turns (`last_site`, `last_query`, `last_app`, `last_files`).
 - Enables natural follow-up instructions without repeated typing (e.g. "open the second result", "pause the video", "search for lofi instead").
@@ -89,13 +127,50 @@ Key design tenets:
 - Outdated-document labelling (`[OUTDATED: this document says it is superseded]`) prioritizing current policies and instructing the model to cite superseded text with caution.
 - Prompt injection filtering withholding flagged chunks and tracking safety metrics.
 
-### Voice (Terminal Only)
-- Conversational voice loop available exclusively in the terminal CLI interface (`main.py`).
-- Wake phrase detection (`"hey orbit"`) with pre-roll buffering.
-- Voice Activity Detection (Silero VAD with energy fallback).
-- Local speech-to-text powered by OpenAI Whisper (`tiny.en`, `base.en`).
-- Sentence-boundary streaming speech synthesis via `pyttsx3` subprocess workers.
-- Keyboard interrupt monitor (`InterruptMonitor`) using Windows `msvcrt` that pauses during confirmation dialogs so voice listeners cannot steal keystrokes.
+### Voice in the Terminal and Click-to-Talk in the Window
+- **Terminal CLI Voice**:
+  - Conversational continuous voice loop available in the terminal CLI interface (`main.py`).
+  - Wake phrase detection (`"hey orbit"`) with pre-roll buffering.
+  - Voice Activity Detection (Silero VAD with energy fallback).
+  - Local speech-to-text powered by OpenAI Whisper (`tiny.en`, `base.en`).
+  - Sentence-boundary streaming speech synthesis via `pyttsx3` subprocess workers.
+  - Keyboard interrupt monitor (`InterruptMonitor`) using Windows `msvcrt` that pauses during confirmation dialogs so voice listeners cannot steal keystrokes.
+- **Desktop Window Voice (Click-to-Talk)**:
+  - Click-to-talk microphone button (`mic_btn`) and keyboard shortcut (`Ctrl+M` or Spacebar when button is focused) for desktop interaction.
+  - Visual voice state indicators: displays "Listening... click to stop" with a live dynamic audio level bar during capture, and "Transcribing..." during local Whisper processing.
+  - "Speak replies" checkbox: opt-in, disabled by default. When enabled, final agent replies are sanitized (stripping code, markdown, URLs, paths, and web page titles; capped at 500 characters) and read aloud via non-blocking subprocess speech synthesis.
+  - Immediate silence on Stop: clicking the GUI **Stop** button instantly terminates speech output, aborts recording, or cancels transcription.
+  - Safety perimeter preserved: confirmation dialogs (`ConfirmDialog`) and plan preview dialogs (`PlanDialog`) accept mouse clicks and keyboard only; voice input is blocked and cannot approve or inject actions.
+  - Lazy model loading: the local Whisper speech model loads in the background on first voice capture rather than during GUI startup, displaying "Loading speech model..." in the status bar.
+  - Privacy-first audio handling: recorded audio numpy arrays are strictly ephemeral, held in memory only during transcription, never written to disk, never logged, and omitted from system diagnostics.
+  - Graceful hardware and package fallbacks: requires working microphone hardware and the `sounddevice` and `faster_whisper` packages. If hardware or packages are absent, the mic button is cleanly disabled with a descriptive tooltip explaining the missing requirement, while mock mode remains fully functional for offline development and testing.
+
+### Tool Routing (Optional)
+- Opt-in tool filtering (`TOOL_ROUTING=1` or `settings.TOOL_ROUTING = True`, disabled by default) reducing prompt token overhead and improving precision for local small models.
+- Centralized group definitions (`core/routing.py`) mapping 9 functional areas: `system`, `notes`, `files`, `apps`, `web`, `browser`, `memory`, `docs`, and `reminders`.
+- `select_groups(text, prior_tools, state)` selects groups matching keyword stems and phrases, carries forward active groups from `prior_tools` for cross-turn conversational continuity, and adds `browser` (and `web`) whenever a controlled browser page is open in `SessionState`. The `system` group is always offered.
+- Fallback set: if no group matches (e.g. conversational chat or unclassified input), falls back to `{"system", "web", "memory", "docs"}`.
+- `offered_tools(registry_tools, groups)` filters registered tools against selected groups, safely ignoring unknown groups and always offering ungrouped tools.
+- Safety: routing is strictly an optimization, not a security boundary. It does not alter permissions (`SAFE`, `CONFIRM`, `DENY`), safety prechecks, human confirmation prompts, taint tracking, or audit logging. Off-route tool calls generated by the model execute normally and are tracked in telemetry (`off_route_call`).
+- Miss recovery: if routing narrowed tools, no tool was executed in the turn, and the model's textual reply matches inability phrasing (`can't`, `cannot`, `unable`, `"don't have the ability"`, `"i'm not able"`, `"i am not able"`, `"do not have access"`, `"no way to"`), the agent automatically retries ONCE with the full tool list.
+- Run trace recording: every `TaskRun` records `routing_on`, `routing_groups`, `tools_offered_count`, `tools_registered_count`, `off_route_call`, `routing_retry`, and `prompt_tokens`.
+
+### Settings Panel
+- Strict configuration inspection and environment variable parsing (`config/settings.py`, `core/doctor.py`).
+- Line-by-line syntax checking detecting malformed declarations, duplicate keys, unmatched quotation marks, and merged lines.
+- Complete secret redaction: sensitive credentials (`KEY`, `TOKEN`, `SECRET`, `PASSWORD`) display only "set" or "not set", never exposing raw values or token character lengths.
+- Stale override protection: detects and flags leftover `ORBIT_MOCK` settings that inadvertently force mock mode.
+- Whitelist of editable non-secret settings (`SPECS` in `config/settings_store.py`) covering `LLM_PROVIDER`, `OLLAMA_MODEL`, `OLLAMA_NUM_CTX`, `BROWSER_ENABLED`, `SPEAK_REPLIES`, `VOICE_IN_UI`, `COMMAND_SHORTCUTS`, `CHAINS_ENABLED`, `PLAN_PREVIEW`, `TOOL_ROUTING`, `REMINDERS_ENABLED`, `SESSION_CONTEXT`, `RAG_AUTO`, `DOCTOR_ON_START`, `STT_MODEL`, `STT_LANGUAGE`, and `ORBIT_MOCK`.
+- Restart-required flags distinguishing backend settings from dynamic operational controls.
+- Origin source tracking (`[default]`, `[.env]`, `[environment]`) with warnings when process environment overrides `.env` (`⚠ overridden by environment`).
+- Atomic writes via temp file with `.env.bak` backup, CRLF and BOM preservation.
+
+### Environment Doctor
+- Read-only environment doctor (`core/doctor.py`, `scripts/doctor.py`) for comprehensive diagnostic pre-flight checks.
+- Inspects runtime, environment variables, dependencies, local models, hardware, and safety hygiene without executing any modifications or fixes.
+- Safe injectable architecture via `Probes` dataclass (`http_get`, `run_command`, `find_spec`, `which`, `read_text`, `path_exists`, `disk_free`, `env`, `clock`), with strict timeouts and read-only execution.
+- Available via command line (`python scripts/doctor.py`), terminal chat (`/doctor`), or desktop GUI (Doctor button and status bar chip).
+- Fast 3-check startup scan running in background thread (`DOCTOR_ON_START=True`).
 
 ### Local Model through Ollama
 - First-class support for local LLM inference via Ollama (`LLM_PROVIDER="ollama"`, `OLLAMA_MODEL="qwen3:8b"`).
@@ -104,7 +179,7 @@ Key design tenets:
 
 ### Desktop UI
 - Native desktop interface built with standard Python `tkinter` and `ttk` (no external GUI dependencies).
-- Two-pane layout: live streaming conversation and input on the left; tabbed notebook (Activity feed with plan progress, Session Context, Memories inspector, Document manager, Runs log) on the right.
+- Two-pane layout: live streaming conversation and input on the left; tabbed notebook (Activity feed with plan progress, Session Context, Memories inspector, Document manager, Runs log, Reminders, Routines) on the right.
 - Modal `ConfirmDialog` and `PlanDialog`: Deny focused by default, Allow disabled for an 800ms cooldown, Enter key mapped to Deny, and window closure or countdown timeout defaulting to Deny.
 - Thread-safe `ChatController` isolating agent execution threads from the UI event loop.
 
@@ -127,8 +202,8 @@ flowchart TB
     GUI["Desktop GUI (Tkinter): chat, tabs, Stop button"]
   end
 
-  subgraph Parsing ["Command & Chain Parsing"]
-    CP["Command Parser (core/shortcuts.py, core/chains.py)"]
+  subgraph Parsing ["Command, Routine & Chain Parsing"]
+    CP["Command, Routine & Chain Parser (core/shortcuts.py, core/chains.py)"]
     PP{"Plan Preview Gate (PlanDialog / CLI)"}
   end
 
@@ -150,14 +225,18 @@ flowchart TB
     TB["Controlled Browser (Playwright, guards, routes)"]
     TM[("Memory: SQLite (data/memory.db)")]
     TR[("Documents: FTS5 (data/rag.db)")]
+    TREM[("Reminders: SQLite (data/reminders.db)")]
+    TROU[("Routines: SQLite (data/routines.db)")]
   end
 
-  subgraph AuditSub ["Auditing & Safety"]
+  subgraph ConfigAudit ["System Diagnostics & Safety"]
     AU[("Audit Log (logs/audit.jsonl)")]
+    DOC["Environment Doctor (core/doctor.py)"]
+    SET["Settings Store (config/settings_store.py)"]
   end
 
   Inputs --> CP
-  CP -->|"Direct single / chain plan"| PP
+  CP -->|"Direct single / chain / routine plan"| PP
   PP -->|"Approved"| AL
   PP -->|"Cancelled / Timeout"| Inputs
   CP -->|"Unmatched phrase"| AL
@@ -174,11 +253,15 @@ flowchart TB
   ToolsSub --> TB
   ToolsSub --> TM
   ToolsSub --> TR
+  ToolsSub --> TREM
+  ToolsSub --> TROU
 
   TR -. "untrusted content taints turn" .-> AL
   TB -. "untrusted content taints turn" .-> AL
   AL --> AU
   ToolsSub --> AU
+  Inputs --> DOC
+  Inputs --> SET
 ```
 
 ---
@@ -189,11 +272,18 @@ flowchart TB
 - Python 3.11 or 3.12
 - Windows OS (required for audio device binding, process inspection, and desktop tools)
 
+### First Step When Something Breaks
+Whenever you encounter an issue or want to verify system readiness, run the read-only environment doctor first:
+```powershell
+python scripts/doctor.py
+```
+This inspects dependencies, virtual environments, `.env` syntax, Ollama model reachability, and hardware status without modifying any files.
+
 ### Installation
 
 1. **Clone the repository**:
    ```powershell
-   git clone https://github.com/your-username/orbit.git
+   git clone https://github.com/YOUR-USERNAME/orbit.git
    cd orbit
    ```
 
@@ -216,7 +306,7 @@ flowchart TB
 
 5. **Choose your model provider**:
    - **Option A: Local Model with Ollama (Recommended for private local execution)**:
-     1. Install [Ollama](https://ollama.com/) on Windows.
+     1. Install Ollama on Windows.
      2. Pull the default 8B model:
         ```powershell
         ollama pull qwen3:8b
@@ -228,10 +318,9 @@ flowchart TB
         OLLAMA_HOST=http://127.0.0.1:11434
         ```
    - **Option B: Cloud Model with Google Gemini**:
-     In your `.env` file, configure:
+     In your `.env` file, configure your Gemini API key from Google AI Studio:
      ```env
      LLM_PROVIDER=gemini
-     GEMINI_API_KEY=your_actual_key_here
      MODEL_NAME=gemini-2.5-flash
      ```
    - **Option C: Offline Mock Mode (Zero Cost, No Model / API Key Needed)**:
@@ -277,7 +366,7 @@ ORBIT operates under a strict, defense-in-depth security model:
 
 1. **Three-Tier Permission Engine**:
    - `SAFE`: Read-only, deterministic tools (e.g. `get_current_time`, `calculate`, `system_info`, `search_documents`). Auto-executed.
-   - `CONFIRM`: Stateful, side-effecting operations (e.g. `create_file`, `move_file`, `open_application`, `open_website`, `remember_fact`, `browser_click_result`). Execution is blocked until explicit human consent is granted.
+   - `CONFIRM`: Stateful, side-effecting operations (e.g. `create_file`, `move_file`, `open_application`, `open_website`, `remember_fact`, `browser_click_result`, `set_reminder`). Execution is blocked until explicit human consent is granted.
    - `DENY`: Dangerous operations (arbitrary shell commands, registry modifications, private network endpoints) blocked unconditionally.
 2. **Workspace Sandboxing**:
    - File tools are anchored strictly within the resolved `workspace/` root directory.
@@ -301,7 +390,7 @@ ORBIT operates under a strict, defense-in-depth security model:
    - Sign-in URLs (`accounts.google.com`, `consent.google.com`) are aborted in flight and reverted.
    - Clicks and keystrokes on authentication portals are strictly barred.
    - JavaScript modal popups (`alert`, `confirm`) are automatically dismissed; automatic file downloads are disabled.
-8. **Command Chaining Boundaries**:
+8. **Command Chaining & Routine Boundaries**:
    - All-or-nothing parsing ensures partial or unrecognized command chains never execute.
    - Plan preview modal presents all steps upfront before running.
    - Per-step confirmations for launching apps or opening websites remain enforced.
@@ -332,11 +421,20 @@ ORBIT operates under a strict, defense-in-depth security model:
 - `read the page`
 - `restart the browser`
 
-### Multi-Step Chained Commands
+### Multi-Step Chained Commands & Routines
 - `open youtube and search for lofi hip hop`
 - `search wikipedia for apollo 11 then click the first result and read the page`
 - `open whatsapp and then open calculator`
 - `wait 5 seconds then close notepad`
+- `create a routine morning: open notepad then open calculator`
+- `run routine morning`
+
+### Reminders and Timers
+- `remind me in 10 minutes to check the oven`
+- `remind me at 5:30 pm to call mom`
+- `set a timer for 15 minutes`
+- `what reminders do i have`
+- `cancel reminder 1`
 
 ### Built-in Utilities and Memory
 - `what time is it`
@@ -346,11 +444,47 @@ ORBIT operates under a strict, defense-in-depth security model:
 
 ### Interactive Terminal Commands
 - `/help` - Show command shortcuts and syntax guide
+- `/doctor` - Run read-only environment doctor checks
 - `/diag` - Display runtime diagnostics and browser telemetry
+- `/settings` - Display editable configuration settings table
+- `/set <key> <val>` - Update a whitelisted configuration setting in .env
 - `/plan on|off|always` - Configure plan preview gate policy
 - `/chains on|off` - Toggle deterministic chain parser
 - `/browser restart` - Restart browser backend and clean orphaned processes
 - `quit` - Exit ORBIT
+
+---
+
+## Settings
+
+ORBIT provides safe configuration management both in the terminal CLI and via a desktop dialog.
+
+### What Can Be Changed
+Only non-secret settings explicitly listed on the code whitelist (`SPECS` in `config/settings_store.py`) can be inspected or updated:
+- **LLM & Model**: `LLM_PROVIDER` (`auto|ollama|gemini|mock`), `OLLAMA_MODEL` (text matching `[A-Za-z0-9._:/-]+`, max 60 chars), `OLLAMA_NUM_CTX` (2048–32768 tokens).
+- **Automation & Tools**: `BROWSER_ENABLED` (`auto|0|1`), `TOOL_ROUTING` (0/1), `REMINDERS_ENABLED` (0/1), `RAG_AUTO` (0/1), `SESSION_CONTEXT` (0/1), `ROUTINES_ENABLED` (0/1), `ROUTINE_PREVIEW` (`always|never`).
+- **Interface & Audio**: `SPEAK_REPLIES` (0/1), `VOICE_IN_UI` (0/1), `STT_MODEL` (`tiny.en|base.en|small.en|tiny|base|small`), `STT_LANGUAGE` (`en|hi|empty`).
+- **Execution Controls**: `COMMAND_SHORTCUTS` (0/1), `CHAINS_ENABLED` (0/1), `PLAN_PREVIEW` (`auto|always|never`), `DOCTOR_ON_START` (0/1), `ORBIT_MOCK` (0/1).
+
+### Restart Required
+- Settings that configure backend subsystems or startup initialization display a `(restart required)` marker. When modified, ORBIT must be restarted to apply the changes: `LLM_PROVIDER`, `OLLAMA_MODEL`, `OLLAMA_NUM_CTX`, `BROWSER_ENABLED`, `VOICE_IN_UI`, `REMINDERS_ENABLED`, `DOCTOR_ON_START`, `STT_MODEL`, `STT_LANGUAGE`, and `ORBIT_MOCK`.
+- Dynamic operational settings take effect on the next turn without requiring a restart: `SPEAK_REPLIES`, `COMMAND_SHORTCUTS`, `CHAINS_ENABLED`, `PLAN_PREVIEW`, `TOOL_ROUTING`, `SESSION_CONTEXT`, `ROUTINES_ENABLED`, `ROUTINE_PREVIEW`, and `RAG_AUTO`.
+
+### Secrets Are Edited By Hand
+- Secret keys and tokens (e.g. `GEMINI_API_KEY`, passwords, or any key matching `KEY`, `TOKEN`, `SECRET`, or `PASSWORD`) are strictly excluded from the settings store.
+- Secrets are never displayed, queried, or written through the GUI or CLI. All credentials must be added or edited manually by the user in `.env`.
+
+### Automated Backup (`.env.bak`)
+- Every save operation creates an exact byte-for-byte copy of the existing `.env` file as `.env.bak` before making changes.
+- Saves execute via atomic sibling temporary file replacement (`os.replace`), preserving original UTF-8 BOM, comments, unknown keys, and line endings (Windows CRLF vs Unix LF).
+- If duplicate keys or merged setting lines are detected for a setting being edited, the operation refuses to write and reports line numbers and key names only.
+
+### Source Tags and Overrides
+- Every setting is tagged with its origin:
+  - `[default]`: Built-in application default value.
+  - `[.env]`: Configured in the local `.env` file.
+  - `[environment]`: Sourced from the active process environment.
+- When an active process environment variable differs from the entry in `.env`, the process environment wins, and an orange warning is displayed: `⚠ overridden by environment`.
 
 ---
 
@@ -416,7 +550,7 @@ Results from the retrieval scoring sweep across 34 questions on 2026-10-18 (`eva
 Retrieval split notes and decision:
 - Easy split recall: 100% (14/14) with 0 false injections (Date: 2026-10-18).
 - Hard-dev split recall: 50% (8/16) with 0 false injections (Date: 2026-10-18).
-- Threshold sweep decision: Looser settings put wrong passages into 1 in 3 unrelated questions (40% to 45% false injection rate), so we decided to keep the conservative `fraction@0.5` setting (`RAG_AUTO_SCORING="fraction"`, `RAG_AUTO_MIN_COVERAGE=0.5`) to guarantee zero false injections (Date: 2026-10-18).
+- Threshold sweep decision: Looser settings put wrong passages into 1 in 3 unrelated questions (40% to 45% false injection rate on unrelated and guard queries), so we decided to keep the conservative `fraction@0.5` setting (`RAG_AUTO_SCORING="fraction"`, `RAG_AUTO_MIN_COVERAGE=0.5`) to guarantee zero false injections (Date: 2026-10-18).
 - Reserved splits status: hard-test and guard-test not run (Date: 2026-10-18).
 
 ### Command parser benchmark
@@ -449,6 +583,26 @@ Results from the intent probe evaluation measuring intent classification and arg
 
 The intent probe evaluated 28 phrases across 3 random seeds; this is dev data, not held out (Date: 2026-10-25).
 
+### Tool routing comparison
+
+Comparison of baseline intent routing (all tools offered) versus scoped tool routing (functional tool groups offered) across 36 phrases evaluated across 3 random seeds (Date: 2026-10-25):
+
+| Metric | Routing Off (Baseline) | Routing On | Date | Model | Cases | Source File |
+|---|---|---|---|---|---|---|
+| Overall action pass rate | 58.3% (42/72) | 58.3% (42/72) | 2026-10-25 | qwen3:8b | 24 action phrases x 3 seeds (72 runs) | evals/results/intent-probe-routing-off-20261025_224858.md vs evals/results/intent-probe-routing-on-20261025_230115.md |
+| No-tool pass rate | 83.3% (30/36) | 91.7% (33/36) | 2026-10-25 | qwen3:8b | 12 no-tool phrases x 3 seeds (36 runs) | evals/results/intent-probe-routing-off-20261025_224858.md vs evals/results/intent-probe-routing-on-20261025_230115.md |
+| Overall pass rate | 66.7% (72/108) | 69.4% (75/108) | 2026-10-25 | qwen3:8b | 36 phrases across 3 seeds (108 runs) | evals/results/intent-probe-routing-off-20261025_224858.md vs evals/results/intent-probe-routing-on-20261025_230115.md |
+| Median tools offered | 25.0 tools per turn | 10.0 tools per turn | 2026-10-25 | qwen3:8b | 36 phrases across 3 seeds (108 runs) | evals/results/intent-probe-routing-off-20261025_224858.md vs evals/results/intent-probe-routing-on-20261025_230115.md |
+| P95 tools offered | 25.0 tools per turn | 14.0 tools per turn | 2026-10-25 | qwen3:8b | 36 phrases across 3 seeds (108 runs) | evals/results/intent-probe-routing-off-20261025_224858.md vs evals/results/intent-probe-routing-on-20261025_230115.md |
+| Median prompt size | 2550 tokens | 1546 tokens | 2026-10-25 | qwen3:8b | 36 phrases across 3 seeds (108 runs) | evals/results/intent-probe-routing-off-20261025_224858.md vs evals/results/intent-probe-routing-on-20261025_230115.md |
+| Median latency / TTFT | 2819.0 ms | 2360.6 ms | 2026-10-25 | qwen3:8b | 36 phrases across 3 seeds (108 runs) | evals/results/intent-probe-routing-off-20261025_224858.md vs evals/results/intent-probe-routing-on-20261025_230115.md |
+| Routing retry count | 0 retries | 15 retries | 2026-10-25 | qwen3:8b | 36 phrases across 3 seeds (108 runs) | evals/results/intent-probe-routing-off-20261025_224858.md vs evals/results/intent-probe-routing-on-20261025_230115.md |
+| Off-route calls | 0 calls | 0 calls | 2026-10-25 | qwen3:8b | 36 phrases across 3 seeds (108 runs) | evals/results/intent-probe-routing-off-20261025_224858.md vs evals/results/intent-probe-routing-on-20261025_230115.md |
+
+Routing comparison findings:
+- Tool routing reduced prompt token consumption from 2550 tokens down to 1546 tokens (a 39.4% reduction in prompt size) while reducing median generation latency from 2819.0 ms to 2360.6 ms (Date: 2026-10-25).
+- Inability detection recovered 15 misses by retrying with the full toolset, preserving tool accuracy with 0 unoffered tool calls (Date: 2026-10-25).
+
 ### Local performance
 
 Benchmarked on workstation hardware running local Ollama inference (Date: 2026-10-24):
@@ -462,7 +616,22 @@ Benchmarked on workstation hardware running local Ollama inference (Date: 2026-1
 
 ### Historical benchmark run
 
-- First full run: 28/45 (62.2%) on 2026-10-10, then fixes (Date: 2026-10-10, Model: `qwen3:8b`, Cases: 45, Source File: `evals/results/20261010_104556_live.md`).
+- First full run: 28/45 (62.2%) on 2026-10-10, then fixes (Date: 2026-10-10, Model: `qwen3:8b`, Cases: 45, Source File: `evals/results/20261010_230951_live.md`).
+
+---
+
+## Verification Status
+
+Verification status for features introduced from v2.5 onward, strictly distinguishing automated unit testing from live human-verified testing documented in `docs/TEST_CHECKLIST.md`:
+
+| Feature Area | Version | Unit tests | Live-tested | Checklist Reference |
+| :--- | :--- | :--- | :--- | :--- |
+| Voice in the Window | v2.5 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items V1–V8) |
+| Reminders & Timers | v2.6 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items R1–R8) |
+| Tool Routing | v2.7 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items T1–T5) |
+| Environment Doctor | v2.8 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items D1–D5) |
+| Settings Panel | v2.9 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items S1–S5) |
+| Routines & Automation | v2.10 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items RT1–RT7) |
 
 ---
 
@@ -473,11 +642,12 @@ Benchmarked on workstation hardware running local Ollama inference (Date: 2026-1
 - **Keyword Retrieval with a Conservative Threshold**: The auto-retrieval engine uses SQLite FTS5 BM25 text search with a conservative threshold (`fraction@0.5`). On challenging dev questions with synonyms, chatty wording, or conflicting policies, recall is 50.0% (8/16) and paraphrased questions can be missed. We evaluated looser retrieval methods that increased recall but placed irrelevant document passages into 1 in 3 unrelated queries (40% to 45% false injection rate on unrelated and guard queries). We chose to keep the conservative setting to prioritize zero false injections.
 - **Site Layouts Can Break Browser Selectors**: The controlled browser uses site-specific CSS selectors (`config/browser_sites.py`) to click search results and inspect items on YouTube, Google, Wikipedia, and GitHub. If external platforms change their DOM structure or class names, selectors can break until updated.
 - **Google Verification Pages on Automated Browsers**: Google may present a verification or "unusual traffic" page (`/sorry/`) to automated browser sessions. ORBIT does not attempt to solve CAPTCHAs or bypass verification. When detected, the backend initiates a 30-minute block cooldown (`settings.BROWSER_BLOCK_COOLDOWN_MINUTES`), rolls back navigation history (`history("back")`) to protect session state, and raises `BrowserRefused("Google showed a verification page for automated browsing, so I stopped. I will not try to get around it.")`. In addition, general Google web searches default to opening in the user's system default browser (`GOOGLE_SEARCH_IN_CONTROLLED_BROWSER = False`), where ORBIT cannot click or scroll.
-- **Voice Only in the Terminal**: Voice interaction (wake phrase detection, Silero VAD, Whisper STT, pyttsx3 TTS) is implemented exclusively in the interactive terminal CLI (`main.py`) and is not integrated into the desktop Tkinter GUI. Spoken audio playback has not been verified across every audio hardware configuration.
+- **Voice Depends on Local Whisper and a Microphone**: Voice capture requires working microphone hardware and the `sounddevice` and `faster_whisper` packages. Voice in the desktop window is click-to-talk (push-to-talk) rather than continuous listening. There is no wake word ("hey orbit") detection in the window; capture must be explicitly started via the mic button or `Ctrl+M`. The "Speak replies" feature is opt-in and off by default. Continuous voice interaction with wake phrase detection remains exclusive to the interactive terminal CLI (`main.py`).
 - **Windows Only**: System integration, audio device capture via PyAudio, and non-blocking keyboard interrupt detection via `msvcrt` rely on Windows-specific operating system APIs and libraries.
 - **ORBIT_OFFLINE Scope**: Setting `ORBIT_OFFLINE=1` enforces an in-process socket guard on ORBIT's own Python process, preventing network calls by the agent. It does not sandbox or restrict external browser windows or third-party desktop processes launched by the user or assistant.
 - **AI-Assisted Development**: The ORBIT codebase was designed, implemented, and refined through AI-assisted pair programming and automated test validation.
 - **Development Suite is Not a Measure of Real Accuracy**: The 97.8% task success rate on the 45-case development suite reflects saturation from iterative tuning against known failure cases. The single-pass unseen holdout (75.0% task success, 95.0% outcome success) provides a more realistic estimate of actual performance.
+- **Features Not Measured Say So**: Splits and capabilities that have not been benchmarked empirically (such as `hard-test` and `guard-test` retrieval splits, or routing test splits) are explicitly labelled as "not measured yet" or "not run".
 
 ---
 
@@ -493,7 +663,7 @@ ORBIT adheres to a strict dataset governance rule documented in `evals/SPLITS.md
 Dataset splits in the repository:
 - **Development Suites (`evals/cases/`, `evals/retrieval/dev.json`, `evals/retrieval_hard/dev.json`, `evals/retrieval_guard/dev.json`, `evals/commands/dev.json`)**: Tuned against during active development. Dev runs are unlimited.
 - **Used Holdout Suites (`evals/holdout/`, `evals/holdout2/`, `evals/holdout3/`)**: Earlier held-out suites that were inspected and diagnosed to resolve check defects; per project governance, they are classified as used dev data.
-- **Unseen Holdout Suite (`evals/holdout4/`)**: Held-out evaluation suite run live exactly once on final code (`2c9ebb7`) with `qwen3:8b`.
+- **Unseen Holdout Suite (`evals/holdout4/`)**: Held-out evaluation suite run live exactly once on final code with `qwen3:8b`.
 - **Reserved Test Splits (`evals/retrieval_hard/test.json`, `evals/retrieval_guard/test.json`, `evals/commands/test.json`)**: Reserved test splits preserved for final benchmarking.
 
 ### The One-Run Rule and Marker Files
@@ -502,7 +672,7 @@ To guarantee evaluation integrity, held-out and test splits enforce the **One-Ru
 - When an unseen suite is executed, the harness writes a tamper-evident marker file (e.g. `evals/holdout4/.ran`, `evals/commands/.ran`) recording the execution timestamp, full git commit hash, model identifier, and git dirty status.
 - Any subsequent attempt to execute the split is hard-refused by the runner.
 - Rerunning requires passing `--force`, which permanently watermarks the generated report with `"RERUN: NOT UNSEEN"` and registers the split as development data.
-- **Commit History Rewrite Note**: Commit hashes in older result files and in the marker files refer to the history before an identity-only rewrite (author names and one test-string change); file contents are otherwise identical.
+- **Commit History Rewrite Note**: Commit hashes in older result files and marker files refer to the history before an identity-only rewrite (author names and one test-string change); file contents are otherwise identical.
 
 ### Known Weaknesses of the Checks
 
@@ -534,7 +704,7 @@ pytest
 ```
 
 **Current Test Count**:
-- **1012 passed, 1 skipped** (1013 collected tests)
+- **1195 passed, 1 skipped** (1196 collected tests)
 
 ---
 
@@ -547,6 +717,7 @@ orbit/
 │   ├── apps.py              # Allowlisted desktop application definitions
 │   ├── browser_sites.py     # Browser site selectors and URL patterns
 │   ├── settings.py          # Environment settings, thresholds, and defaults
+│   ├── settings_store.py    # Whitelisted settings store and atomic .env updates
 │   └── sites.py             # Structured site registry (YouTube, Google, etc.)
 ├── core/
 │   ├── agent.py             # ReAct reasoning loop, taint tracking, plan execution
@@ -554,21 +725,25 @@ orbit/
 │   ├── chains.py            # Deterministic command chain parser
 │   ├── claims.py            # Negation-aware action claim validation
 │   ├── diagnostics.py       # Host diagnostics collector and log formatting
+│   ├── doctor.py            # Read-only environment doctor checks and report
 │   ├── guards.py            # LoopGuard execution boundaries
 │   ├── llm.py               # GeminiProvider and MockProvider
 │   ├── offline.py           # In-process network guard for ORBIT_OFFLINE
 │   ├── ollama_provider.py   # Local Ollama client provider
 │   ├── plan_runner.py       # PlanRunner for executing multi-step chains
+│   ├── procs.py             # Safe process inspection and graceful termination
+│   ├── routing.py           # Keyword-based tool routing and group selection
 │   ├── session_state.py     # SessionState for cross-turn context tracking
 │   ├── shortcuts.py         # High-frequency command shortcut parser
 │   ├── task.py              # TaskRun execution tracer
-│   └── version.py           # Centralized VERSION definition (2.4.0)
+│   └── version.py           # Centralized VERSION definition (2.10.1)
 ├── evals/
 │   ├── cases/               # 45 benchmark evaluation JSON cases (dev suite)
 │   ├── commands/            # 80 command parser benchmark cases (dev & test)
 │   ├── holdout4/            # 20 unseen holdout evaluation cases (run once)
 │   ├── retrieval_hard/      # Hard retrieval benchmark corpus and splits
 │   ├── retrieval_guard/     # Guard retrieval benchmark splits
+│   ├── routing/             # 72 intent routing benchmark phrases (dev & test)
 │   ├── checks.py            # 16 assertion check evaluators
 │   ├── commands_eval.py     # Deterministic command parser evaluation runner
 │   ├── metrics.py           # Wilson score confidence interval aggregators
@@ -585,6 +760,13 @@ orbit/
 │   ├── loader.py            # Plaintext and Markdown document loader
 │   ├── retrieval.py         # Auto-retrieval engine and scoring algorithms
 │   └── safety.py            # Document prompt injection scanner
+├── reminders/
+│   ├── scheduler.py         # Pure periodic scheduler and missed startup detector
+│   ├── store.py             # SQLite persistent store with corruption recovery
+│   └── timeparse.py         # Pure natural language relative and clock time parser
+├── routines/
+│   ├── store.py             # SQLite RoutineStore for named routine persistence
+│   └── validate.py          # Shared routine step and name validation
 ├── security/
 │   ├── audit.py             # AuditLogger with automated secret redaction
 │   └── permissions.py       # Three-tier permission engine and policy
@@ -597,10 +779,13 @@ orbit/
 │   ├── doc_tools.py         # Document search and index tools
 │   ├── files.py             # Sandboxed workspace file tools
 │   ├── memory_tools.py      # Long-term memory store tools
-│   └── registry.py          # Declarative ToolRegistry
+│   ├── registry.py          # Declarative ToolRegistry
+│   └── reminder_tools.py    # Reminders and timers tools
 ├── ui/
-│   ├── app.py               # Tkinter GUI (OrbitWindow, ConfirmDialog, PlanDialog)
-│   └── controller.py        # Thread-safe ChatController and UiEvent worker
+│   ├── app.py               # Tkinter GUI (OrbitWindow, ConfirmDialog, PlanDialog, DoctorWindow)
+│   ├── controller.py        # Thread-safe ChatController and UiEvent worker
+│   ├── settings_window.py   # SettingsWindow graphical configuration editor
+│   └── voice_controller.py  # GUI voice controller for audio capture, STT, and TTS
 ├── voice/
 │   ├── audio.py             # PyAudio input recorder
 │   ├── interrupt.py         # Keyboard interrupt monitor
@@ -610,7 +795,7 @@ orbit/
 │   ├── tts.py               # Subprocess speech synthesizer
 │   ├── vad.py               # Voice Activity Detector state machine
 │   └── wake.py              # Wake phrase detector
-├── tests/                   # 1013 automated unit and integration tests
+├── tests/                   # Automated unit, integration, and security tests
 ├── requirements.txt         # Core project dependencies
 ├── requirements-browser.txt # Optional Playwright browser dependencies
 ├── main.py                  # CLI application entry point

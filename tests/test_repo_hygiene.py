@@ -41,12 +41,16 @@ def _get_tracked_files() -> list[str]:
 
 
 def test_env_file_not_tracked():
-    """Verify that .env is never tracked in git."""
+    """Verify that .env and .env.bak are never tracked in git."""
     tracked = _get_tracked_files()
     assert ".env" not in tracked, ".env file must never be tracked in git"
+    assert ".env.bak" not in tracked, ".env.bak file must never be tracked in git"
     assert not any(
         f == ".env" or f.endswith("/.env") for f in tracked
     ), "A .env file is tracked in git"
+    assert not any(
+        f == ".env.bak" or f.endswith("/.env.bak") for f in tracked
+    ), "A .env.bak file is tracked in git"
 
 
 def test_no_tracked_files_in_ignored_directories():
@@ -173,10 +177,19 @@ def test_gitignore_lists_required_entries():
         if line.strip() and not line.startswith("#")
     }
 
-    required = [".env", "logs/", "data/", "workspace/", "evals/results/"]
+    required = [".env", ".env.bak", "logs/", "data/", "workspace/", "evals/results/"]
     for req in required:
         req_clean = req.rstrip("/")
         match = any(
             e == req or e.rstrip("/") == req_clean for e in entries
         )
         assert match, f".gitignore is missing required entry: '{req}'"
+
+
+def test_routines_db_not_tracked():
+    """Verify that data/routines.db is never tracked in git."""
+    tracked = _get_tracked_files()
+    assert "data/routines.db" not in tracked, "data/routines.db must never be tracked in git"
+    assert not any(
+        f.endswith("routines.db") for f in tracked
+    ), "A routines.db database file is tracked in git"

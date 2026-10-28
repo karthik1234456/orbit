@@ -148,6 +148,14 @@ def test_all_expected_tools_registered_with_no_duplicates(tmp_path: Path):
     assert "list_documents" in tool_names
     assert "remove_document" in tool_names
 
+    # Reminders
+    if settings.reminders_enabled():
+        assert "set_reminder" in tool_names
+        assert "set_timer" in tool_names
+        assert "list_reminders" in tool_names
+        assert "cancel_reminder" in tool_names
+        assert "cancel_all_reminders" in tool_names
+
     core_tool_names = {
         "get_current_time",
         "calculate",
@@ -183,10 +191,20 @@ def test_all_expected_tools_registered_with_no_duplicates(tmp_path: Path):
         "browser_read_page",
         "browser_close",
     }
+    reminder_tools = {
+        "set_reminder",
+        "set_timer",
+        "list_reminders",
+        "cancel_reminder",
+        "cancel_all_reminders",
+    }
+    expected = core_tool_names
+    if settings.reminders_enabled():
+        expected = expected | reminder_tools
     if settings.browser_enabled():
-        assert set(tool_names) == core_tool_names | browser_tools
-    else:
-        assert set(tool_names) == core_tool_names
+        expected = expected | browser_tools
+
+    assert set(tool_names) == expected
 
 
 def test_every_created_path_is_inside_tmp_path(tmp_path: Path):

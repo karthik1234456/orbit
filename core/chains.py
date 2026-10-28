@@ -17,7 +17,12 @@ from typing import Any, Mapping, Optional
 from config import settings
 from config.sites import SITES, resolve_site
 from core.session_state import SessionState, _extract_site_key
-from core.shortcuts import ShortcutPlan, _levenshtein_distance, parse_shortcut
+from core.shortcuts import (
+    ShortcutPlan,
+    _levenshtein_distance,
+    is_reminder_or_timer_pattern,
+    parse_shortcut,
+)
 
 
 COMMAND_VERBS = (
@@ -199,6 +204,21 @@ def describe_step(tool: str, args: Optional[dict[str, Any]] = None) -> str:
             return "Previous short"
         return f"Key {key_name}"
 
+    if t == "set_reminder":
+        return f"Set reminder for '{args.get('text', '')}'"
+
+    if t == "set_timer":
+        return f"Set timer for {args.get('minutes', '')} minutes"
+
+    if t == "list_reminders":
+        return "List reminders"
+
+    if t == "cancel_reminder":
+        return f"Cancel reminder {args.get('id', '')}"
+
+    if t == "cancel_all_reminders":
+        return "Cancel all reminders"
+
     return t.replace("_", " ").capitalize()
 
 
@@ -343,6 +363,10 @@ def _try_segmentation(
         if cleaned_seg.lower() == "wait":
             return None
 
+        # A segment matching a reminder pattern makes the whole chain return None
+        if is_reminder_or_timer_pattern(cleaned_seg):
+            return None
+
         # Parse with parse_shortcut using simulated state
         res = parse_shortcut(
             cleaned_seg,
@@ -352,6 +376,12 @@ def _try_segmentation(
             browser_enabled=browser_enabled,
         )
         if res is None:
+            return None
+
+        # Reminder tool calls are never allowed in chains
+        if hasattr(res, "name") and res.name in (
+            "set_reminder", "set_timer", "list_reminders", "cancel_reminder", "cancel_all_reminders"
+        ):
             return None
 
         if isinstance(res, ShortcutPlan):
@@ -422,6 +452,10 @@ def parse_chain(
 
     raw = text.strip()
     if not raw:
+        return None
+
+    # Reminder and timer messages are NEVER split by the chain parser
+    if is_reminder_or_timer_pattern(raw):
         return None
 
     if allowed_apps is None:
@@ -560,6 +594,24 @@ def format_step_text(tool: str, args: dict, result: Any = "", redact: bool = Fal
         except (ValueError, TypeError):
             s_val = secs
         return f"Waited {s_val} second{'s' if s_val != 1 else ''}."
+
+    elif t == "set_reminder":
+        txt = args.get("text", "")
+        return f"Set reminder for '{txt}'."
+
+    elif t == "set_timer":
+        mins = args.get("minutes", "")
+        return f"Set timer for {mins} minutes."
+
+    elif t == "list_reminders":
+        return "Listed reminders."
+
+    elif t == "cancel_reminder":
+        cid = args.get("id", "")
+        return f"Cancelled reminder {cid}."
+
+    elif t == "cancel_all_reminders":
+        return "Cancelled all reminders."
 
     desc = describe_step(tool, args)
     if desc.endswith("."):

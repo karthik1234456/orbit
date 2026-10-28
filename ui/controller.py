@@ -334,7 +334,18 @@ class ChatController:
 
         return bool(pending["allowed"])
 
-    def plan_callback(self, labels: list[str], permissions: list[str]) -> bool:
+    @property
+    def routine_store(self) -> Optional[Any]:
+        """Return the attached routine_store, if available."""
+        return getattr(self.app, "routine_store", None) if self.app else None
+
+    def plan_callback(
+        self,
+        labels: list[str],
+        permissions: list[str],
+        kind: str = "plan",
+        name: Optional[str] = None,
+    ) -> bool:
         """Prompt user for plan preview and approval from the worker thread.
 
         Blocks the worker thread for up to confirm_timeout_s (default 60s). Returns False
@@ -352,6 +363,8 @@ class ChatController:
                 "id": req_id,
                 "labels": list(labels),
                 "permissions": list(permissions),
+                "kind": kind,
+                "name": name,
                 "event": plan_event,
                 "allowed": False,
             }
@@ -361,6 +374,8 @@ class ChatController:
             "id": req_id,
             "labels": list(labels),
             "permissions": list(permissions),
+            "kind": kind,
+            "name": name,
             "timeout_s": self.confirm_timeout_s,
             "task": self._current_task,
         })
@@ -461,6 +476,11 @@ class ChatController:
         if worker is not None and worker.is_alive():
             if threading.current_thread() != worker:
                 worker.join(timeout=2.0)
+        if self.voice_controller is not None:
+            try:
+                self.voice_controller.shutdown()
+            except Exception:
+                pass
         with self._lock:
             app = self.app
         if app is not None and hasattr(app, "shutdown") and callable(app.shutdown):

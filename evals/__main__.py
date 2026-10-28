@@ -170,6 +170,12 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         default=False,
         help="Enable session context tracking for this evaluation run (default: disabled to evaluate the model directly).",
     )
+    parser.add_argument(
+        "--routing",
+        action="store_true",
+        default=False,
+        help="Enable optional tool routing for this evaluation run (default: disabled).",
+    )
     return parser.parse_args(argv)
 
 
@@ -187,6 +193,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         os.environ["SESSION_CONTEXT"] = "1"
     else:
         os.environ["SESSION_CONTEXT"] = "0"
+
+    if getattr(args, "routing", False):
+        os.environ["TOOL_ROUTING"] = "1"
+    else:
+        os.environ["TOOL_ROUTING"] = "0"
 
     if args.retrieval:
         from evals.retrieval_eval import run_retrieval_eval

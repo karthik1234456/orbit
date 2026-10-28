@@ -9,9 +9,11 @@ execute exclusively on the Tkinter main thread.
 import json
 import sys
 import threading
+import time
 import tkinter as tk
+from datetime import datetime, timezone
 from tkinter import messagebox, scrolledtext, ttk
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from config import settings
 from core.version import VERSION
@@ -66,6 +68,7 @@ class ConfirmDialog(tk.Toplevel):
     """Modal dialog prompting the user to authorize a sensitive tool execution.
 
     Security guarantees:
+    - Mouse and keyboard only: Voice input NEVER resolves, skips, shortens, or auto-approves confirmations.
     - Deny is focused and default.
     - Allow button is disabled for the first 800ms to prevent accidental click-throughs.
     - Closing the window, Escape, or timeout triggers automatic DENY.
@@ -242,6 +245,7 @@ class PlanDialog(tk.Toplevel):
     """Modal dialog prompting the user to preview and authorize execution of a plan.
 
     Security guarantees:
+    - Mouse and keyboard only: Voice input NEVER resolves, skips, shortens, or auto-approves plan previews.
     - Cancel is focused and default.
     - Run button is disabled for the first 800ms to prevent accidental click-throughs.
     - Closing the window, Escape, or timeout triggers automatic Cancel (DENY).
@@ -257,17 +261,24 @@ class PlanDialog(tk.Toplevel):
         labels: list[str],
         permissions: list[str],
         timeout_s: float = 60.0,
+        kind: str = "plan",
+        name: Optional[str] = None,
     ) -> None:
         super().__init__(parent)
         self.controller = controller
         self.plan_id = plan_id
         self.labels = list(labels or [])
         self.permissions = list(permissions or [])
+        self.kind = kind
+        self.name = name
         self._resolved = False
         self._countdown_timer: Optional[str] = None
         self._remaining_s = float(timeout_s)
 
-        self.title("Plan Preview Required")
+        if self.kind == "save_routine":
+            self.title("Save Routine")
+        else:
+            self.title("Plan Preview Required")
         self.transient(parent)
         self.resizable(False, False)
         try:
@@ -321,9 +332,16 @@ class PlanDialog(tk.Toplevel):
         frame = ttk.Frame(self, padding=16)
         frame.pack(fill="both", expand=True)
 
+        if self.kind == "save_routine":
+            header_text = f"Save routine '{self.name}' with these steps?"
+        elif self.kind == "routine":
+            header_text = f"Routine '{self.name}' ({len(self.labels)} steps):"
+        else:
+            header_text = f"ORBIT requests permission to run a plan ({len(self.labels)} steps):"
+
         header_lbl = ttk.Label(
             frame,
-            text=f"ORBIT requests permission to run a plan ({len(self.labels)} steps):",
+            text=header_text,
             font=("Segoe UI", 11, "bold"),
         )
         header_lbl.pack(anchor="w", pady=(0, 8))
@@ -334,8 +352,9 @@ class PlanDialog(tk.Toplevel):
             note = " (asks for approval)" if perm in ("asks for approval", "confirm", True) else ""
             steps_lines.append(f"{idx}. {lbl}{note}")
 
-        steps_lines.append("")
-        steps_lines.append("Each step that opens apps or sites may still ask for its own approval")
+        if self.kind != "save_routine":
+            steps_lines.append("")
+            steps_lines.append("Each step that opens apps or sites may still ask for its own approval")
 
         steps_text_content = "\n".join(steps_lines)
 
@@ -350,14 +369,15 @@ class PlanDialog(tk.Toplevel):
         self.steps_text.insert("1.0", steps_text_content)
         self.steps_text.configure(state="disabled")
 
-        note_lbl = ttk.Label(
-            frame,
-            text="Each step that opens apps or sites may still ask for its own approval",
-            font=("Segoe UI", 9, "italic"),
-            wraplength=450,
-            justify="left",
-        )
-        note_lbl.pack(anchor="w", pady=(0, 8))
+        if self.kind != "save_routine":
+            note_lbl = ttk.Label(
+                frame,
+                text="Each step that opens apps or sites may still ask for its own approval",
+                font=("Segoe UI", 9, "italic"),
+                wraplength=450,
+                justify="left",
+            )
+            note_lbl.pack(anchor="w", pady=(0, 8))
 
         self.countdown_lbl = ttk.Label(
             frame,
@@ -378,9 +398,10 @@ class PlanDialog(tk.Toplevel):
         )
         self.cancel_btn.pack(side="right", padx=(6, 0))
 
+        run_text = "Save" if self.kind == "save_routine" else "Run"
         self.run_btn = ttk.Button(
             btn_bar,
-            text="Run",
+            text=run_text,
             command=lambda: self._resolve(True),
         )
         self.run_btn.pack(side="right")
@@ -435,6 +456,182 @@ class PlanDialog(tk.Toplevel):
                 pass
 
 
+class ReminderToast(tk.Toplevel):
+    """Non-modal notification toast for fired reminders and timers.
+
+    Displays reminder text, Dismiss, and Snooze 5 min buttons.
+    Never grabs focus or interrupts typing in the main window.
+    Auto-destroys after 60 seconds.
+    """
+
+    def __init__(
+        self,
+        parent: tk.Tk,
+        item: Any,
+        on_dismiss: Callable[[int], None],
+        on_snooze: Callable[[int], None],
+        on_close: Optional[Callable[["ReminderToast"], None]] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.parent_root = parent
+        self.item = item
+        self.on_dismiss = on_dismiss
+        self.on_snooze = on_snooze
+        self.on_close_cb = on_close
+        self._closed = False
+
+        self.title("Reminder")
+        self.resizable(False, False)
+        try:
+            self.attributes("-topmost", True)
+        except Exception:
+            pass
+
+        # Ensure window and widgets never accept keyboard focus or grab
+        self.configure(takefocus=0)
+
+        frame = ttk.Frame(self, padding=12)
+        frame.pack(fill="both", expand=True)
+
+        header_lbl = ttk.Label(frame, text="Reminder", font=("Segoe UI", 10, "bold"))
+        header_lbl.pack(anchor="w", pady=(0, 4))
+
+        item_text = getattr(item, "text", "") or ""
+        text_lbl = ttk.Label(
+            frame,
+            text=item_text,
+            wraplength=260,
+            font=("Segoe UI", 9),
+            justify="left",
+        )
+        text_lbl.pack(anchor="w", fill="x", expand=True, pady=(0, 8))
+
+        btn_bar = ttk.Frame(frame)
+        btn_bar.pack(fill="x", side="bottom")
+
+        self.dismiss_btn = ttk.Button(
+            btn_bar,
+            text="Dismiss",
+            takefocus=0,
+            command=self._do_dismiss,
+        )
+        self.dismiss_btn.pack(side="right", padx=(4, 0))
+
+        self.snooze_btn = ttk.Button(
+            btn_bar,
+            text="Snooze 5 min",
+            takefocus=0,
+            command=self._do_snooze,
+        )
+        self.snooze_btn.pack(side="right")
+
+        # Auto-close after 60 seconds
+        self._auto_close_id: Optional[str] = self.after(60000, self._auto_close)
+
+        # Deflect any focus back to the parent
+        self.bind("<FocusIn>", self._deflect_focus)
+
+        self.protocol("WM_DELETE_WINDOW", self._do_dismiss)
+
+    def _deflect_focus(self, event: Optional[tk.Event] = None) -> None:
+        try:
+            if hasattr(self.parent_root, "input_text"):
+                self.parent_root.input_text.focus_set()
+            elif hasattr(self.parent_root, "focus_set"):
+                self.parent_root.focus_set()
+        except Exception:
+            pass
+
+    def _do_dismiss(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self._auto_close_id is not None:
+            try:
+                self.after_cancel(self._auto_close_id)
+            except Exception:
+                pass
+            self._auto_close_id = None
+        try:
+            item_id = getattr(self.item, "id", None)
+            if item_id is not None:
+                self.on_dismiss(item_id)
+        finally:
+            self._destroy_self()
+
+    def _do_snooze(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self._auto_close_id is not None:
+            try:
+                self.after_cancel(self._auto_close_id)
+            except Exception:
+                pass
+            self._auto_close_id = None
+        try:
+            item_id = getattr(self.item, "id", None)
+            if item_id is not None:
+                self.on_snooze(item_id)
+        finally:
+            self._destroy_self()
+
+    def _auto_close(self) -> None:
+        self._do_dismiss()
+
+    def _destroy_self(self) -> None:
+        if self.on_close_cb:
+            try:
+                self.on_close_cb(self)
+            except Exception:
+                pass
+        try:
+            self.destroy()
+        except Exception:
+            pass
+
+
+class DoctorWindow(tk.Toplevel):
+    """Read-only window displaying ORBIT Environment Doctor report."""
+
+    def __init__(self, parent: tk.Tk, report_text: str) -> None:
+        super().__init__(parent)
+        self.title("ORBIT Environment Doctor")
+        self.geometry("780x540")
+        self.minsize(500, 350)
+        self.report_text = report_text
+
+        container = ttk.Frame(self, padding=8)
+        container.pack(fill="both", expand=True)
+
+        self.text_area = scrolledtext.ScrolledText(
+            container,
+            wrap=tk.WORD,
+            font=("Consolas", 9),
+        )
+        self.text_area.insert("1.0", report_text)
+        self.text_area.configure(state="disabled")
+        self.text_area.pack(fill="both", expand=True, pady=(0, 8))
+
+        btn_box = ttk.Frame(container)
+        btn_box.pack(fill="x", side="bottom")
+
+        self.copy_btn = ttk.Button(btn_box, text="Copy report", command=self._on_copy)
+        self.copy_btn.pack(side="left")
+
+        self.close_btn = ttk.Button(btn_box, text="Close", command=self.destroy)
+        self.close_btn.pack(side="right")
+
+    def _on_copy(self) -> None:
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(self.report_text)
+            self.copy_btn.configure(text="Copied!")
+            self.after(2000, lambda: self.copy_btn.configure(text="Copy report") if self.winfo_exists() else None)
+        except Exception:
+            pass
+
+
 class OrbitWindow:
     """Main application window for ORBIT desktop assistant."""
 
@@ -444,6 +641,7 @@ class OrbitWindow:
         controller: ChatController,
         mode_label: str,
         notice: Optional[str] = None,
+        voice_controller: Optional[Any] = None,
     ) -> None:
         self.root = root
         self.controller = controller
@@ -470,6 +668,105 @@ class OrbitWindow:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.bind("<Destroy>", self._on_root_destroyed)
 
+        # Wire voice controller
+        self._last_speaker_poll = 0.0
+        self._speak_replies = bool(getattr(settings, "SPEAK_REPLIES", False))
+        is_mock = "MOCK" in self.mode_label or bool(getattr(settings, "ORBIT_MOCK", False))
+        if voice_controller is not None:
+            self.voice_controller = voice_controller
+        elif getattr(self.controller, "voice_controller", None) is not None:
+            self.voice_controller = self.controller.voice_controller
+        else:
+            from ui.voice_controller import VoiceUiController
+            if is_mock:
+                from voice.audio import FakeRecorder
+                from voice.stt import FakeTranscriber
+                from voice.tts import NullSpeaker
+
+                class _MockWindowRecorder(FakeRecorder):
+                    def record(self, stop_event: Optional[threading.Event] = None) -> Any:
+                        if stop_event is not None:
+                            stop_event.wait(timeout=getattr(settings, "MAX_RECORD_SECONDS", 30))
+                        return super().record(stop_event=stop_event)
+
+                rec_fac = lambda level_callback=None: _MockWindowRecorder(level_callback=level_callback)
+                trans_fac = lambda: FakeTranscriber(default_text="Voice mock response")
+                speaker = NullSpeaker()
+            else:
+                from voice.audio import Recorder
+                from voice.stt import WhisperTranscriber
+                from voice.tts import SubprocessSpeaker
+
+                rec_fac = lambda level_callback=None: Recorder(
+                    device=getattr(settings, "MIC_DEVICE", None),
+                    max_seconds=getattr(settings, "MAX_RECORD_SECONDS", 30),
+                    level_callback=level_callback,
+                )
+                trans_fac = lambda: WhisperTranscriber(
+                    model_name=getattr(settings, "STT_MODEL", "base.en"),
+                    language=getattr(settings, "STT_LANGUAGE", "en"),
+                )
+                speaker = SubprocessSpeaker(rate=getattr(settings, "TTS_RATE", 180))
+
+            emit_fn = getattr(self.controller, "_emit", None)
+            if emit_fn is None:
+                emit_fn = getattr(self.controller, "emit", None)
+            if emit_fn is None:
+                def fallback_emit(k: str, d: Optional[dict] = None) -> None:
+                    evs = getattr(self.controller, "events", None)
+                    if isinstance(evs, list):
+                        evs.append(UiEvent(kind=k, data=d or {}))
+                emit_fn = fallback_emit
+
+            self.voice_controller = VoiceUiController(
+                recorder_factory=rec_fac,
+                transcriber_factory=trans_fac,
+                speaker=speaker,
+                emit=emit_fn,
+                is_blocked=self._is_blocked,
+            )
+        try:
+            self.controller.voice_controller = self.voice_controller
+        except Exception:
+            pass
+        if hasattr(self.voice_controller, "speak_replies"):
+            self.voice_controller.speak_replies = self._speak_replies
+
+        # Wire reminder store and scheduler
+        self.reminder_store = getattr(self.controller, "reminder_store", None)
+        if self.reminder_store is None and hasattr(self.controller, "app"):
+            self.reminder_store = getattr(self.controller.app, "reminder_store", None)
+        self._active_toasts: list[ReminderToast] = []
+
+        clock_fn = getattr(self.controller, "clock", None)
+        if clock_fn is None and hasattr(self.controller, "app"):
+            clock_fn = getattr(self.controller.app, "clock", None)
+        if clock_fn is None:
+            clock_fn = time.time
+        self.clock = clock_fn
+
+        if self.reminder_store is not None:
+            from reminders.scheduler import ReminderScheduler, format_missed_message
+            self.reminder_scheduler: Optional[ReminderScheduler] = ReminderScheduler(
+                store=self.reminder_store,
+                clock=self.clock,
+                on_due=self._on_reminder_due,
+            )
+            try:
+                missed = self.reminder_scheduler.startup()
+                if missed:
+                    msg = format_missed_message(missed)
+                    self._append_chat(f"{msg}\n\n", ("system",))
+            except Exception as exc:
+                print(f"Error checking missed reminders: {exc}", file=sys.stderr)
+        else:
+            self.reminder_scheduler = None
+
+        # Wire routine store
+        self.routine_store = getattr(self.controller, "routine_store", None)
+        if self.routine_store is None and hasattr(self.controller, "app"):
+            self.routine_store = getattr(self.controller.app, "routine_store", None)
+
         # Build UI layout
         self._build_layout()
 
@@ -481,10 +778,124 @@ class OrbitWindow:
         self._refresh_documents()
         self._refresh_last_run()
         self._refresh_context_tab()
+        self._refresh_reminders_tab()
+        self._refresh_routines_tab()
+        self._refresh_status_bar_reminder()
         self._check_index_migrated()
 
         # Start timer polling for controller events (UI thread only)
         self.root.after(50, self._poll)
+        self.root.after(1000, self._poll_reminders)
+
+        # Fast startup doctor check (background thread)
+        if getattr(settings, "DOCTOR_ON_START", True):
+            self._start_doctor_startup_check()
+
+    # --- Voice Helpers & Callbacks ---
+
+    def _is_blocked(self) -> bool:
+        """Check if voice interaction should be blocked."""
+        if getattr(self.controller, "is_busy", False):
+            return True
+        if self._confirm_dialog is not None and self._confirm_dialog.winfo_exists():
+            return True
+        if self._plan_dialog is not None and self._plan_dialog.winfo_exists():
+            return True
+        if getattr(self, "voice_controller", None) is not None:
+            if self.voice_controller.is_speaking():
+                return True
+        return False
+
+    def _check_voice_hardware_and_packages(self) -> tuple[bool, str]:
+        """Check if audio input hardware and STT packages are available."""
+        is_mock = "MOCK" in self.mode_label or bool(getattr(settings, "ORBIT_MOCK", False))
+        if is_mock:
+            return True, ""
+        if sys.modules.get("sounddevice") is None:
+            return False, "sounddevice is not installed"
+        try:
+            from voice.audio import list_input_devices
+            devices = list_input_devices()
+            if not devices:
+                return False, "No microphone input device found"
+        except Exception as exc:
+            return False, f"Microphone unavailable: {exc}"
+
+        if sys.modules.get("faster_whisper") is None:
+            return False, "faster_whisper is not installed"
+        try:
+            import faster_whisper
+            if faster_whisper is None:
+                return False, "faster_whisper is not installed"
+        except Exception as exc:
+            return False, f"Speech recognition unavailable: {exc}"
+
+        return True, ""
+
+    def _update_voice_ui(self) -> None:
+        """Update voice button, label, and tooltip to reflect current controller state."""
+        if not getattr(self, "voice_controller", None) or not hasattr(self, "mic_btn"):
+            return
+        is_mock = "MOCK" in self.mode_label or bool(getattr(settings, "ORBIT_MOCK", False))
+        vc_state = getattr(self.voice_controller, "state", "idle")
+        can_use, reason = self._check_voice_hardware_and_packages()
+
+        if not can_use:
+            self.mic_btn.configure(state="disabled")
+            if hasattr(self, "mic_tooltip"):
+                self.mic_tooltip.set_text(reason)
+            return
+
+        blocked = self._is_blocked()
+        if vc_state == "listening":
+            self.mic_btn.configure(text="Stop recording", state="normal")
+            if hasattr(self, "mic_tooltip"):
+                self.mic_tooltip.set_text("Click to stop recording (Ctrl+M)")
+        elif vc_state == "transcribing":
+            self.mic_btn.configure(text="Transcribing...", state="disabled")
+            if hasattr(self, "mic_tooltip"):
+                self.mic_tooltip.set_text("Transcribing speech...")
+        elif vc_state == "speaking":
+            btn_text = "mock voice" if is_mock else "Mic"
+            self.mic_btn.configure(text=btn_text, state="disabled")
+            if hasattr(self, "mic_tooltip"):
+                self.mic_tooltip.set_text("Speaking reply...")
+        else:
+            btn_text = "mock voice" if is_mock else "Mic"
+            if blocked:
+                self.mic_btn.configure(text=btn_text, state="disabled")
+                if hasattr(self, "mic_tooltip"):
+                    self.mic_tooltip.set_text("Voice input unavailable while busy")
+            else:
+                self.mic_btn.configure(text=btn_text, state="normal")
+                if hasattr(self, "mic_tooltip"):
+                    tip = "Mock voice recording (Ctrl+M)" if is_mock else "Click to talk (Ctrl+M)"
+                    self.mic_tooltip.set_text(tip)
+
+    def _on_toggle_mic(self) -> None:
+        """Handle mic button click or Ctrl+M shortcut."""
+        if getattr(self, "voice_controller", None) is None:
+            return
+        if self.voice_controller.state == "listening":
+            self.voice_controller.stop_listening()
+        else:
+            if self._is_blocked():
+                return
+            self.voice_controller.start_listening()
+        self._update_voice_ui()
+
+    def _on_ctrl_m(self, event: Optional[tk.Event] = None) -> str:
+        """Handle Ctrl+M shortcut to toggle microphone."""
+        if hasattr(self, "mic_btn") and str(self.mic_btn.cget("state")) != "disabled":
+            self._on_toggle_mic()
+        return "break"
+
+    def _on_toggle_speak_replies(self) -> None:
+        """Handle toggle of Speak replies checkbox."""
+        val = bool(self.speak_replies_var.get())
+        self._speak_replies = val
+        if getattr(self, "voice_controller", None) is not None:
+            self.voice_controller.speak_replies = val
 
     def _build_layout(self) -> None:
         # Main vertical splitter: content area + bottom status bar
@@ -515,6 +926,24 @@ class OrbitWindow:
         self.history.tag_configure("system", foreground="#616161", font=("Segoe UI", 9, "italic"))
         self.history.tag_configure("error", foreground="#b71c1c", font=("Segoe UI", 10, "bold"))
 
+        # Voice status bar (above input frame, packed when active)
+        self.voice_bar = ttk.Frame(left_frame, padding=(0, 2))
+        self.voice_status_lbl = ttk.Label(
+            self.voice_bar,
+            text="",
+            font=("Segoe UI", 9, "italic"),
+            foreground="#1976d2",
+        )
+        self.voice_status_lbl.pack(side="left", padx=(0, 8))
+
+        self.level_bar = ttk.Progressbar(
+            self.voice_bar,
+            orient="horizontal",
+            mode="determinate",
+            length=100,
+            maximum=100,
+        )
+
         # Input frame
         input_frame = ttk.Frame(left_frame)
         input_frame.pack(fill="x", side="bottom")
@@ -535,11 +964,39 @@ class OrbitWindow:
         btn_box.pack(side="right", fill="y")
 
         self.send_btn = ttk.Button(btn_box, text="Send", command=self._on_send)
-        self.send_btn.pack(fill="x", pady=(0, 4))
+        self.send_btn.pack(fill="x", pady=(0, 2))
+
+        is_mock = "MOCK" in self.mode_label or bool(getattr(settings, "ORBIT_MOCK", False))
+        mic_text = "mock voice" if is_mock else "Mic"
+        self.mic_btn = ttk.Button(btn_box, text=mic_text, command=self._on_toggle_mic)
+        self.mic_btn.pack(fill="x", pady=(0, 2))
+        self.mic_tooltip = ToolTip(self.mic_btn, "")
 
         self.stop_btn = ttk.Button(btn_box, text="Stop", command=self._on_stop)
-        self.stop_btn.pack(fill="x")
+        self.stop_btn.pack(fill="x", pady=(0, 2))
         self.stop_btn.configure(state="disabled")
+
+        self.speak_replies_var = tk.BooleanVar(value=self._speak_replies)
+        self.speak_replies_cb = ttk.Checkbutton(
+            btn_box,
+            text="Speak replies",
+            variable=self.speak_replies_var,
+            command=self._on_toggle_speak_replies,
+        )
+        self.speak_replies_cb.pack(fill="x")
+
+        # Hide mic button and speak replies checkbox if VOICE_IN_UI is False
+        if not getattr(settings, "VOICE_IN_UI", True):
+            self.mic_btn.pack_forget()
+            self.speak_replies_cb.pack_forget()
+
+        # Keyboard shortcuts for voice
+        self.input_text.bind("<Control-m>", self._on_ctrl_m)
+        self.input_text.bind("<Control-M>", self._on_ctrl_m)
+        self.root.bind("<Control-m>", self._on_ctrl_m)
+        self.root.bind("<Control-M>", self._on_ctrl_m)
+
+        self._update_voice_ui()
 
         # --- Right Pane: Notebook with Tabs ---
         right_frame = ttk.Frame(paned, padding=4)
@@ -552,6 +1009,8 @@ class OrbitWindow:
         self._build_context_tab()
         self._build_memories_tab()
         self._build_documents_tab()
+        self._build_reminders_tab()
+        self._build_routines_tab()
         self._build_last_run_tab()
 
         # --- Status Bar ---
@@ -639,6 +1098,20 @@ class OrbitWindow:
         )
         self.copy_diag_btn.pack(side="left", padx=(8, 0))
 
+        self.doctor_btn = ttk.Button(
+            btn_box,
+            text="Doctor",
+            command=self._on_doctor_click,
+        )
+        self.doctor_btn.pack(side="left", padx=(8, 0))
+
+        self.settings_btn = ttk.Button(
+            btn_box,
+            text="Settings",
+            command=self._on_settings_click,
+        )
+        self.settings_btn.pack(side="left", padx=(8, 0))
+
     def _build_memories_tab(self) -> None:
         self.memories_frame = ttk.Frame(self.notebook, padding=6)
         self.notebook.add(self.memories_frame, text="Memories")
@@ -711,6 +1184,297 @@ class OrbitWindow:
         refresh_btn = ttk.Button(docs_btn_box, text="Refresh", command=self._refresh_documents)
         refresh_btn.pack(side="left")
 
+    def _build_reminders_tab(self) -> None:
+        self.reminders_frame = ttk.Frame(self.notebook, padding=6)
+        self.notebook.add(self.reminders_frame, text="Reminders")
+
+        columns = ("id", "kind", "text", "due_in")
+        self.reminders_tree = ttk.Treeview(
+            self.reminders_frame,
+            columns=columns,
+            show="headings",
+            selectmode="browse",
+        )
+        self.reminders_tree.heading("id", text="ID")
+        self.reminders_tree.heading("kind", text="Kind")
+        self.reminders_tree.heading("text", text="Reminder Text")
+        self.reminders_tree.heading("due_in", text="Due In")
+
+        self.reminders_tree.column("id", width=40, stretch=False)
+        self.reminders_tree.column("kind", width=70, stretch=False)
+        self.reminders_tree.column("text", width=240, stretch=True)
+        self.reminders_tree.column("due_in", width=90, stretch=False)
+
+        rem_scroll = ttk.Scrollbar(self.reminders_frame, orient="vertical", command=self.reminders_tree.yview)
+        self.reminders_tree.configure(yscrollcommand=rem_scroll.set)
+
+        self.reminders_tree.pack(fill="both", expand=True, pady=(0, 6))
+        rem_scroll.pack(side="right", fill="y")
+
+        rem_btn_box = ttk.Frame(self.reminders_frame)
+        rem_btn_box.pack(fill="x", side="bottom")
+
+        cancel_btn = ttk.Button(rem_btn_box, text="Cancel", command=self._on_cancel_reminder_tab)
+        cancel_btn.pack(side="left", padx=(0, 6))
+
+        refresh_btn = ttk.Button(rem_btn_box, text="Refresh", command=self._refresh_reminders_tab)
+        refresh_btn.pack(side="left")
+
+    def _refresh_reminders_tab(self) -> None:
+        if not hasattr(self, "reminders_tree"):
+            return
+        for item_id in self.reminders_tree.get_children():
+            self.reminders_tree.delete(item_id)
+
+        if not getattr(self, "reminder_store", None):
+            return
+
+        try:
+            now_ts = self.clock() if callable(getattr(self, "clock", None)) else time.time()
+            now_dt = datetime.fromtimestamp(now_ts, timezone.utc)
+            items = self.reminder_store.list_active()
+            for it in items:
+                due_dt = datetime.fromisoformat(it.due_at.replace("Z", "+00:00"))
+                diff_s = int((due_dt - now_dt).total_seconds())
+                if diff_s <= 0:
+                    due_in_str = "due now"
+                else:
+                    m, s = divmod(diff_s, 60)
+                    h, m = divmod(m, 60)
+                    if h > 0:
+                        due_in_str = f"{h}h {m:02d}m"
+                    else:
+                        due_in_str = f"{m:02d}:{s:02d}"
+                self.reminders_tree.insert(
+                    "",
+                    "end",
+                    values=(it.id, it.kind, it.text, due_in_str),
+                )
+        except Exception as exc:
+            print(f"Error refreshing reminders tab: {exc}", file=sys.stderr)
+
+    def _on_cancel_reminder_tab(self) -> None:
+        if not hasattr(self, "reminders_tree"):
+            return
+        selected = self.reminders_tree.selection()
+        if not selected:
+            return
+        vals = self.reminders_tree.item(selected[0], "values")
+        if not vals:
+            return
+        rem_id = vals[0]
+        rem_text = vals[2] if len(vals) > 2 else ""
+        if messagebox.askyesno("Cancel Reminder", f"Cancel reminder {rem_id}: '{rem_text}'?", parent=self.root):
+            try:
+                if self.reminder_store is not None:
+                    self.reminder_store.cancel(int(rem_id))
+                self._refresh_reminders_tab()
+                self._refresh_status_bar_reminder()
+            except Exception as exc:
+                messagebox.showerror("Error", f"Failed to cancel reminder: {exc}", parent=self.root)
+
+    def _build_routines_tab(self) -> None:
+        self.routines_frame = ttk.Frame(self.notebook, padding=6)
+        self.notebook.add(self.routines_frame, text="Routines")
+
+        routines_enabled = getattr(settings, "ROUTINES_ENABLED", True)
+        if hasattr(self.controller, "app") and self.controller.app is not None:
+            if hasattr(self.controller.app, "routines_enabled"):
+                routines_enabled = bool(self.controller.app.routines_enabled)
+
+        if not routines_enabled:
+            self.routines_disabled_lbl = ttk.Label(
+                self.routines_frame,
+                text="disabled",
+                font=("Segoe UI", 10, "italic"),
+                foreground="gray",
+            )
+            self.routines_disabled_lbl.pack(pady=10)
+
+        columns = ("name", "steps", "last_run", "runs")
+        self.routines_tree = ttk.Treeview(
+            self.routines_frame,
+            columns=columns,
+            show="headings",
+            selectmode="browse",
+        )
+        self.routines_tree.heading("name", text="Name")
+        self.routines_tree.heading("steps", text="Steps")
+        self.routines_tree.heading("last_run", text="Last Run")
+        self.routines_tree.heading("runs", text="Runs")
+
+        self.routines_tree.column("name", width=160, stretch=True)
+        self.routines_tree.column("steps", width=60, stretch=False)
+        self.routines_tree.column("last_run", width=140, stretch=False)
+        self.routines_tree.column("runs", width=60, stretch=False)
+
+        routines_scroll = ttk.Scrollbar(self.routines_frame, orient="vertical", command=self.routines_tree.yview)
+        self.routines_tree.configure(yscrollcommand=routines_scroll.set)
+
+        self.routines_tree.pack(fill="both", expand=True, pady=(0, 6))
+        routines_scroll.pack(side="right", fill="y")
+
+        routines_btn_box = ttk.Frame(self.routines_frame)
+        routines_btn_box.pack(fill="x", side="bottom")
+
+        self.routine_run_btn = ttk.Button(routines_btn_box, text="Run", command=self._on_run_routine_tab)
+        self.routine_run_btn.pack(side="left", padx=(0, 6))
+
+        self.routine_show_btn = ttk.Button(routines_btn_box, text="Show steps", command=self._on_show_routine_steps_tab)
+        self.routine_show_btn.pack(side="left", padx=(0, 6))
+
+        self.routine_delete_btn = ttk.Button(routines_btn_box, text="Delete", command=self._on_delete_routine_tab)
+        self.routine_delete_btn.pack(side="left", padx=(0, 6))
+
+        self.routine_refresh_btn = ttk.Button(routines_btn_box, text="Refresh", command=self._refresh_routines_tab)
+        self.routine_refresh_btn.pack(side="left")
+
+        if not routines_enabled:
+            self.routine_run_btn.configure(state="disabled")
+            self.routine_show_btn.configure(state="disabled")
+            self.routine_delete_btn.configure(state="disabled")
+
+    def _refresh_routines_tab(self) -> None:
+        if not hasattr(self, "routines_tree"):
+            return
+        for item_id in self.routines_tree.get_children():
+            self.routines_tree.delete(item_id)
+
+        routines_enabled = getattr(settings, "ROUTINES_ENABLED", True)
+        if hasattr(self.controller, "app") and self.controller.app is not None:
+            if hasattr(self.controller.app, "routines_enabled"):
+                routines_enabled = bool(self.controller.app.routines_enabled)
+
+        if not routines_enabled:
+            self.routines_tree.insert("", "end", values=("disabled", "", "", ""))
+            return
+
+        store = getattr(self, "routine_store", None)
+        if store is None and hasattr(self.controller, "routine_store"):
+            store = getattr(self.controller, "routine_store", None)
+        if store is None and hasattr(self.controller, "app"):
+            store = getattr(self.controller.app, "routine_store", None)
+
+        if store is None:
+            return
+
+        try:
+            items = store.list()
+            for r in items:
+                name = getattr(r, "display_name", None) or (r.get("display_name") if isinstance(r, dict) else "")
+                steps = getattr(r, "steps", None) or (r.get("steps") if isinstance(r, dict) else [])
+                step_count = len(steps) if isinstance(steps, list) else 0
+                last_run = getattr(r, "last_run_at", None) or (r.get("last_run_at") if isinstance(r, dict) else "")
+                last_run_str = str(last_run) if last_run else "never"
+                run_count = getattr(r, "run_count", 0) if not isinstance(r, dict) else r.get("run_count", 0)
+
+                norm_name = getattr(r, "name", None) or (r.get("name") if isinstance(r, dict) else name)
+                self.routines_tree.insert(
+                    "",
+                    "end",
+                    iid=str(norm_name),
+                    values=(name, step_count, last_run_str, run_count),
+                )
+        except Exception as exc:
+            print(f"Error refreshing routines tab: {exc}", file=sys.stderr)
+
+    def _on_run_routine_tab(self) -> None:
+        if not hasattr(self, "routines_tree"):
+            return
+        selected = self.routines_tree.selection()
+        if not selected:
+            return
+        vals = self.routines_tree.item(selected[0], "values") or ()
+        if not vals:
+            return
+        name = str(vals[0]).strip()
+        if not name or name == "disabled":
+            return
+        try:
+            self.controller.submit(f"run routine {name}", source="ui")
+        except Exception as exc:
+            print(f"Error running routine: {exc}", file=sys.stderr)
+
+    def _on_show_routine_steps_tab(self) -> None:
+        if not hasattr(self, "routines_tree"):
+            return
+        selected = self.routines_tree.selection()
+        if not selected:
+            return
+        vals = self.routines_tree.item(selected[0], "values") or ()
+        if not vals:
+            return
+        name = str(vals[0]).strip()
+        if not name or name == "disabled":
+            return
+        store = getattr(self, "routine_store", None)
+        if store is None and hasattr(self.controller, "routine_store"):
+            store = getattr(self.controller, "routine_store", None)
+        if store is None and hasattr(self.controller, "app"):
+            store = getattr(self.controller.app, "routine_store", None)
+        if store is None:
+            return
+        try:
+            routine = store.get(name)
+            if not routine:
+                messagebox.showinfo("Routine", f"Routine '{name}' not found.", parent=self.root)
+                return
+            from core.chains import describe_step
+            steps = getattr(routine, "steps", []) or []
+            step_lines = [f"{i}. {describe_step(s.get('tool', ''), s.get('args', {}))}" for i, s in enumerate(steps, 1)]
+            content = "\n".join(step_lines) if step_lines else "No steps."
+            messagebox.showinfo(f"Routine: {getattr(routine, 'display_name', name)}", content, parent=self.root)
+        except Exception as exc:
+            messagebox.showerror("Error", f"Failed to show routine steps: {exc}", parent=self.root)
+
+    def _on_delete_routine_tab(self) -> None:
+        if not hasattr(self, "routines_tree"):
+            return
+        selected = self.routines_tree.selection()
+        if not selected:
+            return
+        vals = self.routines_tree.item(selected[0], "values") or ()
+        if not vals:
+            return
+        name = str(vals[0]).strip()
+        if not name or name == "disabled":
+            return
+        if messagebox.askyesno("Delete Routine", f"Delete routine '{name}'?", parent=self.root):
+            store = getattr(self, "routine_store", None)
+            if store is None and hasattr(self.controller, "routine_store"):
+                store = getattr(self.controller, "routine_store", None)
+            if store is None and hasattr(self.controller, "app"):
+                store = getattr(self.controller.app, "routine_store", None)
+            if store is not None:
+                try:
+                    store.delete(name)
+                    self._refresh_routines_tab()
+                except Exception as exc:
+                    messagebox.showerror("Error", f"Failed to delete routine: {exc}", parent=self.root)
+
+    def _refresh_status_bar_reminder(self) -> None:
+        if not hasattr(self, "reminder_status_lbl"):
+            return
+        if not getattr(self, "reminder_store", None):
+            self.reminder_status_lbl.configure(text="")
+            return
+        try:
+            active = self.reminder_store.list_active()
+            if not active:
+                self.reminder_status_lbl.configure(text="")
+                return
+            active.sort(key=lambda x: x.due_at)
+            soonest = active[0]
+            now_ts = self.clock() if callable(getattr(self, "clock", None)) else time.time()
+            now_dt = datetime.fromtimestamp(now_ts, timezone.utc)
+            due_dt = datetime.fromisoformat(soonest.due_at.replace("Z", "+00:00"))
+            diff_s = max(0, int((due_dt - now_dt).total_seconds()))
+            m = diff_s // 60
+            s = diff_s % 60
+            self.reminder_status_lbl.configure(text=f"Next: {soonest.text} in {m:02d}:{s:02d}")
+        except Exception:
+            self.reminder_status_lbl.configure(text="")
+
     def _build_last_run_tab(self) -> None:
         self.last_run_frame = ttk.Frame(self.notebook, padding=6)
         self.notebook.add(self.last_run_frame, text="Last run")
@@ -765,6 +1529,28 @@ class OrbitWindow:
         )
         self.plan_status_lbl.pack(side="left", padx=(0, 10))
 
+        # Reminder next indicator
+        self.reminder_status_lbl = tk.Label(
+            status_bar,
+            text="",
+            fg="#8e44ad",
+            font=("Segoe UI", 9),
+        )
+        self.reminder_status_lbl.pack(side="left", padx=(0, 10))
+
+        # Doctor status chip (hidden when everything is OK)
+        self.doctor_chip = tk.Label(
+            status_bar,
+            text="",
+            fg="#c0392b",
+            font=("Segoe UI", 8, "bold"),
+            relief="groove",
+            padx=4,
+            pady=1,
+            cursor="hand2",
+        )
+        self.doctor_chip.bind("<Button-1>", lambda e: self._on_doctor_click())
+
         # Notice banner
         if self.notice:
             self.notice_lbl = tk.Label(
@@ -793,6 +1579,12 @@ class OrbitWindow:
             return
 
         try:
+            now = time.monotonic()
+            if now - getattr(self, "_last_speaker_poll", 0.0) >= 0.2:
+                self._last_speaker_poll = now
+                if getattr(self, "voice_controller", None) is not None:
+                    self.voice_controller.poll_speaker()
+
             events = self.controller.drain(max_items=100)
             for event in events:
                 try:
@@ -828,6 +1620,10 @@ class OrbitWindow:
             except Exception:
                 pass
             try:
+                self._update_voice_ui()
+            except Exception:
+                pass
+            try:
                 self._refresh_context_tab()
             except Exception:
                 pass
@@ -836,6 +1632,107 @@ class OrbitWindow:
                     self.root.after(50, self._poll)
                 except Exception:
                     pass
+
+    def _poll_reminders(self) -> None:
+        if self._destroyed:
+            return
+        try:
+            if self.reminder_scheduler is not None:
+                self.reminder_scheduler.tick()
+            self._refresh_status_bar_reminder()
+        except Exception as exc:
+            print(f"Error in reminders poll loop: {exc}", file=sys.stderr)
+        finally:
+            if not self._destroyed:
+                try:
+                    self.root.after(1000, self._poll_reminders)
+                except Exception:
+                    pass
+
+    def _is_dialog_open(self) -> bool:
+        try:
+            if self._confirm_dialog is not None and self._confirm_dialog.winfo_exists():
+                return True
+        except Exception:
+            pass
+        try:
+            if self._plan_dialog is not None and self._plan_dialog.winfo_exists():
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _on_reminder_due(self, item: Any) -> None:
+        text = getattr(item, "text", "") or ""
+        # Add a chat line for every fired reminder
+        self._append_chat(f"Reminder: {text}\n\n", ("orbit",))
+
+        # Windows bell
+        try:
+            import winsound
+            winsound.MessageBeep()
+        except Exception:
+            try:
+                self.root.bell()
+            except Exception:
+                pass
+
+        # Speak replies if enabled and not currently recording
+        if getattr(self, "_speak_replies", False):
+            vc = getattr(self, "voice_controller", None)
+            if vc is not None:
+                vc_state = getattr(vc, "state", "idle")
+                if vc_state != "listening":
+                    speaker = getattr(vc, "speaker", None)
+                    if speaker is not None and hasattr(speaker, "speak"):
+                        try:
+                            speaker.speak(f"Reminder: {text}")
+                        except Exception:
+                            pass
+
+        self._refresh_reminders_tab()
+        self._refresh_status_bar_reminder()
+
+        # If a dialog is open or already 3 toasts at once, do not show toast
+        if self._is_dialog_open() or len(self._active_toasts) >= 3:
+            return
+
+        try:
+            toast = ReminderToast(
+                parent=self.root,
+                item=item,
+                on_dismiss=self._dismiss_reminder,
+                on_snooze=self._snooze_reminder,
+                on_close=self._remove_toast,
+            )
+            self._active_toasts.append(toast)
+        except Exception as exc:
+            print(f"Failed to show reminder toast: {exc}", file=sys.stderr)
+
+    def _dismiss_reminder(self, item_id: int) -> None:
+        try:
+            if self.reminder_store is not None:
+                self.reminder_store.mark(item_id, "dismissed")
+            self._refresh_reminders_tab()
+            self._refresh_status_bar_reminder()
+        except Exception as exc:
+            print(f"Failed to dismiss reminder {item_id}: {exc}", file=sys.stderr)
+
+    def _snooze_reminder(self, item_id: int) -> None:
+        try:
+            if self.reminder_store is not None:
+                self.reminder_store.snooze(item_id, minutes=5)
+            self._refresh_reminders_tab()
+            self._refresh_status_bar_reminder()
+        except Exception as exc:
+            print(f"Failed to snooze reminder {item_id}: {exc}", file=sys.stderr)
+
+    def _remove_toast(self, toast: ReminderToast) -> None:
+        try:
+            if toast in self._active_toasts:
+                self._active_toasts.remove(toast)
+        except Exception:
+            pass
 
     def _handle_event(self, event: UiEvent) -> None:
         kind = getattr(event, "kind", "")
@@ -861,6 +1758,64 @@ class OrbitWindow:
             else:
                 self._append_chat("\n\n", ("orbit",))
             self._streaming = False
+            if getattr(self, "_speak_replies", False) and getattr(self, "voice_controller", None) is not None:
+                self.voice_controller.speak_reply(full_text)
+
+        elif kind == "voice_state":
+            st = data.get("state", "idle")
+            msg = data.get("message", "")
+            if st == "listening":
+                self.voice_status_lbl.configure(text="Listening... click to stop")
+                if not self.voice_bar.winfo_ismapped():
+                    self.voice_bar.pack(fill="x", side="bottom", padx=4, pady=(0, 2), before=self.input_text.master)
+                if not self.level_bar.winfo_ismapped():
+                    self.level_bar.pack(side="left", padx=4)
+                    self.level_bar["value"] = 0
+            elif st == "transcribing":
+                self.voice_status_lbl.configure(text="Transcribing...")
+                if not self.voice_bar.winfo_ismapped():
+                    self.voice_bar.pack(fill="x", side="bottom", padx=4, pady=(0, 2), before=self.input_text.master)
+                if self.level_bar.winfo_ismapped():
+                    self.level_bar.pack_forget()
+            elif st == "speaking":
+                self.voice_status_lbl.configure(text="Speaking... (Stop to silence)")
+                if not self.voice_bar.winfo_ismapped():
+                    self.voice_bar.pack(fill="x", side="bottom", padx=4, pady=(0, 2), before=self.input_text.master)
+                if self.level_bar.winfo_ismapped():
+                    self.level_bar.pack_forget()
+            elif st == "error":
+                err_text = data.get("error", msg or "Voice error")
+                self.voice_status_lbl.configure(text=f"Voice: {err_text}")
+                if not self.voice_bar.winfo_ismapped():
+                    self.voice_bar.pack(fill="x", side="bottom", padx=4, pady=(0, 2), before=self.input_text.master)
+                if self.level_bar.winfo_ismapped():
+                    self.level_bar.pack_forget()
+            else:  # idle
+                self.voice_status_lbl.configure(text="")
+                if self.level_bar.winfo_ismapped():
+                    self.level_bar.pack_forget()
+                if self.voice_bar.winfo_ismapped():
+                    self.voice_bar.pack_forget()
+            self._update_voice_ui()
+
+        elif kind == "voice_level":
+            try:
+                lvl = float(data.get("level", 0.0) or 0.0)
+            except (ValueError, TypeError):
+                lvl = 0.0
+            if hasattr(self, "level_bar"):
+                self.level_bar["value"] = max(0, min(100, int(lvl * 100)))
+
+        elif kind == "voice_transcript":
+            text = (data.get("text") or "").strip()
+            if text:
+                self._append_chat(f"Heard: {text}\n", ("system",))
+                self._append_chat(f"User: {text}\n", ("user",))
+                self.controller.submit(text, source="voice")
+
+        elif kind == "voice_error":
+            err_text = data.get("text") or data.get("error") or "Voice error"
+            self._append_chat(f"Voice: {err_text}\n\n", ("system",))
 
         elif kind == "error":
             self._mark_running_steps_interrupted()
@@ -956,6 +1911,8 @@ class OrbitWindow:
                 self.activity_tree.yview_moveto(1.0)
 
         elif kind == "confirm_request":
+            if getattr(self, "voice_controller", None) is not None:
+                self.voice_controller.cancel()
             req = data.get("request")
             if req is not None:
                 try:
@@ -975,10 +1932,14 @@ class OrbitWindow:
                     pass
 
         elif kind == "plan_preview":
+            if getattr(self, "voice_controller", None) is not None:
+                self.voice_controller.cancel()
             plan_id = data.get("id")
             labels = data.get("labels", [])
             permissions = data.get("permissions", [])
             timeout_s = data.get("timeout_s", 60.0)
+            dialog_kind = data.get("kind", "plan")
+            dialog_name = data.get("name")
             try:
                 self.root.lift()
             except Exception:
@@ -994,6 +1955,8 @@ class OrbitWindow:
                 labels=labels,
                 permissions=permissions,
                 timeout_s=timeout_s,
+                kind=dialog_kind,
+                name=dialog_name,
             )
             try:
                 self._plan_dialog.attributes("-topmost", True)
@@ -1095,12 +2058,45 @@ class OrbitWindow:
             except Exception:
                 pass
 
+        elif kind == "doctor_fast_done":
+            try:
+                fails = int(data.get("fails", 0))
+                warns = int(data.get("warns", 0))
+                if hasattr(self, "doctor_chip"):
+                    if fails > 0 or warns > 0:
+                        parts = []
+                        if fails > 0:
+                            parts.append(f"{fails} fail" if fails == 1 else f"{fails} fails")
+                        if warns > 0:
+                            parts.append(f"{warns} warn" if warns == 1 else f"{warns} warns")
+                        self.doctor_chip.configure(
+                            text=f"Doctor: {', '.join(parts)}",
+                            fg="#c0392b" if fails > 0 else "#d35400",
+                        )
+                        if self.doctor_chip.winfo_manager() != "pack":
+                            self.doctor_chip.pack(side="left", padx=(0, 10))
+                    else:
+                        if self.doctor_chip.winfo_manager() == "pack":
+                            self.doctor_chip.pack_forget()
+            except Exception:
+                pass
+
+        elif kind == "doctor_report_ready":
+            try:
+                report = str(data.get("report", "No report available."))
+                DoctorWindow(self.root, report)
+            except Exception as exc:
+                print(f"Error opening doctor window: {exc}", file=sys.stderr)
+
     def _update_busy_ui(self, is_busy: bool) -> None:
-        if is_busy:
-            if not self._plan_total_steps:
+        vc = getattr(self, "voice_controller", None)
+        voice_active = vc is not None and (vc.state in ("listening", "transcribing") or vc.is_speaking())
+        if is_busy or voice_active:
+            if not self._plan_total_steps and not voice_active:
                 self.busy_lbl.configure(text="● Busy", fg="#1976d2")
-            self.send_btn.configure(state="disabled")
-            self.input_text.configure(state="disabled")
+            if is_busy:
+                self.send_btn.configure(state="disabled")
+                self.input_text.configure(state="disabled")
             self.stop_btn.configure(state="normal")
         else:
             if not self._plan_total_steps:
@@ -1110,6 +2106,7 @@ class OrbitWindow:
             self.send_btn.configure(state="normal")
             self.input_text.configure(state="normal")
             self.stop_btn.configure(state="disabled")
+        self._update_voice_ui()
 
     def _append_chat(self, text: str, tags: tuple) -> None:
         self.history.configure(state="normal")
@@ -1169,6 +2166,8 @@ class OrbitWindow:
                 )
 
     def _on_stop(self) -> None:
+        if getattr(self, "voice_controller", None) is not None:
+            self.voice_controller.cancel()
         self.controller.cancel()
 
     # --- Tab Handlers ---
@@ -1356,6 +2355,7 @@ class OrbitWindow:
                 app=app,
                 agent=agent,
                 chat_controller=self.controller,
+                voice_controller=getattr(self, "voice_controller", None),
                 provider_label=self.mode_label,
                 recent_chat_lines=chat_lines,
                 activity_events=activity_events,
@@ -1378,6 +2378,50 @@ class OrbitWindow:
                 f"Failed to generate diagnostics: {exc}",
                 parent=self.root,
             )
+
+    def _start_doctor_startup_check(self) -> None:
+        def _worker():
+            try:
+                from core.doctor import run_checks
+                probes = getattr(self.controller, "doctor_probes", None)
+                checks = run_checks(probes=probes, fast=True)
+                fails = sum(1 for c in checks if getattr(c, "status", "").upper() == "FAIL")
+                warns = sum(1 for c in checks if getattr(c, "status", "").upper() == "WARN")
+                oks = sum(1 for c in checks if getattr(c, "status", "").upper() == "OK")
+                emit_fn = getattr(self.controller, "_emit", None) or getattr(self.controller, "emit", None)
+                if emit_fn:
+                    emit_fn("doctor_fast_done", {"fails": fails, "warns": warns, "oks": oks})
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+
+    def _on_doctor_click(self) -> None:
+        def _worker():
+            try:
+                from core.doctor import format_report, run_checks
+                probes = getattr(self.controller, "doctor_probes", None)
+                checks = run_checks(probes=probes, fast=False)
+                report_text = format_report(checks)
+                emit_fn = getattr(self.controller, "_emit", None) or getattr(self.controller, "emit", None)
+                if emit_fn:
+                    emit_fn("doctor_report_ready", {"report": report_text})
+            except Exception as exc:
+                emit_fn = getattr(self.controller, "_emit", None) or getattr(self.controller, "emit", None)
+                if emit_fn:
+                    emit_fn("doctor_report_ready", {"report": f"Error running doctor checks: {exc}"})
+
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+
+    def _on_settings_click(self) -> None:
+        try:
+            from ui.settings_window import SettingsWindow
+
+            SettingsWindow(parent=self.root, controller=self.controller)
+        except Exception as exc:
+            messagebox.showerror("Settings Error", f"Failed to open settings: {exc}", parent=self.root)
 
     def _refresh_context_tab(self) -> None:
         app = getattr(self.controller, "app", None)
@@ -1457,16 +2501,37 @@ class OrbitWindow:
     # --- Destruction Protocols ---
 
     def _on_close(self) -> None:
+        for toast in list(getattr(self, "_active_toasts", [])):
+            try:
+                toast.destroy()
+            except Exception:
+                pass
+        if hasattr(self, "_active_toasts"):
+            self._active_toasts.clear()
         if not self._shutdown_called:
             self._shutdown_called = True
             try:
+                if getattr(self, "voice_controller", None) is not None:
+                    self.voice_controller.shutdown()
                 self.controller.shutdown()
             finally:
                 self._destroyed = True
                 self.root.destroy()
 
     def _on_root_destroyed(self, event: Optional[tk.Event] = None) -> None:
+        for toast in list(getattr(self, "_active_toasts", [])):
+            try:
+                toast.destroy()
+            except Exception:
+                pass
+        if hasattr(self, "_active_toasts"):
+            self._active_toasts.clear()
         if getattr(event, "widget", None) == self.root:
             if not self._shutdown_called:
                 self._shutdown_called = True
+                try:
+                    if getattr(self, "voice_controller", None) is not None:
+                        self.voice_controller.shutdown()
+                except Exception:
+                    pass
                 self.controller.shutdown()

@@ -1,14 +1,62 @@
-"""Application launcher and process management tools for ORBIT."""
-
+import os
 from pathlib import Path
 import shutil
 import subprocess
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Callable, Mapping, Optional, Sequence, Union
 
-import psutil
-
+from core.procs import iter_processes, terminate_gently
 from security.permissions import PermissionLevel
 from tools.registry import Tool
+
+
+def resolve_launch(
+    entry: Mapping[str, Any],
+    *,
+    which_fn: Optional[Callable[[str], Optional[str]]] = None,
+    path_exists_fn: Optional[Callable[[Union[str, Path]], bool]] = None,
+) -> Optional[list[str]]:
+    """Resolve the executable command argument list for an allowed application.
+
+    Resolution order:
+    1. shutil.which on the bare executable name first.
+    2. Candidate path templates from config (expanded with os.path.expandvars).
+       - Rejects any template where unexpanded % remains.
+       - Rejects any candidate that does not end with .exe.
+       - Accepts only existing files.
+    Candidates come ONLY from config, never from model arguments.
+
+    Returns the resolved command argument list (with absolute executable path),
+    or None if the application cannot be resolved.
+    """
+    cmd_args = list(entry.get("launch", []))
+    if not cmd_args:
+        return None
+
+    bare_exe = cmd_args[0]
+    _which = which_fn or shutil.which
+    _exists = path_exists_fn or os.path.isfile
+
+    # 1. Try PATH resolution via which
+    resolved = _which(bare_exe)
+    if resolved:
+        return [resolved] + list(cmd_args[1:])
+
+    # 2. Try candidates from config
+    candidates = entry.get("candidates") or []
+    for cand in candidates:
+        if not isinstance(cand, str):
+            continue
+        expanded = os.path.expandvars(cand)
+        # Reject unexpanded environment variables
+        if "%" in expanded:
+            continue
+        # Accepted only if it is an existing file with the .exe extension
+        if not expanded.lower().endswith(".exe"):
+            continue
+        if _exists(expanded):
+            return [expanded] + list(cmd_args[1:])
+
+    return None
 
 
 def make_app_tools(allowed_apps: Mapping[str, Any]) -> list[Tool]:
@@ -29,14 +77,16 @@ def make_app_tools(allowed_apps: Mapping[str, Any]) -> list[Tool]:
             clean_apps[key] = {
                 "launch": list(v.get("launch", [])),
                 "process": v.get("process"),
+                "candidates": list(v.get("candidates", [])) if v.get("candidates") else [],
             }
         elif isinstance(v, Sequence):
             clean_apps[key] = {
                 "launch": list(v),
                 "process": Path(v[0]).name if v else None,
+                "candidates": [],
             }
         else:
-            clean_apps[key] = {"launch": [], "process": None}
+            clean_apps[key] = {"launch": [], "process": None, "candidates": []}
 
     sorted_names = sorted(clean_apps.keys())
     allowed_list_str = ", ".join(f"'{name}'" for name in sorted_names)
@@ -88,14 +138,15 @@ def make_app_tools(allowed_apps: Mapping[str, Any]) -> list[Tool]:
         if not cmd_args:
             return f"ERROR: No command configured for application '{clean_name}'."
 
-        executable = cmd_args[0]
+        cmd_list = resolve_launch(entry)
+        if not cmd_list:
+            executable = cmd_args[0]
+            return (
+                f"ERROR: Failed to launch '{clean_name}': Executable '{executable}' could not be found "
+                f"on system PATH. Please add or update its installation path in config/apps.py."
+            )
 
         try:
-            resolved = shutil.which(executable)
-            if not resolved:
-                raise FileNotFoundError(f"Executable '{executable}' could not be found on system PATH")
-
-            cmd_list = [resolved] + list(cmd_args[1:])
             # Never run with shell=True to prevent command injection
             subprocess.Popen(cmd_list, shell=False)
             return f"Successfully opened {clean_name}."
@@ -115,15 +166,9 @@ def make_app_tools(allowed_apps: Mapping[str, Any]) -> list[Tool]:
         target_proc_name = str(target_process).strip().lower()
 
         closed_count = 0
-        for proc in psutil.process_iter():
-            try:
-                p_name = proc.name().lower() if proc.name() else ""
-                if p_name == target_proc_name:
-                    # Graceful termination (SIGTERM equivalent), never forceful kill
-                    proc.terminate()
-                    closed_count += 1
-            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                continue
+        for proc in iter_processes(name_contains=target_proc_name):
+            if terminate_gently(proc):
+                closed_count += 1
 
         if closed_count > 0:
             return f"Closed {closed_count} running instance(s) of {clean_name}."

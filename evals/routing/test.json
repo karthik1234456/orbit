@@ -1,0 +1,222 @@
+[
+  {
+    "id": "route-test-001",
+    "text": "do i have enough time before five to grab coffee or what is the clock at",
+    "accept": ["get_current_time"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-test-002",
+    "text": "divide seven hundred fifty evenly among four roommates",
+    "accept": ["calculate"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-test-003",
+    "text": "chekc if my cpu load is through the roof right now",
+    "accept": ["system_info"],
+    "tag": "typo"
+  },
+  {
+    "id": "route-test-004",
+    "text": "where did i leave that draft proposal from yesterday",
+    "accept": ["list_files", "search_documents", "read_file"],
+    "tag": "ambiguous"
+  },
+  {
+    "id": "route-test-005",
+    "text": "peek inside the changelog txt to see what version was released",
+    "accept": ["read_file"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-test-006",
+    "text": "start a blank text file called meeting-agenda in my drafts",
+    "accept": ["create_file"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-test-007",
+    "text": "pop open clculator so i can tally these receipts",
+    "accept": ["open_application"],
+    "tag": "typo"
+  },
+  {
+    "id": "route-test-008",
+    "text": "shut down chrome completely it is lagging everything",
+    "accept": ["close_application"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-test-009",
+    "text": "what programs are you able to launch for me on this computer",
+    "accept": ["list_allowed_apps"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-test-010",
+    "text": "take me over to github so i can review pull requests",
+    "accept": ["open_website"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-test-011",
+    "text": "who won the premier league match yesterday evening",
+    "accept": ["search_web"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-test-012",
+    "text": "look up the history of the roman colosseum on wikipedia",
+    "accept": ["search_site", "search_web"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-test-013",
+    "text": "summarize what is currently displayed on the open tab",
+    "accept": ["browser_read_page"],
+    "tag": "followup",
+    "prior_tools": ["open_website"]
+  },
+  {
+    "id": "route-test-014",
+    "text": "pause the video that is playing in the active browser tab",
+    "accept": ["browser_media"],
+    "tag": "followup",
+    "prior_tools": ["open_website"]
+  },
+  {
+    "id": "route-test-015",
+    "text": "let me see the last few pages we visited in this session",
+    "accept": ["browser_history"],
+    "tag": "followup",
+    "prior_tools": ["browser_read_page"]
+  },
+  {
+    "id": "route-test-016",
+    "text": "take note that my sister's birthday is on the fourteenth of november",
+    "accept": ["remember_fact"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-test-017",
+    "text": "dump everything you currently remember about me",
+    "accept": ["list_memories"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-test-018",
+    "text": "what did i tell you my wifi password was when we moved",
+    "accept": ["recall_memories"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-test-019",
+    "text": "drop the outdated employee handbook from our vector store",
+    "accept": ["remove_document"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-test-020",
+    "text": "look up what our warranty policy covers on accidental damage",
+    "accept": ["search_documents", "search_web"],
+    "tag": "ambiguous"
+  },
+  {
+    "id": "route-test-021",
+    "text": "add all the research whitepapers in my desktop folder into the index",
+    "accept": ["index_documents"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-test-022",
+    "text": "give me a heads up at three thirty to submit my time sheet",
+    "accept": ["set_reminder"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-test-023",
+    "text": "go ahead and cancel that second reminder from the list",
+    "accept": ["cancel_reminder"],
+    "tag": "followup",
+    "prior_tools": ["list_reminders"]
+  },
+  {
+    "id": "route-test-024",
+    "text": "give me forty five minutes on the clock for this deep work sprint",
+    "accept": ["set_timer"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-test-025",
+    "text": "how do airplanes stay up in the air during heavy turbulence",
+    "accept": [],
+    "tag": "chat"
+  },
+  {
+    "id": "route-test-026",
+    "text": "i am having such a hectic morning honestly",
+    "accept": [],
+    "tag": "chat"
+  },
+  {
+    "id": "route-test-027",
+    "text": "what should i cook if i only have eggs and tomatoes in the fridge",
+    "accept": [],
+    "tag": "chat"
+  },
+  {
+    "id": "route-test-028",
+    "text": "my short term memory feels completely fried after that exam",
+    "accept": [],
+    "tag": "chat"
+  },
+  {
+    "id": "route-test-029",
+    "text": "that quote about kindness is such a beautiful reminder",
+    "accept": [],
+    "tag": "chat"
+  },
+  {
+    "id": "route-test-030",
+    "text": "can you explain what file compression actually does to the data",
+    "accept": [],
+    "tag": "chat"
+  },
+  {
+    "id": "route-test-031",
+    "text": "timing is everything when you are starting a new business",
+    "accept": [],
+    "tag": "chat"
+  },
+  {
+    "id": "route-test-032",
+    "text": "why do leaves turn yellow and red during autumn",
+    "accept": [],
+    "tag": "chat"
+  },
+  {
+    "id": "route-test-033",
+    "text": "give me some quick suggestions on how to improve posture while sitting",
+    "accept": [],
+    "tag": "chat"
+  },
+  {
+    "id": "route-test-034",
+    "text": "whats the difference between a fruit and a vegetable botanically speaking",
+    "accept": [],
+    "tag": "chat"
+  },
+  {
+    "id": "route-test-035",
+    "text": "whcih planet is closest to the sun",
+    "accept": [],
+    "tag": "typo"
+  },
+  {
+    "id": "route-test-036",
+    "text": "the solar system is mind bogglingly vast",
+    "accept": [],
+    "tag": "chat"
+  }
+]

@@ -129,6 +129,33 @@ def render_markdown(
     else:
         browser_enabled_str = "off"
     lines.append(f"- **BROWSER_ENABLED**: {browser_enabled_str}")
+    reminders_enabled_val = meta.get("REMINDERS_ENABLED")
+    if reminders_enabled_val is not None:
+        if isinstance(reminders_enabled_val, str):
+            reminders_enabled_str = "on" if reminders_enabled_val.strip().lower() in ("1", "true", "yes", "on") else "off"
+        else:
+            reminders_enabled_str = "on" if bool(reminders_enabled_val) else "off"
+    else:
+        reminders_enabled_str = "off"
+    lines.append(f"- **REMINDERS_ENABLED**: {reminders_enabled_str}")
+    tool_routing_val = meta.get("TOOL_ROUTING")
+    if tool_routing_val is not None:
+        if isinstance(tool_routing_val, str):
+            tool_routing_str = "on" if tool_routing_val.strip().lower() in ("1", "true", "yes", "on") else "off"
+        else:
+            tool_routing_str = "on" if bool(tool_routing_val) else "off"
+    else:
+        tool_routing_str = "off"
+    lines.append(f"- **TOOL_ROUTING**: {tool_routing_str}")
+    routines_enabled_val = meta.get("ROUTINES_ENABLED")
+    if routines_enabled_val is not None:
+        if isinstance(routines_enabled_val, str):
+            routines_enabled_str = "on" if routines_enabled_val.strip().lower() in ("1", "true", "yes", "on") else "off"
+        else:
+            routines_enabled_str = "on" if bool(routines_enabled_val) else "off"
+    else:
+        routines_enabled_str = "off"
+    lines.append(f"- **ROUTINES_ENABLED**: {routines_enabled_str}")
     if is_holdout:
         lines.append("- **Dataset**: Holdout")
     if provider == "ollama":

@@ -154,6 +154,10 @@ COMMAND_SHORTCUTS: bool = _parse_bool(os.getenv("COMMAND_SHORTCUTS"), True)
 CHAINS_ENABLED: bool = _parse_bool(os.getenv("CHAINS_ENABLED"), True)
 SESSION_CONTEXT: bool = _parse_bool(os.getenv("SESSION_CONTEXT"), True)
 SESSION_TTL_SECONDS: float = _parse_float(os.getenv("SESSION_TTL_SECONDS"), 1800.0)
+REMINDERS_ENABLED: bool = _parse_bool(os.getenv("REMINDERS_ENABLED"), True)
+REMINDERS_DB_PATH: Path = Path(os.getenv("REMINDERS_DB_PATH", "data/reminders.db")).resolve()
+TOOL_ROUTING: bool = _parse_bool(os.getenv("TOOL_ROUTING"), False)
+DOCTOR_ON_START: bool = _parse_bool(os.getenv("DOCTOR_ON_START"), True)
 
 
 def _parse_browser_enabled(val: Optional[str] = None) -> bool:
@@ -175,6 +179,16 @@ def browser_enabled() -> bool:
     return _parse_browser_enabled(os.getenv("BROWSER_ENABLED"))
 
 
+def reminders_enabled() -> bool:
+    """Read the environment at call time to determine whether reminders are enabled."""
+    return _parse_bool(os.getenv("REMINDERS_ENABLED"), True)
+
+
+def tool_routing_enabled() -> bool:
+    """Read the environment at call time to determine whether tool routing is enabled."""
+    return _parse_bool(os.getenv("TOOL_ROUTING"), False)
+
+
 def _parse_plan_preview(val: Optional[str], default: str = "auto") -> str:
     if val is None or not val.strip():
         return default
@@ -187,6 +201,27 @@ def _parse_plan_preview(val: Optional[str], default: str = "auto") -> str:
 PLAN_PREVIEW: str = _parse_plan_preview(os.getenv("PLAN_PREVIEW"), "auto")
 PLAN_MAX_STEPS: int = _parse_int(os.getenv("PLAN_MAX_STEPS"), 10)
 PLAN_MAX_SECONDS: float = _parse_float(os.getenv("PLAN_MAX_SECONDS"), 180.0)
+
+
+ROUTINES_ENABLED: bool = _parse_bool(os.getenv("ROUTINES_ENABLED"), True)
+ROUTINES_DB_PATH: Path = Path(os.getenv("ROUTINES_DB_PATH", "data/routines.db")).resolve()
+
+
+def _parse_routine_preview(val: Optional[str], default: str = "always") -> str:
+    if val is None or not val.strip():
+        return default
+    v = val.strip().lower()
+    if v in ("always", "never"):
+        return v
+    return default
+
+
+ROUTINE_PREVIEW: str = _parse_routine_preview(os.getenv("ROUTINE_PREVIEW"), "always")
+
+
+def routines_enabled() -> bool:
+    """Read the environment at call time to determine whether routines are enabled."""
+    return _parse_bool(os.getenv("ROUTINES_ENABLED"), True)
 
 
 def __getattr__(name: str) -> Any:
@@ -212,6 +247,20 @@ def __getattr__(name: str) -> Any:
         return _parse_mic_device(os.getenv("MIC_DEVICE"))
     if name == "MAX_RECORD_SECONDS":
         return _parse_int(os.getenv("MAX_RECORD_SECONDS"), 30)
+    if name == "REMINDERS_ENABLED":
+        return _parse_bool(os.getenv("REMINDERS_ENABLED"), True)
+    if name == "REMINDERS_DB_PATH":
+        return Path(os.getenv("REMINDERS_DB_PATH", "data/reminders.db")).resolve()
+    if name == "ROUTINES_ENABLED":
+        return routines_enabled()
+    if name == "ROUTINES_DB_PATH":
+        return Path(os.getenv("ROUTINES_DB_PATH", "data/routines.db")).resolve()
+    if name == "ROUTINE_PREVIEW":
+        return _parse_routine_preview(os.getenv("ROUTINE_PREVIEW"), "always")
+    if name == "TOOL_ROUTING":
+        return tool_routing_enabled()
+    if name == "DOCTOR_ON_START":
+        return _parse_bool(os.getenv("DOCTOR_ON_START"), True)
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 

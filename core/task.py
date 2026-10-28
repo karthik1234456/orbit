@@ -57,6 +57,13 @@ class TaskRun:
     context: Optional[dict] = None
     plan: Optional[dict] = None
     source: str = "typed"
+    routing_on: bool = False
+    routing_groups: list[str] = field(default_factory=list)
+    tools_offered_count: int = 0
+    tools_registered_count: int = 0
+    off_route_call: int = 0
+    routing_retry: bool = False
+    prompt_tokens: Optional[int] = None
 
     def add_step(
         self,
@@ -121,6 +128,22 @@ class TaskRun:
             "context": dict(self.context) if self.context is not None else None,
             "source": self.source,
             "steps": steps_data,
+            "routing_on": self.routing_on,
+            "routing_groups": list(self.routing_groups),
+            "tools_offered_count": self.tools_offered_count,
+            "tools_registered_count": self.tools_registered_count,
+            "off_route_call": self.off_route_call,
+            "routing_retry": self.routing_retry,
+            "prompt_tokens": self.prompt_tokens,
+            "routing": {
+                "on": self.routing_on,
+                "groups": list(self.routing_groups),
+                "tools_offered": self.tools_offered_count,
+                "tools_registered": self.tools_registered_count,
+                "off_route_calls": self.off_route_call,
+                "routing_retry": self.routing_retry,
+                "prompt_tokens": self.prompt_tokens,
+            },
         }
         if self.plan is not None:
             res["plan"] = self.plan

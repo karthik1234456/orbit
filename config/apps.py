@@ -14,9 +14,10 @@ How to add an app:
 from typing import Any, Optional, TypedDict
 
 
-class AppConfig(TypedDict):
+class AppConfig(TypedDict, total=False):
     launch: list[str]
     process: Optional[str]
+    candidates: Optional[list[str]]
 
 
 # Allowlist mapping friendly application names to their launch arguments and process names.
@@ -40,6 +41,11 @@ ALLOWED_APPS: dict[str, dict[str, Any]] = {
     "chrome": {
         "launch": ["chrome.exe"],
         "process": "chrome.exe",
+        "candidates": [
+            r"%PROGRAMFILES%\Google\Chrome\Application\chrome.exe",
+            r"%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe",
+            r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe",
+        ],
     },
     "vscode": {
         "launch": ["code"],

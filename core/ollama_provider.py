@@ -323,6 +323,7 @@ class OllamaProvider(LLMProvider):
         accumulated_text = ""
         interrupted = False
         think_filter = ThinkFilter()
+        prompt_eval_count: Optional[int] = None
 
         try:
             for line in resp.iter_lines():
@@ -355,6 +356,9 @@ class OllamaProvider(LLMProvider):
                     chunk = json.loads(line_str)
                 except Exception:
                     continue
+
+                if "prompt_eval_count" in chunk:
+                    prompt_eval_count = chunk["prompt_eval_count"]
 
                 msg = chunk.get("message", {})
                 chunk_content = msg.get("content", "")
@@ -408,7 +412,7 @@ class OllamaProvider(LLMProvider):
 
         if interrupted:
             clean_text = _strip_think_tags(accumulated_text)
-            return LLMResponse(text=clean_text, tool_calls=[], interrupted=True)
+            return LLMResponse(text=clean_text, tool_calls=[], interrupted=True, prompt_tokens=prompt_eval_count)
 
         clean_text = _strip_think_tags(accumulated_text)
 
@@ -419,7 +423,7 @@ class OllamaProvider(LLMProvider):
                 tool_calls.append(extracted_tc)
                 clean_text = ""
 
-        return LLMResponse(text=clean_text, tool_calls=tool_calls, interrupted=False)
+        return LLMResponse(text=clean_text, tool_calls=tool_calls, interrupted=False, prompt_tokens=prompt_eval_count)
 
     def warmup(self) -> float:
         """Send one tiny non-streaming chat request (num_predict=1) and return the seconds taken."""

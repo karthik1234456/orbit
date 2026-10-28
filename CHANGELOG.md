@@ -7,6 +7,213 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.10.1] - 2026-10-27
+
+### Added & Enhanced
+- **Centralized Version Bump & Interface Synchronization (`core/version.py`)**:
+  - Centralized `VERSION = "2.10.1"` in `core/version.py`, synchronized across the CLI startup message (`main.py`), desktop UI title (`ui/app.py`), environment doctor report title (`core/doctor.py`), and evaluation report headers (`evals/report.py`).
+- **Comprehensive Documentation Grounding (`README.md`)**:
+  - Full rewrite of `README.md` strictly grounded in verifiable repository facts and empirical benchmark result files in `evals/results/`.
+  - Labelled tables in "Results" section with ISO date (`YYYY-MM-DD`), model (`qwen3:8b`), case count, and source file citations across development suite, unseen holdout4, retrieval sweeps, command parser benchmarks, model intent probes, tool routing comparisons, and local workstation hardware performance.
+  - Added "Verification status" table for features from v2.5 on (voice in the window, reminders, routing, settings panel, routines, doctor) distinguishing verified live tests from unit test coverage strictly matching `docs/TEST_CHECKLIST.md`.
+  - Added placeholder catalog noting remaining intentional placeholders.
+- **Test Isolation & Stability Fixes (`tests/conftest.py`, `core/procs.py`, `browser/controller.py`)**:
+  - Refined Playwright import guard in `tests/conftest.py` to target the external `playwright` package without blocking internal modules like `browser.playwright_backend`, preventing background threads from attempting real driver launches or triggering `STATUS_BREAKPOINT` crashes during test suite teardown on Windows.
+  - Fixed `core/procs.py` process command line parsing by using `safe_cmdline(proc)` to correctly handle mock objects in tests without invoking unmocked methods.
+  - Fixed `browser/controller.py` process cleanup to accumulate matched processes and wait via `psutil.wait_procs(matched_procs, timeout=3.0)`.
+  - Suppressed unraisable `RuntimeError` during `tkinter.Variable` garbage collection on main thread destruction.
+
+---
+
+## [2.10.0] - 2026-10-27
+
+### Added & Enhanced
+- **Persistent Named Routines (`routines/store.py`, `data/routines.db`)**:
+  - Added `RoutineStore` for saving, listing, retrieving, deleting, and tracking execution metrics for named multi-step routines.
+  - Parameterized SQLite schema with 1-connection-per-operation architecture and automatic corruption recovery.
+  - Strict limits: maximum of 20 routines, at most 10 steps per routine, and maximum cumulative wait of 60 seconds.
+  - Routine naming rules: 1 to 30 characters (letters, digits, spaces, hyphens, underscores), prohibiting command verbs and reserved words (`all`, `list`, `show`, `delete`, `create`, `make`, `save`, `run`, `start`).
+- **Comprehensive Step and Allowlist Validation (`routines/validate.py`)**:
+  - `ALLOWED_ROUTINE_TOOLS` strictly restricts actions to 12 safe tools (`open_application`, `close_application`, `open_website`, `search_site`, `open_workspace_folder`, `browser_click_result`, `browser_media`, `browser_scroll`, `browser_history`, `browser_read_page`, `browser_close`, `wait`).
+  - Apps validated against `ALLOWED_APPS`; sites validated against `SITES` (aliases resolved to canonical keys).
+  - Strict URL prohibition in stored routine steps (`{tool, args}` only, no raw text or URLs).
+  - Simulated state resolution: resolves state-dependent references like "close it" at save time or refuses with "name the app explicitly".
+  - Dual validation: re-validates entire routine against live allowlists at run time before step 1 to prevent stale execution.
+- **Natural Language Routine Shortcuts (`core/shortcuts.py`)**:
+  - Creation: `create|make|save a routine (called|named)? <name> (:|that|to|as) <chain sentence>`.
+  - Save last plan: `save (that|this|the last plan) as (a )?routine (called|named)? <name>`.
+  - Execution: `run|start|do|launch (my )?routine <name>`, `run <name> routine`, `routine <name>`.
+  - Management: `list routines`, `show routines`, `what routines do i have`, `show routine <name>`, `delete|remove routine <name>`.
+  - Near-miss protection: rejects shell separators (`;`, `&`, `|`, `` ` ``, `$`, `<`, `>`) and URLs in names/chains.
+- **Plan Runner Integration & Mutex Protection (`core/agent.py`)**:
+  - Reuses existing plan runner (`ShortcutPlan(source="routine")`) without creating a parallel execution path.
+  - Upfront save approval via `plan_callback(kind="save_routine")` with custom heading and Save button; denied saves nothing.
+  - Upfront preview on every run via `plan_callback(kind="routine")` with custom heading; fails closed if denied or no callback.
+  - Per-step confirmations preserved for side-effecting actions; cancellation/Stop aborts execution immediately.
+  - Single routine execution mutex (`_routine_running`) preventing concurrent routine execution.
+  - History redaction storing only `"Ran routine <name>."`, `"Saved routine <name>."`, `"Deleted routine <name>."`.
+  - Audit logging recording `decision="routine_run"`, `"routine_save"`, `"routine_delete"`.
+  - Zero model calls during routine operations.
+- **Desktop UI Routines Tab (`ui/app.py`)**:
+  - Added dedicated "Routines" tab with Treeview displaying Name, Steps, Last Run, and Runs.
+  - Action buttons: Run, Show steps, Delete (with confirmation dialog), and Refresh.
+  - Adapted `PlanDialog` with custom titles, headings, and "Save"/"Run" action buttons with 800ms cooldown.
+- **Settings & Safety Isolation**:
+  - Added `ROUTINES_ENABLED` (default True) and `ROUTINE_PREVIEW` ("always" default | "never") to `config/settings.py` and `config/settings_store.py`.
+  - Changing `ROUTINE_PREVIEW` to `"never"` triggers an explicit security warning dialog.
+  - Complete isolation: no tool in `tools/` imports routines; routine contents never enter prompts, memory, retrieval, or session context.
+  - Diagnostics `/diag` outputs `=== ROUTINES ===` with count and enabled status only, never leaking routine names or steps.
+  - Evaluation runners force `ROUTINES_ENABLED=0` by default.
+
+---
+
+## [2.9.0] - 2026-10-26
+
+### Added & Enhanced
+- **Safe Settings Store (`config/settings_store.py`)**:
+  - Whitelist of editable non-secret settings (`SPECS`) covering `LLM_PROVIDER`, `OLLAMA_MODEL`, `OLLAMA_NUM_CTX`, `BROWSER_ENABLED`, `SPEAK_REPLIES`, `VOICE_IN_UI`, `COMMAND_SHORTCUTS`, `CHAINS_ENABLED`, `PLAN_PREVIEW`, `TOOL_ROUTING`, `REMINDERS_ENABLED`, `SESSION_CONTEXT`, `RAG_AUTO`, `DOCTOR_ON_START`, `STT_MODEL`, `STT_LANGUAGE`, and `ORBIT_MOCK`.
+  - Reading defaults directly from `config.settings` without duplicate hardcoding.
+  - Strict input validation rejecting control characters, newlines, carriage returns, NUL bytes, leading `=` or `#`, surrounding quotes, and values > 100 characters.
+  - Secret filtering: Any key containing `KEY`, `TOKEN`, `SECRET`, or `PASSWORD` is strictly non-readable and non-writable through the settings store; `GEMINI_API_KEY` is never exposed.
+  - Effective value resolution (`read_effective`) tracking origin source (`default`, `.env`, `environment`) and flagging process environment overrides where environment variables supersede `.env`.
+  - Atomic in-place updates preserving UTF-8 BOM, comments, unknown keys, and exact line endings (CRLF vs LF).
+  - Safety protections refusing writes on duplicate keys or merged lines with line numbers and key names only.
+  - Automated `.env.bak` backup creation and atomic sibling temporary file replacement via `os.replace`.
+  - Dedicated `ORBIT_MOCK` handling: checked writes `ORBIT_MOCK=1`; unchecked removes the line from `.env` and issues a process environment clearing reminder.
+- **Desktop Settings Editor Window (`ui/settings_window.py`, `ui/app.py`)**:
+  - Added "Settings" button in Context tab beside Doctor button.
+  - Modal settings editor dialog rendering one row per spec with appropriate inputs (combobox, checkbox, spinbox, text entry).
+  - Displays source origin tags, orange notes for environment overrides, and restart-required markers.
+  - Mandatory confirmation prompt before saving `PLAN_PREVIEW=never` warning that plans will run without preview dialogs.
+  - Integrated read-only Doctor `.env` check run automatically after save, reporting any syntax warnings by line number and key name only.
+- **Terminal Settings CLI (`main.py`)**:
+  - Added `/settings` command displaying formatted table of key, effective value, source, and restart-needed flag.
+  - Added `/set KEY VALUE` interactive command with input validation, confirmation prompt (`Change KEY from A to B? (y/n)`), and refusal of secret-like or unknown keys.
+- **Audit Logging & Diagnostics (`core/diagnostics.py`, `security/audit.py`)**:
+  - Structured audit trail entries recorded on each saved setting change (`decision="settings_change"`).
+  - Diagnostic reports (`/diag` and Copy diagnostics) include settings whose source is environment or differs from defaults without exposing secrets or raw `.env` contents.
+- **Verification Status**:
+  - Unit-tested: 100% passing across spec validation, atomic saving, BOM/CRLF preservation, duplicate/merged-line refusal, and UI dialogs.
+  - Live-tested: manual verification checklist defined in `docs/TEST_CHECKLIST.md` (S1–S5).
+
+---
+
+## [2.8.0] - 2026-10-26
+
+### Added & Enhanced
+- **Read-Only Environment Doctor (`core/doctor.py`, `scripts/doctor.py`)**:
+  - Comprehensive pre-flight and diagnostic verification inspecting runtime, environment variables, dependencies, local models, hardware, and safety hygiene without executing any fixes or modifying files.
+  - Safe injectable architecture via `Probes` dataclass (`http_get`, `run_command`, `find_spec`, `which`, `read_text`, `path_exists`, `disk_free`, `env`, `clock`), enabling fast unit testing with fakes and strict timeouts (2s HTTP, 5s commands, never `shell=True`, never model prompts).
+  - Lazy loading: catches settings import failures and reports `FAIL` while continuing with raw environment variables.
+  - Extensive check suite (a-o):
+    - Python 3.11+ version and active virtual environment check.
+    - `.env` syntax parsing: detects lines without `=`, duplicate keys, unmatched quotes, surrounding spaces, and merged lines (`KEY=OTHER_KEY=val`) reporting line number and key name only. Flags stale `ORBIT_MOCK` overrides. Enforces strict secret redaction (`KEY`, `TOKEN`, `SECRET`, `PASSWORD` keys show only "set" or "not set", never values or lengths).
+    - Provider configuration: explains what `make_provider` would choose, mock reason, and exact setting to change.
+    - Ollama validation: verifies `OLLAMA_HOST` is loopback (non-loopback triggers `WARN` and is never contacted unless `OLLAMA_ALLOW_REMOTE` is set), checks reachability, version, configured model installation, and reports GPU vs CPU memory allocation from `/api/ps`.
+    - GPU status: inspects NVIDIA GPU via fixed `nvidia-smi` query, comparing model size to VRAM.
+    - Optional packages: uses `find_spec` without importing packages (`playwright`, `sounddevice`, `faster_whisper`, `pyttsx3`, `numpy`, `psutil`) and provides matching pip install commands.
+    - Browser readiness: verifies standard Windows Chrome executable paths (heuristic) and profile folder writability.
+    - Microphone readiness: safely queries `sounddevice` input device count without opening recording streams; notes OS microphone permissions cannot be verified programmatically.
+    - Whisper model cache: detects cached models in Hugging Face cache (heuristic) for speech offline readiness.
+    - Storage health: ensures `workspace`, `data`, and `logs` directories exist/are writable, checking disk space thresholds (2 GB WARN, 200 MB FAIL).
+    - Git hygiene: runs fixed `git check-ignore` on sensitive paths (`.env`, `data`, `logs`, `workspace`, `evals/results`) to ensure private files cannot be committed accidentally.
+    - App launcher validation: validates launch executables for apps in `config/apps.py` (skips protocol handlers with notes).
+    - FTS5 availability check for document search.
+    - `ORBIT_OFFLINE` readiness summary across model, Whisper cache, and provider settings.
+    - Diagnostic risk detection: flags leftover `PYTHONPATH` environment variables.
+- **Fast Startup & CLI Integration (`scripts/doctor.py`, `main.py`, `config/settings.py`)**:
+  - `scripts/doctor.py`: project-root path bootstrap, plain-text tabular formatting, `--json` mode, and exit codes (0 for OK/WARN/SKIP, 1 for FAIL).
+  - `main.py`: added `/doctor` command running full check suite; startup runs fast 3-check subset in a single daemon thread (`DOCTOR_ON_START` setting, default `True`) without delaying startup, printing at most one summary line if issues are detected.
+- **UI Status Chip & Doctor Window (`ui/app.py`)**:
+  - Status bar chip displaying failure and warning counts from fast startup check (hidden when all OK).
+  - "Doctor" button in context toolbar launching full check suite on a worker thread.
+  - Read-only `DoctorWindow` modal displaying report with "Copy report" button and clipboard feedback.
+  - Safe event dispatching using `.get()` with defaults to keep Tkinter polling robust.
+- **Diagnostics Integration (`core/diagnostics.py`)**:
+  - Added `=== DOCTOR ===` section to `/diag` and "Copy diagnostics", listing OK/WARN/FAIL summary counts and failing check names only (never values).
+
+---
+
+## [2.7.0] - 2026-10-25
+
+### Added & Enhanced
+- **Optional Tool Routing (`core/routing.py`)**:
+  - Implemented centralized functional tool groups across 9 areas: `system`, `notes`, `files`, `apps`, `web`, `browser`, `memory`, `docs`, and `reminders`, with reverse mapping `TOOL_TO_GROUP`.
+  - Generous keyword mapping (`KEYWORDS`) supporting word stems, variations, and key phrases.
+  - `select_groups(text, prior_tools, state)`: selects matching keyword groups; maintains continuity by carrying forward groups for `prior_tools` called recently; automatically activates `browser` (and `web`) when a controlled browser page is open in `SessionState`; always includes `system`.
+  - Robust fallback: if only `system` or no groups match (e.g. general chat or unclassified input), falls back to `{"system", "web", "memory", "docs"}`.
+  - `offered_tools(registry_tools, groups)`: filters registered tools to selected groups, safely ignoring unknown groups and always offering ungrouped tools.
+  - Setting `TOOL_ROUTING` (default `False`, enabled via `TOOL_ROUTING=1` or `settings.TOOL_ROUTING = True`). When disabled, offers the full registry tool list with zero routing overhead.
+- **Safety & Telemetry Invariance (`core/agent.py`, `core/task.py`, `core/diagnostics.py`)**:
+  - Tool routing is strictly an optimization and not a security boundary: permission levels (`SAFE`, `CONFIRM`, `DENY`), safety prechecks, human confirmation prompts, taint tracking, and audit logging remain completely unchanged.
+  - Off-route calls (calls to registered tools outside the offered subset) execute normally through the standard agent path, incrementing `run.off_route_call` in the run trace and logging `extra={"off_route_call": True}` in audit records.
+  - Added run trace fields to `TaskRun`: `routing_on`, `routing_groups`, `tools_offered_count`, `tools_registered_count`, `off_route_call`, `routing_retry`, and `prompt_tokens`.
+  - Added prompt token tracking to `LLMResponse`, populated from `prompt_eval_count` by `OllamaProvider`.
+  - Diagnostics section `=== TOOL ROUTING ===` reports routing status (`enabled` / `disabled`), last turn's offered/registered tool counts, off-route calls, and retry status, with strictly zero message text.
+- **Miss Recovery Retry Mechanism (`core/agent.py`, `core/routing.py`)**:
+  - `matches_inability(text)` detects common refusal/inability phrases (`can't`, `cannot`, `unable`, `"don't have the ability"`, `"i'm not able"`, `"i am not able"`, `"do not have access"`, `"no way to"`).
+  - When tool routing is enabled and narrowed the toolset, if the model replies with refusal text without calling any tool and no tools executed in the turn, the agent automatically retries ONCE with the full registry tool list.
+  - Never retries more than once, never after a tool call, and never when tool routing is off.
+- **Intent Probe Enhancements & Holdout Protection (`scripts/intent_probe.py`)**:
+  - Added `--routing` flag to evaluate narrowed tool offerings against full offerings.
+  - Added `--phrases` flag supporting JSON probe phrase files with `prior_tools` and `accept: []` ("none" items where no tool call passes).
+  - Added strict holdout split protection: refuses `evals/routing/test.json` unless `--final-test` is explicitly passed; logs test runs to `.ran` (timestamp, commit, dirty status, routing setting); refuses repeated final test runs for the same setting unless `--force` is provided (marking report `RERUN: NOT UNSEEN`).
+  - Added headline summary metrics: action pass rate, no-tool pass rate, median and p95 tools offered, median prompt size, latency, retry count, and off-route call count, along with a per-phrase results table.
+- **Evaluation Runner Isolation (`evals/runner.py`, `evals/__main__.py`, `evals/report.py`)**:
+  - Eval runner forces `TOOL_ROUTING="0"` by default in `_isolated_eval_environment()`, ensuring standard evaluation suites run deterministically with all tools offered.
+  - Added `--routing` CLI flag to `evals/__main__.py` to opt into routing during evaluation runs, reporting routing status in markdown report headers and metadata.
+- **Documentation & Test Checklist (`docs/TEST_CHECKLIST.md`, `evals/SPLITS.md`, `README.md`, `docs/THREAT_MODEL.md`)**:
+  - Added `docs/TEST_CHECKLIST.md` covering live verification for v2.5 voice, v2.6 reminders, v2.7 routing, browser 6-step test, and Wi-Fi off real offline execution.
+  - Updated `evals/SPLITS.md` with routing split governance and schema documentation.
+
+---
+
+## [2.6.0] - 2026-10-25
+
+### Added & Enhanced
+- **Reminders and Timers Engine (`reminders/store.py`, `reminders/timeparse.py`, `reminders/scheduler.py`)**:
+  - `ReminderStore`: SQLite-backed store using parameterized SQL, one connection per operation, and safe automatic recreation if the database file is corrupted. Validates reminder text to 1–100 characters (collapsing whitespace, stripping `< > `` and control characters), enforces due time boundaries (5 seconds to 7 days ahead), caps active items at 20 (`ReminderLimit`), and limits snoozes to 3.
+  - `timeparse.py`: Pure time parsing with injectable local `now`. Supports relative intervals in seconds, minutes, and hours, word numbers from "one" to "twenty", integer quantities up to 999, colloquial phrases ("an hour", "half an hour", "a minute"), and clock expressions (12-hour with am/pm, 24-hour, "tomorrow at ...").
+  - `ReminderScheduler`: Pure polling scheduler fetching due items, marking them "fired", and invoking `on_due` callbacks safely without repeating failing items. Detects and reports items missed while the application was closed.
+- **Reminder Tools & Safety Gating (`tools/reminder_tools.py`)**:
+  - Implemented `set_reminder` (`CONFIRM`), `set_timer` (`CONFIRM`), `list_reminders` (`SAFE`), `cancel_reminder` (`CONFIRM`), and `cancel_all_reminders` (`CONFIRM`) with trigger-first docstrings and prechecks.
+  - Strict human-in-the-loop gating: setting or modifying reminders requires explicit user consent (`CONFIRM`), displaying full arguments so users verify the text and time before creation.
+  - Gated under `REMINDERS_ENABLED` setting (default True; forced to 0 by default in eval suite and intent probe).
+- **Natural Language Shortcuts & Command Chain Isolation (`core/shortcuts.py`, `core/chains.py`)**:
+  - Deterministic exact-match shortcuts for setting reminders/timers, querying active items, and cancelling. Supports polite conversational prefixes ("please", "can you", "hey").
+  - Strict chain parser isolation: messages matching reminder/timer patterns are never split into chains, and chains containing reminder fragments return None.
+- **Desktop UI Notifications & Tab (`ui/app.py`)**:
+  - `ReminderToast`: Non-modal, `-topmost`, `takefocus=0` notification popup with "Dismiss" and "Snooze 5 min" buttons. Auto-destroys after 60 seconds and never steals keyboard focus or interrupts typing in the main window.
+  - Concurrent toast limit: displays up to 3 toasts simultaneously; extra or dialog-overlapped reminders fallback to chat line notifications.
+  - Windows bell and optional TTS speech synthesis when "Speak replies" is enabled (never while microphone is recording).
+  - "Reminders" tab displaying active items with "Cancel" (confirmation dialog) and "Refresh" buttons. Status bar displays soonest upcoming reminder (`Next: <text> in <mm:ss>`).
+- **Terminal Polling (`main.py`)**:
+  - Background daemon thread running `tick()` every 2 seconds, displaying reminders cleanly (`[reminder] <text>`) without interrupting active user input prompts.
+- **Privacy & Telemetry Isolation (`core/agent.py`, `core/diagnostics.py`)**:
+  - Reminder text is treated as plain text only and never reaches LLM provider prompts, system prompts, or conversational history; history messages record only `Set a reminder for <time>.`.
+  - Diagnostics section `=== REMINDERS ===` outputs status counts and next due time, strictly omitting reminder text.
+
+---
+
+## [2.5.0] - 2026-10-25
+
+### Added & Enhanced
+- **Click-to-Talk Voice in Desktop Window (`ui/app.py`, `ui/voice_controller.py`, `ui/controller.py`)**:
+  - Implemented `VoiceUiController`: thread-safe controller managing audio capture, faster-whisper STT transcription, and speech playback in the desktop GUI without importing tkinter.
+  - Added microphone toggle button (`Mic` or `mock voice`) with hover tooltip, 30-second recording cap, and keyboard shortcut (`Ctrl+M`).
+  - Added visual voice status bar with rate-limited audio level meter (max 10 Hz, 0.0-1.0 RMS) and live status (`Listening...`, `Transcribing...`, `Speaking...`).
+  - Added optional spoken replies checkbox (`Speak replies`), disabled by default, with browser page title stripping (e.g. from `Opened result <n>: <title>`) and 500-character speech cap.
+  - Non-blocking speech synthesis via background process (`SubprocessSpeaker`) and UI timer polling every 200 ms.
+  - Safe error handling mapping `AudioError` and `TranscriptionError` to user-friendly messages without stack traces.
+  - Audio arrays are kept in memory only and immediately discarded without writing to disk or logging.
+  - Voice hardware and package detection: gracefully disables the microphone button with informative tooltip when hardware or packages (`sounddevice`, `faster-whisper`) are missing.
+  - Security safeguards: voice input is strictly routed as typed user text with `source="voice"`; modal confirmation and plan dialogs accept mouse and keyboard only (never voice); opening any dialog immediately cancels recording and speech; voice input is blocked while busy or speaking.
+  - Centralized Stop button cancels running tasks, active recordings, transcription, and ongoing speech playback.
+- **Voice Subsystem Telemetry (`core/diagnostics.py`)**:
+  - Added `=== VOICE ===` telemetry section reporting microphone availability, speech model, speech language, speak replies status, last voice error, and last transcription duration, strictly omitting audio arrays and transcript data.
+
+---
+
 ## [2.4.0] - 2026-10-25
 
 ### Added & Enhanced

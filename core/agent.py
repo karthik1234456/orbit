@@ -1,6 +1,8 @@
 """Agent implementation managing conversational state, tool calling, permissions, guards, and audit logging."""
 
+from datetime import datetime
 import os
+import re
 import secrets
 import time
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Union
@@ -61,6 +63,12 @@ class Agent:
         sites: Optional[Mapping[str, Any]] = None,
         browser_controller: Optional[Any] = None,
         plan_callback: Optional[Callable[[list[str], list[str]], bool]] = None,
+        reminder_store: Optional[Any] = None,
+        clock: Optional[Callable[[], datetime]] = None,
+        reminders_enabled: Optional[bool] = None,
+        tool_routing: Optional[bool] = None,
+        routine_store: Optional[Any] = None,
+        routines_enabled: Optional[bool] = None,
     ):
         """Initialize agent with LLM provider, tool registry, permission policy, guards, and audit logger."""
         self.provider = provider
@@ -80,6 +88,14 @@ class Agent:
         self.session_state = session_state if session_state is not None else SessionState()
         self.browser_controller = browser_controller
         self.plan_callback = plan_callback
+        self.reminder_store = reminder_store
+        self.clock = clock
+        self.reminders_enabled = reminders_enabled
+        self.tool_routing = tool_routing
+        self.routine_store = routine_store
+        self.routines_enabled = routines_enabled
+        self.last_plan_steps: Optional[list[dict[str, Any]]] = None
+        self._routine_running: bool = False
 
         if allowed_apps is None:
             from config.apps import ALLOWED_APPS
@@ -114,6 +130,19 @@ class Agent:
         self.last_run: Optional[TaskRun] = None
         self._rejected_tools: set[str] = set()
 
+    def routines_enabled_check(self) -> bool:
+        """Check whether named routines are active."""
+        if self.routines_enabled is not None:
+            return bool(self.routines_enabled)
+        env_val = os.getenv("ROUTINES_ENABLED")
+        if env_val is not None:
+            v = env_val.strip().lower()
+            if v in ("0", "false", "no", "off"):
+                return False
+            if v in ("1", "true", "yes", "on"):
+                return True
+        return bool(getattr(settings, "ROUTINES_ENABLED", True))
+
     def shortcuts_enabled(self) -> bool:
         """Check whether deterministic command shortcuts are active."""
         if self.command_shortcuts is not None:
@@ -126,6 +155,19 @@ class Agent:
             if v in ("1", "true", "yes", "on"):
                 return True
         return bool(getattr(settings, "COMMAND_SHORTCUTS", True))
+
+    def reminders_enabled_check(self) -> bool:
+        """Check whether reminders and reminder shortcuts are active."""
+        if self.reminders_enabled is not None:
+            return bool(self.reminders_enabled)
+        env_val = os.getenv("REMINDERS_ENABLED")
+        if env_val is not None:
+            v = env_val.strip().lower()
+            if v in ("0", "false", "no", "off"):
+                return False
+            if v in ("1", "true", "yes", "on"):
+                return True
+        return bool(getattr(settings, "REMINDERS_ENABLED", True))
 
     def session_context_enabled(self) -> bool:
         """Check whether session context tracking is active."""
@@ -153,6 +195,19 @@ class Agent:
                 return True
         return bool(getattr(settings, "CHAINS_ENABLED", True))
 
+    def tool_routing_enabled(self) -> bool:
+        """Check whether optional tool routing is active."""
+        if self.tool_routing is not None:
+            return bool(self.tool_routing)
+        env_val = os.getenv("TOOL_ROUTING")
+        if env_val is not None:
+            v = env_val.strip().lower()
+            if v in ("0", "false", "no", "off"):
+                return False
+            if v in ("1", "true", "yes", "on"):
+                return True
+        return bool(getattr(settings, "TOOL_ROUTING", False))
+
     def _execute_single_tool(
         self,
         name: str,
@@ -167,6 +222,15 @@ class Agent:
 
         Returns: (stop_reason, status, outcome, result, hint, updated_tainted)
         """
+        if name in ("set_reminder", "set_timer") and isinstance(args, dict):
+            from reminders.store import sanitize_reminder_text
+            clean_args = dict(args)
+            if "text" in clean_args and isinstance(clean_args["text"], str):
+                clean_args["text"] = sanitize_reminder_text(clean_args["text"])
+            if "label" in clean_args and isinstance(clean_args["label"], str):
+                clean_args["label"] = sanitize_reminder_text(clean_args["label"])
+            args = clean_args
+
         step_index = len(run.steps) + 1
 
         # 1. Pre-execution guard check
@@ -452,6 +516,61 @@ class Agent:
     ) -> str:
         """Execute a ShortcutPlan (built-in or chain) through the standard tool pipeline."""
         plan_id = secrets.token_hex(4)
+        is_routine = getattr(plan, "source", "") == "routine"
+        routine_name = getattr(plan, "routine_name", "")
+        routine_sanitized = getattr(plan, "routine_sanitized_name", routine_name)
+
+        if is_routine:
+            if self._routine_running:
+                reply = "Only one routine can run at a time."
+                run.finish(RunStatus.FAILED, reply)
+                self.history.append({"role": "assistant", "content": reply})
+                if self.run_logger:
+                    self.run_logger.log(run)
+                self._emit_event({
+                    "type": "task_end",
+                    "status": RunStatus.FAILED.value,
+                    "tool": None,
+                    "index": 0,
+                })
+                if stream_cb:
+                    try:
+                        stream_cb(reply)
+                    except Exception:
+                        pass
+                return reply
+            self._routine_running = True
+
+        try:
+            return self._run_shortcut_plan_inner(
+                plan=plan,
+                run=run,
+                guard=guard,
+                cancel_event=cancel_event,
+                stream_cb=stream_cb,
+                plan_callback=plan_callback,
+                plan_id=plan_id,
+                is_routine=is_routine,
+                routine_name=routine_name,
+                routine_sanitized=routine_sanitized,
+            )
+        finally:
+            if is_routine:
+                self._routine_running = False
+
+    def _run_shortcut_plan_inner(
+        self,
+        plan: Any,
+        run: TaskRun,
+        guard: LoopGuard,
+        cancel_event: Optional[Any],
+        stream_cb: Optional[Callable[[str], None]],
+        plan_callback: Optional[Callable[[list[str], list[str]], bool]],
+        plan_id: str,
+        is_routine: bool,
+        routine_name: str,
+        routine_sanitized: str,
+    ) -> str:
         labels = [
             getattr(s, "label", None)
             or describe_step(
@@ -485,16 +604,20 @@ class Agent:
                     pass
             return reply
 
-        # 2. Check PLAN_PREVIEW setting and evaluate preview gate
-        mode = getattr(settings, "PLAN_PREVIEW", "auto")
-        if mode == "never":
-            preview_required = False
-        elif mode == "always":
-            preview_required = len(plan.steps) >= 2
-        elif mode == "auto":
-            preview_required = getattr(plan, "source", "") == "chain" and len(plan.steps) >= 3
+        # 2. Check preview setting and evaluate preview gate
+        if is_routine:
+            routine_mode = getattr(settings, "ROUTINE_PREVIEW", "always")
+            preview_required = (routine_mode != "never")
         else:
-            preview_required = False
+            mode = getattr(settings, "PLAN_PREVIEW", "auto")
+            if mode == "never":
+                preview_required = False
+            elif mode == "always":
+                preview_required = len(plan.steps) >= 2
+            elif mode == "auto":
+                preview_required = getattr(plan, "source", "") == "chain" and len(plan.steps) >= 3
+            else:
+                preview_required = False
 
         if preview_required:
             permissions: list[str] = []
@@ -510,7 +633,11 @@ class Agent:
                         permissions.append("asks for approval")
 
             if plan_callback is None:
-                reply = "I need your approval for this plan, but no approval screen is available."
+                reply = (
+                    "I need your approval for this routine, but no approval screen is available."
+                    if is_routine
+                    else "I need your approval for this plan, but no approval screen is available."
+                )
                 run.finish(RunStatus.COMPLETED, reply)
                 run.plan = {"id": plan_id, "source": getattr(plan, "source", "chain"), "steps": [], "outcome": "denied"}
                 self._emit_event({"type": "plan_start", "id": plan_id, "labels": labels})
@@ -532,7 +659,13 @@ class Agent:
                 return reply
 
             try:
-                approved = bool(plan_callback(labels, permissions))
+                if is_routine:
+                    try:
+                        approved = bool(plan_callback(labels, permissions, kind="routine", name=routine_name))
+                    except TypeError:
+                        approved = bool(plan_callback(labels, permissions))
+                else:
+                    approved = bool(plan_callback(labels, permissions))
             except Exception:
                 approved = False
 
@@ -745,9 +878,15 @@ class Agent:
                             extra=step_extra,
                         )
             else:
+                exec_args = dict(step_args)
+                if tool_name == "open_website" and "site" in exec_args and "url" not in exec_args:
+                    site_key = exec_args.get("site", "")
+                    site_info = self.sites.get(site_key, {}) if self.sites else {}
+                    exec_args["url"] = site_info.get("url", "")
+
                 s_stop_reason, status, outcome, result, hint, tainted = self._execute_single_tool(
                     tool_name,
-                    step_args,
+                    exec_args,
                     guard,
                     run,
                     tainted,
@@ -828,7 +967,46 @@ class Agent:
             "outcome": final_outcome,
         }
 
-        if getattr(plan, "source", "") == "builtin":
+        if is_routine:
+            if failed_step_idx is None:
+                reply = format_plan_reply(executed_steps, stopped_at=None, stop_reason="", redact=False)
+                history_reply = f"Ran routine {routine_name}."
+                run.finish(RunStatus.COMPLETED, reply)
+                if self.routine_store:
+                    self.routine_store.mark_run(routine_sanitized)
+            else:
+                reply = format_plan_reply(executed_steps, stopped_at=failed_step_idx, stop_reason=failed_reason, redact=False)
+                history_reply = format_plan_reply(executed_steps, stopped_at=failed_step_idx, stop_reason=failed_reason, redact=True)
+                run.finish(stop_reason if stop_reason is not None else RunStatus.FAILED, reply)
+
+            if self.audit:
+                audit_args = {
+                    "name": routine_sanitized,
+                    "step_count": len(plan.steps),
+                    "plan_id": plan_id,
+                }
+                try:
+                    self.audit.log(
+                        tool="routine",
+                        args=audit_args,
+                        decision="routine_run",
+                        outcome=final_outcome,
+                        result=history_reply,
+                        tainted=tainted,
+                        source=getattr(run, "source", "typed"),
+                    )
+                except TypeError:
+                    self.audit.log(
+                        tool="routine",
+                        args=audit_args,
+                        decision="routine_run",
+                        outcome=final_outcome,
+                        result=history_reply,
+                    )
+            run.plan["decision"] = "routine_run"
+            run.plan["routine_name"] = routine_sanitized
+
+        elif getattr(plan, "source", "") == "builtin":
             site_display = {
                 "youtube": "YouTube",
                 "google": "Google",
@@ -900,6 +1078,12 @@ class Agent:
             history_reply = format_plan_reply(executed_steps, stopped_at=failed_step_idx, stop_reason=failed_reason, redact=True)
             run.finish(RunStatus.COMPLETED if failed_step_idx is None else (stop_reason if stop_reason is not None else RunStatus.FAILED), reply)
 
+        if getattr(plan, "source", "") in ("builtin", "chain"):
+            self.last_plan_steps = [
+                {"tool": getattr(s, "tool", getattr(s, "name", "")), "args": dict(getattr(s, "args", {}))}
+                for s in plan.steps
+            ]
+
         if stream_cb:
             try:
                 stream_cb(reply)
@@ -915,6 +1099,334 @@ class Agent:
             "tool": None,
             "index": len(run.steps),
         })
+        return reply
+
+    def _handle_routine_action(
+        self,
+        spec: Any,
+        run: TaskRun,
+        guard: LoopGuard,
+        cancel_event: Optional[Any],
+        stream_cb: Optional[Callable[[str], None]],
+        plan_callback: Optional[Callable[..., bool]] = None,
+    ) -> str:
+        """Handle a routine management action (create, save_last_plan, list, show, delete, run)."""
+        action = spec.action
+
+        if action == "list":
+            routines = self.routine_store.list() if self.routine_store else []
+            if not routines:
+                reply = "No routines saved yet. Try 'create a routine morning: open notepad'."
+            else:
+                lines = [f"Routines ({len(routines)}):"]
+                for r in routines:
+                    step_word = "step" if r.step_count == 1 else "steps"
+                    lines.append(f"- {r.display_name} ({r.step_count} {step_word})")
+                reply = "\n".join(lines)
+            run.finish(RunStatus.COMPLETED, reply)
+            self.history.append({"role": "assistant", "content": reply})
+            if self.run_logger:
+                self.run_logger.log(run)
+            self._emit_event({"type": "task_end", "status": RunStatus.COMPLETED.value, "tool": None, "index": 0})
+            if stream_cb:
+                try:
+                    stream_cb(reply)
+                except Exception:
+                    pass
+            return reply
+
+        if action == "show":
+            routine = self.routine_store.get(spec.name) if self.routine_store else None
+            if routine is None:
+                reply = f"Routine '{spec.display_name}' not found."
+            else:
+                step_word = "step" if routine.step_count == 1 else "steps"
+                lines = [f"Routine '{routine.display_name}' ({routine.step_count} {step_word}):"]
+                for idx, s in enumerate(routine.steps, 1):
+                    label = describe_step(s.get("tool", ""), s.get("args", {}))
+                    lines.append(f"{idx}. {label}")
+                reply = "\n".join(lines)
+            run.finish(RunStatus.COMPLETED, reply)
+            self.history.append({"role": "assistant", "content": reply})
+            if self.run_logger:
+                self.run_logger.log(run)
+            self._emit_event({"type": "task_end", "status": RunStatus.COMPLETED.value, "tool": None, "index": 0})
+            if stream_cb:
+                try:
+                    stream_cb(reply)
+                except Exception:
+                    pass
+            return reply
+
+        if action == "delete":
+            routine = self.routine_store.get(spec.name) if self.routine_store else None
+            if routine is None:
+                reply = f"Routine '{spec.display_name}' not found."
+                run.finish(RunStatus.COMPLETED, reply)
+                self.history.append({"role": "assistant", "content": reply})
+                if self.run_logger:
+                    self.run_logger.log(run)
+                self._emit_event({"type": "task_end", "status": RunStatus.COMPLETED.value, "tool": None, "index": 0})
+                if stream_cb:
+                    try:
+                        stream_cb(reply)
+                    except Exception:
+                        pass
+                return reply
+
+            approved = self._ask_confirmation(
+                "delete_routine",
+                {"name": spec.name},
+                warning=f"Delete routine '{spec.display_name}'?",
+            )
+            plan_id = secrets.token_hex(4)
+            if approved:
+                self.routine_store.delete(spec.name)
+                reply = f"Deleted routine '{spec.display_name}'."
+                history_reply = f"Deleted routine {spec.name}."
+                outcome = "success"
+                status = RunStatus.COMPLETED
+            else:
+                reply = "Okay, I didn't delete that."
+                history_reply = reply
+                outcome = "denied"
+                status = RunStatus.COMPLETED
+
+            if self.audit:
+                try:
+                    self.audit.log(
+                        tool="routine",
+                        args={"name": spec.name, "step_count": routine.step_count, "plan_id": plan_id},
+                        decision="routine_delete",
+                        outcome=outcome,
+                        result=reply,
+                        source=getattr(run, "source", "typed"),
+                    )
+                except TypeError:
+                    self.audit.log(
+                        tool="routine",
+                        args={"name": spec.name, "step_count": routine.step_count, "plan_id": plan_id},
+                        decision="routine_delete",
+                        outcome=outcome,
+                        result=reply,
+                    )
+
+            run.add_step(
+                tool="delete_routine",
+                args={"name": spec.name},
+                status="success" if approved else "denied",
+                result=reply,
+                decision="routine_delete",
+            )
+            run.finish(status, reply)
+            self.history.append({"role": "assistant", "content": history_reply})
+            if self.run_logger:
+                self.run_logger.log(run)
+            self._emit_event({"type": "task_end", "status": status.value, "tool": None, "index": 1})
+            if stream_cb:
+                try:
+                    stream_cb(reply)
+                except Exception:
+                    pass
+            return reply
+
+        if action == "save_last_plan":
+            if not self.last_plan_steps:
+                reply = "There is no recent plan to save as a routine."
+                run.finish(RunStatus.COMPLETED, reply)
+                self.history.append({"role": "assistant", "content": reply})
+                if self.run_logger:
+                    self.run_logger.log(run)
+                self._emit_event({"type": "task_end", "status": RunStatus.COMPLETED.value, "tool": None, "index": 0})
+                if stream_cb:
+                    try:
+                        stream_cb(reply)
+                    except Exception:
+                        pass
+                return reply
+
+            from routines.validate import RoutineValidationError, validate_routine_steps
+            try:
+                steps_to_save = validate_routine_steps(
+                    self.last_plan_steps,
+                    allowed_apps=self.allowed_apps,
+                    sites=self.sites,
+                    state=self.session_state,
+                )
+            except RoutineValidationError as e:
+                reply = f"Cannot save last plan as routine: {e}"
+                run.finish(RunStatus.COMPLETED, reply)
+                self.history.append({"role": "assistant", "content": reply})
+                if self.run_logger:
+                    self.run_logger.log(run)
+                self._emit_event({"type": "task_end", "status": RunStatus.COMPLETED.value, "tool": None, "index": 0})
+                if stream_cb:
+                    try:
+                        stream_cb(reply)
+                    except Exception:
+                        pass
+                return reply
+        elif action == "create":
+            steps_to_save = spec.steps
+        elif action == "run":
+            routine = self.routine_store.get(spec.name) if self.routine_store else None
+            if routine is None:
+                reply = f"Routine '{spec.display_name}' not found."
+                run.finish(RunStatus.COMPLETED, reply)
+                self.history.append({"role": "assistant", "content": reply})
+                if self.run_logger:
+                    self.run_logger.log(run)
+                self._emit_event({"type": "task_end", "status": RunStatus.COMPLETED.value, "tool": None, "index": 0})
+                if stream_cb:
+                    try:
+                        stream_cb(reply)
+                    except Exception:
+                        pass
+                return reply
+
+            from routines.validate import RoutineValidationError, validate_routine_steps
+            try:
+                validated_steps = validate_routine_steps(
+                    routine.steps,
+                    allowed_apps=self.allowed_apps,
+                    sites=self.sites,
+                    state=self.session_state,
+                )
+            except RoutineValidationError as e:
+                reply = f"Routine '{routine.display_name}' cannot be run: {e}"
+                run.finish(RunStatus.FAILED, reply)
+                self.history.append({"role": "assistant", "content": reply})
+                if self.run_logger:
+                    self.run_logger.log(run)
+                self._emit_event({"type": "task_end", "status": RunStatus.FAILED.value, "tool": None, "index": 0})
+                if stream_cb:
+                    try:
+                        stream_cb(reply)
+                    except Exception:
+                        pass
+                return reply
+
+            from core.chains import PlanStep
+            from core.shortcuts import ShortcutPlan
+            plan_steps = [
+                PlanStep(
+                    tool=s["tool"],
+                    args=s["args"],
+                    label=describe_step(s["tool"], s["args"]),
+                )
+                for s in validated_steps
+            ]
+            plan = ShortcutPlan(steps=plan_steps, source="routine")
+            plan.routine_name = routine.display_name
+            plan.routine_sanitized_name = routine.name
+            effective_cb = plan_callback if plan_callback is not None else self.plan_callback
+            return self._run_shortcut_plan(
+                plan,
+                run,
+                guard,
+                cancel_event,
+                stream_cb,
+                plan_callback=effective_cb,
+            )
+        else:
+            return ""
+
+        # Save routine flow (for create and save_last_plan)
+        labels = [describe_step(s.get("tool", ""), s.get("args", {})) for s in steps_to_save]
+        permissions = []
+        for s in steps_to_save:
+            tool_name = s.get("tool", "")
+            if tool_name == "wait":
+                permissions.append("SAFE")
+            else:
+                tool_obj = self.registry.get(tool_name) if self.registry else None
+                if tool_obj and tool_obj.permission == PermissionLevel.SAFE:
+                    permissions.append("SAFE")
+                else:
+                    permissions.append("asks for approval")
+
+        effective_cb = plan_callback if plan_callback is not None else self.plan_callback
+        if effective_cb is None:
+            approved = False
+        else:
+            try:
+                approved = bool(effective_cb(labels, permissions, kind="save_routine", name=spec.display_name))
+            except TypeError:
+                approved = bool(effective_cb(labels, permissions))
+
+        plan_id = secrets.token_hex(4)
+        if not approved:
+            reply = "Okay, I didn't save that."
+            history_reply = reply
+            outcome = "denied"
+            status = RunStatus.COMPLETED
+            if self.audit:
+                try:
+                    self.audit.log(
+                        tool="routine",
+                        args={"name": spec.name, "step_count": len(steps_to_save), "plan_id": plan_id},
+                        decision="routine_save",
+                        outcome="denied",
+                        result=reply,
+                        source=getattr(run, "source", "typed"),
+                    )
+                except TypeError:
+                    self.audit.log(
+                        tool="routine",
+                        args={"name": spec.name, "step_count": len(steps_to_save), "plan_id": plan_id},
+                        decision="routine_save",
+                        outcome="denied",
+                        result=reply,
+                    )
+        else:
+            from routines.store import RoutineLimit
+            try:
+                if self.routine_store:
+                    self.routine_store.save(display_name=spec.display_name, steps=steps_to_save, overwrite=True)
+                reply = f"Saved routine '{spec.display_name}'."
+                history_reply = f"Saved routine {spec.name}."
+                outcome = "success"
+                status = RunStatus.COMPLETED
+            except RoutineLimit as e:
+                reply = f"Could not save routine: {e}"
+                history_reply = reply
+                outcome = "failed"
+                status = RunStatus.FAILED
+            except Exception as e:
+                reply = f"Could not save routine: {e}"
+                history_reply = reply
+                outcome = "failed"
+                status = RunStatus.FAILED
+
+            if self.audit:
+                try:
+                    self.audit.log(
+                        tool="routine",
+                        args={"name": spec.name, "step_count": len(steps_to_save), "plan_id": plan_id},
+                        decision="routine_save",
+                        outcome=outcome,
+                        result=reply,
+                        source=getattr(run, "source", "typed"),
+                    )
+                except TypeError:
+                    self.audit.log(
+                        tool="routine",
+                        args={"name": spec.name, "step_count": len(steps_to_save), "plan_id": plan_id},
+                        decision="routine_save",
+                        outcome=outcome,
+                        result=reply,
+                    )
+
+        run.finish(status, reply)
+        self.history.append({"role": "assistant", "content": history_reply})
+        if self.run_logger:
+            self.run_logger.log(run)
+        self._emit_event({"type": "task_end", "status": status.value, "tool": None, "index": len(steps_to_save)})
+        if stream_cb:
+            try:
+                stream_cb(reply)
+            except Exception:
+                pass
         return reply
 
     def chat(
@@ -933,6 +1445,26 @@ class Agent:
 
         effective_on_delta = on_delta if getattr(settings, "STREAM_REPLIES", True) else None
         should_stop = cancel_event.is_set if cancel_event is not None else None
+
+        prior_tools: list[str] = []
+        if self.last_run is not None and getattr(self.last_run, "steps", None):
+            for step in self.last_run.steps:
+                tool_name = getattr(step, "tool", None) or (step.get("tool") if isinstance(step, dict) else None)
+                if tool_name and tool_name not in prior_tools:
+                    prior_tools.append(tool_name)
+        if not prior_tools:
+            for msg in reversed(self.history):
+                if msg.get("role") == "user":
+                    if prior_tools:
+                        break
+                elif msg.get("role") == "tool" and msg.get("name"):
+                    if msg["name"] not in prior_tools:
+                        prior_tools.append(msg["name"])
+                elif msg.get("role") == "assistant" and msg.get("tool_calls"):
+                    for tc in msg["tool_calls"]:
+                        tc_name = getattr(tc, "name", None) or (tc.get("name") if isinstance(tc, dict) else None)
+                        if tc_name and tc_name not in prior_tools:
+                            prior_tools.append(tc_name)
 
         self.last_tool_events.clear()
         self._rejected_tools.clear()
@@ -1115,6 +1647,27 @@ class Agent:
                 or (self.registry and (bool(self.registry.get("browser_click_result")) or bool(self.registry.get("browser_scroll"))))
             )
 
+            if self.routines_enabled_check():
+                from core.shortcuts import parse_routine_shortcut
+
+                routine_act = parse_routine_shortcut(
+                    user_text,
+                    allowed_apps=self.allowed_apps,
+                    sites=self.sites,
+                    state=self.session_state,
+                    browser_enabled=browser_enabled,
+                )
+                if routine_act is not None:
+                    effective_plan_cb = plan_callback if plan_callback is not None else self.plan_callback
+                    return self._handle_routine_action(
+                        routine_act,
+                        run=run,
+                        guard=guard,
+                        cancel_event=cancel_event,
+                        stream_cb=effective_on_delta or on_delta,
+                        plan_callback=effective_plan_cb,
+                    )
+
             from core.chains import has_explicit_sequencing_separator, parse_chain
 
             shortcut_spec = None
@@ -1133,6 +1686,8 @@ class Agent:
                         self.sites,
                         state=self.session_state,
                         browser_enabled=browser_enabled,
+                        reminders_enabled=self.reminders_enabled_check(),
+                        clock=self.clock,
                     )
             else:
                 shortcut_spec = parse_shortcut(
@@ -1141,6 +1696,8 @@ class Agent:
                     self.sites,
                     state=self.session_state,
                     browser_enabled=browser_enabled,
+                    reminders_enabled=self.reminders_enabled_check(),
+                    clock=self.clock,
                 )
                 if shortcut_spec is None and self.chains_enabled():
                     shortcut_spec = parse_chain(
@@ -1189,18 +1746,40 @@ class Agent:
                     tainted,
                     is_shortcut=True,
                 )
+                is_reminder_tool = shortcut_spec.name in (
+                    "set_reminder",
+                    "set_timer",
+                    "list_reminders",
+                    "cancel_reminder",
+                    "cancel_all_reminders",
+                )
+                history_reply = None
+
                 if stop_reason is not None:
                     reply = self._build_stop_message(stop_reason, run.steps, [shortcut_spec.name])
                     run.finish(stop_reason, reply)
                 elif status == "success":
-                    if shortcut_spec.name.startswith("browser_"):
+                    if is_reminder_tool:
+                        reply = result
+                        if shortcut_spec.name in ("set_reminder", "set_timer"):
+                            m_time = re.search(r"set for (\S+)", result)
+                            time_str = m_time.group(1) if m_time else "the scheduled time"
+                            history_msg = f"Set a reminder for {time_str}."
+                            self.history[-1] = {"role": "user", "content": history_msg}
+                            history_reply = history_msg
+                    elif shortcut_spec.name.startswith("browser_"):
                         reply = result
                     else:
                         target_name = getattr(shortcut_spec, "target_name", "") or shortcut_spec.name
                         reply = f"Opened {target_name}."
                     run.finish(RunStatus.COMPLETED, reply)
                 else:
-                    if (
+                    if is_reminder_tool:
+                        reply = result
+                        if shortcut_spec.name in ("set_reminder", "set_timer"):
+                            self.history[-1] = {"role": "user", "content": "Set a reminder."}
+                            history_reply = reply
+                    elif (
                         shortcut_spec.name.startswith("browser_")
                         and ("No videos found" in result or "0 results" in result or "couldn't find any videos" in result)
                     ):
@@ -1211,6 +1790,9 @@ class Agent:
                         reply = result
                     run.finish(RunStatus.COMPLETED, reply)
 
+                if history_reply is None:
+                    history_reply = reply
+
                 stream_cb = effective_on_delta or on_delta
                 if stream_cb:
                     try:
@@ -1218,7 +1800,7 @@ class Agent:
                     except Exception:
                         pass
 
-                self.history.append({"role": "assistant", "content": reply})
+                self.history.append({"role": "assistant", "content": history_reply})
                 if self.run_logger:
                     self.run_logger.log(run)
                 self._emit_event({
@@ -1229,7 +1811,27 @@ class Agent:
                 })
                 return reply
 
-        tools = self.registry.list_tools() if self.registry else None
+        all_tools = self.registry.list_tools() if self.registry else []
+        routing_on = self.tool_routing_enabled()
+
+        if routing_on and all_tools:
+            from core.routing import offered_tools, select_groups
+
+            routing_groups = select_groups(user_text, prior_tools=prior_tools, state=self.session_state)
+            tools = offered_tools(all_tools, routing_groups)
+        else:
+            routing_groups = set()
+            tools = all_tools
+
+        offered_names: set[str] = {t.name for t in tools} if tools else set()
+        routing_retried = False
+
+        run.routing_on = routing_on
+        run.routing_groups = sorted(list(routing_groups))
+        run.tools_offered_count = len(tools) if tools else 0
+        run.tools_registered_count = len(all_tools)
+        run.off_route_call = 0
+        run.routing_retry = False
 
         try:
             for _ in range(self.max_steps):
@@ -1248,12 +1850,15 @@ class Agent:
                 try:
                     response = self.provider.generate(
                         messages_to_send,
-                        tools=tools,
+                        tools=tools or None,
                         on_delta=effective_on_delta,
                         should_stop=should_stop,
                     )
                 except TypeError:
-                    response = self.provider.generate(messages_to_send, tools=tools)
+                    response = self.provider.generate(messages_to_send, tools=tools or None)
+
+                if getattr(response, "prompt_tokens", None) is not None:
+                    run.prompt_tokens = response.prompt_tokens
 
                 if getattr(response, "interrupted", False):
                     reply = response.text if (response.text and response.text.strip()) else "(interrupted)"
@@ -1386,6 +1991,53 @@ class Agent:
                             response = retry_response
 
                 if not response.tool_calls:
+                    # Miss recovery: retry ONCE with full tool list if routing narrowed tools and model expresses inability
+                    from core.routing import matches_inability
+
+                    if (
+                        routing_on
+                        and not routing_retried
+                        and len(tools or []) < len(all_tools)
+                        and len(run.steps) == 0
+                        and matches_inability(reply)
+                    ):
+                        routing_retried = True
+                        run.routing_retry = True
+                        tools = all_tools
+                        offered_names = {t.name for t in tools}
+
+                        run.llm_calls += 1
+                        try:
+                            response = self.provider.generate(
+                                messages_to_send,
+                                tools=tools or None,
+                                on_delta=effective_on_delta,
+                                should_stop=should_stop,
+                            )
+                        except TypeError:
+                            response = self.provider.generate(messages_to_send, tools=tools or None)
+
+                        if getattr(response, "prompt_tokens", None) is not None:
+                            run.prompt_tokens = response.prompt_tokens
+
+                        if getattr(response, "interrupted", False):
+                            reply = response.text if (response.text and response.text.strip()) else "(interrupted)"
+                            self.history.append({"role": "assistant", "content": reply})
+                            run.finish(RunStatus.CANCELLED, reply)
+                            if self.run_logger:
+                                self.run_logger.log(run)
+                            self._emit_event({
+                                "type": "task_end",
+                                "status": RunStatus.CANCELLED.value,
+                                "tool": None,
+                                "index": len(run.steps),
+                            })
+                            return reply
+
+                        if not response.tool_calls:
+                            reply = response.text or ""
+
+                if not response.tool_calls:
                     # Verify action claims against tool executions in this turn
                     try:
                         from core.claims import find_action_claims, unverified_claims
@@ -1480,6 +2132,11 @@ class Agent:
                         })
                         return cancel_reply
 
+                    extra_dict: dict[str, Any] = {}
+                    if routing_on and tc.name not in offered_names:
+                        run.off_route_call += 1
+                        extra_dict["off_route_call"] = True
+
                     stop_reason, status, outcome, result, hint, tainted = self._execute_single_tool(
                         tc.name,
                         tc.args,
@@ -1487,6 +2144,7 @@ class Agent:
                         run,
                         tainted,
                         is_shortcut=False,
+                        extra=extra_dict if extra_dict else None,
                     )
                     if stop_reason is not None:
                         # Append unexecuted tool messages for all remaining calls to preserve history consistency

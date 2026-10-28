@@ -143,6 +143,8 @@ class BrowserController:
         return max(0.0, rem)
 
     def _is_recoverable_launch_error(self, exc: Exception) -> bool:
+        import re
+
         msg = str(exc).lower()
         if isinstance(exc, (BrowserTimeout, TimeoutError)):
             return True
@@ -153,46 +155,43 @@ class BrowserController:
                 "user data directory",
                 "already in use",
                 "singleton",
-                "lock",
                 "target closed",
                 "closed",
                 "timeout",
             )
-        ):
+        ) or bool(re.search(r"\block", msg)):
             return True
         return False
 
     def _terminate_profile_processes(self, profile_dir: Optional[str] = None) -> list[int]:
         from pathlib import Path
-        import psutil
         from config import settings
+        from core.procs import iter_processes, terminate_gently
 
         pdir = profile_dir or self.profile_dir or getattr(settings, "BROWSER_PROFILE_DIR", "data/browser_profile")
         resolved_profile = str(Path(pdir).resolve()).lower()
 
-        matched_procs = []
-        for proc in psutil.process_iter(["pid", "name", "cmdline"]):
-            try:
-                cmdline = proc.info.get("cmdline") or []
-                cmdline_str = " ".join(cmdline).lower()
-                if resolved_profile in cmdline_str:
-                    matched_procs.append(proc)
-            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                continue
+        terminated_pids: list[int] = []
+        matched_procs: list[Any] = []
+        try:
+            for proc in iter_processes(
+                name_contains=("chrome", "chromium", "msedge"),
+                cmdline_contains=resolved_profile,
+            ):
+                matched_procs.append(proc)
+                terminate_gently(proc)
+                pid = getattr(proc, "pid", None)
+                if pid is not None:
+                    terminated_pids.append(pid)
+            if matched_procs:
+                try:
+                    import psutil
 
-        terminated_pids = []
-        for proc in matched_procs:
-            try:
-                proc.terminate()
-                terminated_pids.append(proc.pid)
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-
-        if matched_procs:
-            try:
-                psutil.wait_procs(matched_procs, timeout=3.0)
-            except Exception:
-                pass
+                    psutil.wait_procs(matched_procs, timeout=3.0)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
         return terminated_pids
 

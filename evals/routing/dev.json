@@ -1,0 +1,222 @@
+[
+  {
+    "id": "route-dev-001",
+    "text": "how much ram is this machine eating right now",
+    "accept": ["system_info"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-dev-002",
+    "text": "what does twenty five percent off an eighty dollar jacket come out to",
+    "accept": ["calculate"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-dev-003",
+    "text": "is it past noon yet my wall clock stopped",
+    "accept": ["get_current_time"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-dev-004",
+    "text": "make a new dir called client-pitches under documents",
+    "accept": ["create_folder"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-dev-005",
+    "text": "trow that draft invoice over to the archived folder",
+    "accept": ["move_file"],
+    "tag": "typo"
+  },
+  {
+    "id": "route-dev-006",
+    "text": "drop a quick jot down about meeting dr aris on tuesday",
+    "accept": ["write_note"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-dev-007",
+    "text": "fire up whatsapp so i can message sarah",
+    "accept": ["open_application"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-dev-008",
+    "text": "kill the notepad window i am done with it",
+    "accept": ["close_application"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-dev-009",
+    "text": "launch vscode on the orbit repo",
+    "accept": ["open_in_vscode", "open_application", "open_workspace_folder"],
+    "tag": "ambiguous"
+  },
+  {
+    "id": "route-dev-010",
+    "text": "is there anything on the news about the election recount today",
+    "accept": ["search_web"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-dev-011",
+    "text": "look up cold brew recipes on youtube",
+    "accept": ["search_site", "search_web"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-dev-012",
+    "text": "bring up my gmail inbox real quick",
+    "accept": ["open_website"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-dev-013",
+    "text": "scroll down a bit more so i can read the rest of the article",
+    "accept": ["browser_scroll"],
+    "tag": "followup",
+    "prior_tools": ["browser_read_page"]
+  },
+  {
+    "id": "route-dev-014",
+    "text": "click the second link on that results page",
+    "accept": ["browser_click_result"],
+    "tag": "followup",
+    "prior_tools": ["search_site"]
+  },
+  {
+    "id": "route-dev-015",
+    "text": "shut down the browser session now",
+    "accept": ["browser_close"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-dev-016",
+    "text": "keep in mind that my apartment buzzer code is nine four zero two",
+    "accept": ["remember_fact"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-dev-017",
+    "text": "do yu remeber what brand of coffee beans i told you i buy",
+    "accept": ["recall_memories"],
+    "tag": "typo"
+  },
+  {
+    "id": "route-dev-018",
+    "text": "scratch what i said earlier about my dog's vet appointment date",
+    "accept": ["forget_memory"],
+    "tag": "followup",
+    "prior_tools": ["remember_fact"]
+  },
+  {
+    "id": "route-dev-019",
+    "text": "scan through the pdfs in my downloads so we can query them",
+    "accept": ["index_documents"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-dev-020",
+    "text": "pull up my stuff from last week's notes folder about the quarterly budget",
+    "accept": ["search_documents", "read_file"],
+    "tag": "ambiguous"
+  },
+  {
+    "id": "route-dev-021",
+    "text": "what docs do you currently have indexed in the knowledge base",
+    "accept": ["list_documents"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-dev-022",
+    "text": "ping me in twenty mins when the laundry cycle is done",
+    "accept": ["set_timer"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-dev-023",
+    "text": "show whatever alerts or reminders i have pending for this afternoon",
+    "accept": ["list_reminders"],
+    "tag": "paraphrase"
+  },
+  {
+    "id": "route-dev-024",
+    "text": "nevermind scratch that reminder about picking up dry cleaning",
+    "accept": ["cancel_reminder"],
+    "tag": "followup",
+    "prior_tools": ["set_reminder"]
+  },
+  {
+    "id": "route-dev-025",
+    "text": "why is the sky orange during sunset",
+    "accept": [],
+    "tag": "chat"
+  },
+  {
+    "id": "route-dev-026",
+    "text": "how are you holding up today",
+    "accept": [],
+    "tag": "chat"
+  },
+  {
+    "id": "route-dev-027",
+    "text": "should i use a standing desk or just stick to my regular chair",
+    "accept": [],
+    "tag": "chat"
+  },
+  {
+    "id": "route-dev-028",
+    "text": "my memory is terrible lately i keep forgetting where i put my keys",
+    "accept": [],
+    "tag": "chat"
+  },
+  {
+    "id": "route-dev-029",
+    "text": "just a gentle reminder to myself that life is short and i need to breathe",
+    "accept": [],
+    "tag": "chat"
+  },
+  {
+    "id": "route-dev-030",
+    "text": "what does the word document mean in legal terms",
+    "accept": [],
+    "tag": "chat"
+  },
+  {
+    "id": "route-dev-031",
+    "text": "time really flies when you are having fun doesn't it",
+    "accept": [],
+    "tag": "chat"
+  },
+  {
+    "id": "route-dev-032",
+    "text": "explain how photosynthesis works in simple words",
+    "accept": [],
+    "tag": "chat"
+  },
+  {
+    "id": "route-dev-033",
+    "text": "what are some good tips for sleeping better at night",
+    "accept": [],
+    "tag": "chat"
+  },
+  {
+    "id": "route-dev-034",
+    "text": "tell me a quick pun to cheer me up",
+    "accept": [],
+    "tag": "chat"
+  },
+  {
+    "id": "route-dev-035",
+    "text": "waht do you think is the best way to learn guitar",
+    "accept": [],
+    "tag": "typo"
+  },
+  {
+    "id": "route-dev-036",
+    "text": "my immune system has been fighting off a cold all weekend",
+    "accept": [],
+    "tag": "chat"
+  }
+]

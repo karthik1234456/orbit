@@ -7,8 +7,10 @@ opening workspace folders, and performing site-specific searches.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
+import os
 import re
-from typing import Any, Mapping, Optional, Union
+from typing import Any, Callable, Mapping, Optional, Union
 
 _DISALLOWED_CHARS = set(";&|`$><")
 
@@ -254,12 +256,237 @@ class ShortcutPlan:
             ]
 
 
+@dataclass
+class RoutineAction:
+    """Action requested via routine shortcut."""
+
+    action: str  # "create", "save_last_plan", "run", "list", "show", "delete"
+    name: str = ""
+    display_name: str = ""
+    steps: list[dict[str, Any]] = field(default_factory=list)
+
+
+_FORBIDDEN_REMINDER_CHARS = set(";&|`$><")
+
+
+def is_reminder_or_timer_pattern(text: str) -> bool:
+    """Return True if text begins with a reminder or timer pattern."""
+    if not text or not isinstance(text, str):
+        return False
+    cleaned = text.strip()
+    while True:
+        prev = cleaned
+        cleaned = re.sub(
+            r"^(?:hey|hi|ok|okay|now|just|please|can\s+you|could\s+you|can\s+u|would\s+you)\b[,:\s]*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
+        if cleaned == prev:
+            break
+
+    pat = re.compile(
+        r"^(?:"
+        r"remind\s+me\b|"
+        r"set\s+a\s+reminder\b|"
+        r"set\s+a\s+timer\b|"
+        r"set\s+a\s+.+?\s+timer\b|"
+        r"start\s+a\s+.+?\s+timer\b|"
+        r"timer\b|"
+        r"(?:list|show)\s+(?:my\s+)?reminders\b|"
+        r"what\s+(?:reminders|timers)\s+do\s+i\s+have\b|"
+        r"cancel\s+(?:(?:all\s+)?(?:reminders|timers)|reminder|timer)\b"
+        r")",
+        re.IGNORECASE,
+    )
+    return bool(pat.match(cleaned))
+
+
+def parse_reminder_shortcut(
+    cleaned: str,
+    clock: Optional[Callable[[], datetime]] = None,
+) -> Optional[ToolCallSpec]:
+    """Parse cleaned user text into reminder ToolCallSpec if matching strict reminder/timer patterns."""
+    from reminders.store import sanitize_reminder_text
+    from reminders.timeparse import parse_clock, parse_relative
+
+    ref_now = clock() if clock else datetime.now().astimezone()
+
+    # 1. "remind me in <n> <unit> to <text>"
+    m1 = re.match(r"^remind\s+me\s+in\s+(.+?)\s+to\s+(.+)$", cleaned, re.IGNORECASE)
+    if m1:
+        dur_str = m1.group(1).strip()
+        raw_text = m1.group(2).strip()
+        if any(ch in _FORBIDDEN_REMINDER_CHARS for ch in raw_text):
+            return None
+        if re.search(r"://|www\.|\b[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:/\S*)?", raw_text, re.IGNORECASE):
+            return None
+        td = parse_relative(dur_str)
+        if td is not None:
+            total_sec = td.total_seconds()
+            if 5.0 <= total_sec <= 7 * 86400:
+                clean_text = sanitize_reminder_text(raw_text)
+                if 1 <= len(clean_text) <= 100:
+                    minutes = total_sec / 60.0
+                    return ToolCallSpec(
+                        name="set_reminder",
+                        args={"text": clean_text, "minutes": round(minutes, 4)},
+                        target_name=clean_text,
+                    )
+        return None
+
+    # 2. "remind me to <text> in <n> <unit>"
+    m2 = re.match(r"^remind\s+me\s+to\s+(.+)$", cleaned, re.IGNORECASE)
+    if m2:
+        tail = m2.group(1).strip()
+        if any(ch in _FORBIDDEN_REMINDER_CHARS for ch in tail):
+            return None
+        if re.search(r"://|www\.|\b[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:/\S*)?", tail, re.IGNORECASE):
+            return None
+        parts = re.split(r"\s+in\s+", tail, flags=re.IGNORECASE)
+        if len(parts) >= 2:
+            for idx in range(len(parts) - 1, 0, -1):
+                cand_dur = " in ".join(parts[idx:])
+                td = parse_relative(cand_dur)
+                if td is not None:
+                    total_sec = td.total_seconds()
+                    if 5.0 <= total_sec <= 7 * 86400:
+                        cand_text = " in ".join(parts[:idx]).strip()
+                        clean_text = sanitize_reminder_text(cand_text)
+                        if 1 <= len(clean_text) <= 100:
+                            minutes = total_sec / 60.0
+                            return ToolCallSpec(
+                                name="set_reminder",
+                                args={"text": clean_text, "minutes": round(minutes, 4)},
+                                target_name=clean_text,
+                            )
+        return None
+
+    # 3. "remind me at <clock> to <text>"
+    m3 = re.match(r"^remind\s+me\s+at\s+(.+?)\s+to\s+(.+)$", cleaned, re.IGNORECASE)
+    if m3:
+        clock_str = m3.group(1).strip()
+        raw_text = m3.group(2).strip()
+        if any(ch in _FORBIDDEN_REMINDER_CHARS for ch in raw_text):
+            return None
+        if re.search(r"://|www\.|\b[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:/\S*)?", raw_text, re.IGNORECASE):
+            return None
+        target_dt = parse_clock(clock_str, now=ref_now)
+        if target_dt is not None:
+            delta_sec = (target_dt - ref_now).total_seconds()
+            if 5.0 <= delta_sec <= 7 * 86400:
+                clean_text = sanitize_reminder_text(raw_text)
+                if 1 <= len(clean_text) <= 100:
+                    at_str = target_dt.strftime("%H:%M")
+                    return ToolCallSpec(
+                        name="set_reminder",
+                        args={"text": clean_text, "at": at_str},
+                        target_name=clean_text,
+                    )
+        return None
+
+    # 4. "set a reminder for <clock> to <text>"
+    m4 = re.match(r"^set\s+a\s+reminder\s+for\s+(.+?)\s+to\s+(.+)$", cleaned, re.IGNORECASE)
+    if m4:
+        clock_str = m4.group(1).strip()
+        raw_text = m4.group(2).strip()
+        if any(ch in _FORBIDDEN_REMINDER_CHARS for ch in raw_text):
+            return None
+        if re.search(r"://|www\.|\b[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:/\S*)?", raw_text, re.IGNORECASE):
+            return None
+        target_dt = parse_clock(clock_str, now=ref_now)
+        if target_dt is not None:
+            delta_sec = (target_dt - ref_now).total_seconds()
+            if 5.0 <= delta_sec <= 7 * 86400:
+                clean_text = sanitize_reminder_text(raw_text)
+                if 1 <= len(clean_text) <= 100:
+                    at_str = target_dt.strftime("%H:%M")
+                    return ToolCallSpec(
+                        name="set_reminder",
+                        args={"text": clean_text, "at": at_str},
+                        target_name=clean_text,
+                    )
+        return None
+
+    # 5. Timers
+    timer_dur: Optional[str] = None
+    t1 = re.match(r"^set\s+a\s+timer\s+for\s+(.+)$", cleaned, re.IGNORECASE)
+    if t1:
+        timer_dur = t1.group(1).strip()
+    else:
+        t2 = re.match(r"^set\s+a\s+(.+?)\s+timer$", cleaned, re.IGNORECASE)
+        if t2:
+            timer_dur = t2.group(1).strip()
+        else:
+            t3 = re.match(r"^start\s+a\s+(.+?)\s+timer$", cleaned, re.IGNORECASE)
+            if t3:
+                timer_dur = t3.group(1).strip()
+            else:
+                t4 = re.match(r"^timer\s+(?:for\s+)?(.+)$", cleaned, re.IGNORECASE)
+                if t4:
+                    timer_dur = t4.group(1).strip()
+
+    if timer_dur is not None:
+        td = parse_relative(timer_dur)
+        if td is not None:
+            total_sec = td.total_seconds()
+            if 5.0 <= total_sec <= 7 * 86400:
+                minutes = total_sec / 60.0
+                return ToolCallSpec(
+                    name="set_timer",
+                    args={"minutes": round(minutes, 4), "label": "Timer"},
+                    target_name="timer",
+                )
+        return None
+
+    # 6. List / show reminders
+    if (
+        re.match(r"^(?:list|show)\s+(?:my\s+)?reminders$", cleaned, re.IGNORECASE)
+        or re.match(r"^what\s+reminders\s+do\s+i\s+have$", cleaned, re.IGNORECASE)
+        or re.match(r"^what\s+timers\s+do\s+i\s+have$", cleaned, re.IGNORECASE)
+    ):
+        return ToolCallSpec(
+            name="list_reminders",
+            args={},
+            target_name="reminders",
+        )
+
+    # 7. Cancel
+    c_rem = re.match(r"^cancel\s+reminder\s+(\d+)$", cleaned, re.IGNORECASE)
+    if c_rem:
+        return ToolCallSpec(
+            name="cancel_reminder",
+            args={"id": int(c_rem.group(1))},
+            target_name=f"reminder {c_rem.group(1)}",
+        )
+
+    c_tim = re.match(r"^cancel\s+timer\s+(\d+)$", cleaned, re.IGNORECASE)
+    if c_tim:
+        return ToolCallSpec(
+            name="cancel_reminder",
+            args={"id": int(c_tim.group(1))},
+            target_name=f"timer {c_tim.group(1)}",
+        )
+
+    c_all = re.match(r"^cancel\s+(?:all\s+)?(reminders|timers)$", cleaned, re.IGNORECASE)
+    if c_all:
+        return ToolCallSpec(
+            name="cancel_all_reminders",
+            args={},
+            target_name="all reminders",
+        )
+
+    return None
+
+
 def parse_shortcut(
     text: str,
     allowed_apps: Optional[Mapping[str, Any]] = None,
     sites: Optional[Mapping[str, Any]] = None,
     state: Optional[Any] = None,
     browser_enabled: bool = False,
+    reminders_enabled: Optional[bool] = None,
+    clock: Optional[Callable[[], datetime]] = None,
 ) -> Optional[Union[ToolCallSpec, ShortcutPlan]]:
     """Parse user text into a ToolCallSpec or ShortcutPlan if it matches a strict shortcut pattern.
 
@@ -336,6 +563,18 @@ def parse_shortcut(
         re.search(r"\b(?:open|click|play)\b.*\b(?:link|website|site|page)\b.*\bor\b", cleaned, re.IGNORECASE)
         or re.search(r"\bor\b.*\b(?:open|click|play)\b.*\b(?:link|website|site|page)\b", cleaned, re.IGNORECASE)
     ):
+        return None
+
+    if is_reminder_or_timer_pattern(cleaned):
+        if reminders_enabled is None:
+            env_r = os.getenv("REMINDERS_ENABLED")
+            if env_r is not None:
+                reminders_enabled = env_r.strip().lower() not in ("0", "false", "no", "off")
+            else:
+                from config import settings
+                reminders_enabled = getattr(settings, "REMINDERS_ENABLED", True)
+        if reminders_enabled:
+            return parse_reminder_shortcut(cleaned, clock=clock)
         return None
 
     if browser_enabled:
@@ -1081,6 +1320,223 @@ def parse_shortcut(
                 target_name="google",
             )
         return None
+
+    return None
+
+
+def _strip_routine_fillers(text: str) -> str:
+    """Strip allowed filler words from the front of routine shortcut text."""
+    cleaned = text.strip()
+    while True:
+        prev = cleaned
+        cleaned = re.sub(
+            r"^(?:please|hey|can\s+you|can\s+u|could\s+you)\b[,:\s]*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
+        if cleaned == prev:
+            break
+    return cleaned.rstrip(".?!").strip()
+
+
+def _has_command_chain(name: str) -> bool:
+    """Return True if name contains sequencing words or conjunctions with command verbs."""
+    if not name:
+        return False
+    if re.search(r"\b(?:and\s+then|after\s+that|afterwards|then)\b|,", name, re.IGNORECASE):
+        return True
+    m_and = re.search(r"\band\s+([a-zA-Z]+)\b", name, re.IGNORECASE)
+    if m_and:
+        verb = m_and.group(1).lower()
+        from routines.validate import FORBIDDEN_NAME_STARTS
+        from core.chains import COMMAND_VERBS
+        if verb in COMMAND_VERBS or verb in FORBIDDEN_NAME_STARTS:
+            return True
+    return False
+
+
+def parse_routine_shortcut(
+    text: str,
+    allowed_apps: Optional[Mapping[str, Any]] = None,
+    sites: Optional[Mapping[str, Any]] = None,
+    state: Optional[Any] = None,
+    browser_enabled: bool = False,
+) -> Optional[RoutineAction]:
+    """Parse a user command for routine management actions.
+
+    Supported patterns:
+    - create|make|save a routine (called|named)? <name> (:|that|to|as) <chain sentence>
+    - save (that|this|the last plan) as (a )?routine (called|named)? <name>
+    - run|start|do|launch (my )?routine <name>
+    - run <name> routine
+    - routine <name>
+    - list routines / show routines / what routines do i have
+    - show routine <name>
+    - delete|remove routine <name>
+
+    Returns RoutineAction or None.
+    """
+    if not text or not isinstance(text, str):
+        return None
+    if "\n" in text or "\r" in text:
+        return None
+    if "://" in text:
+        return None
+    if any(ch in _DISALLOWED_CHARS for ch in text):
+        return None
+    if len(text) > 300:
+        return None
+
+    cleaned = _strip_routine_fillers(text)
+    if not cleaned:
+        return None
+
+    from routines.validate import (
+        RoutineValidationError,
+        validate_routine_name,
+        validate_routine_steps,
+    )
+
+    # 1. List routines
+    if re.match(
+        r"^(?:list\s+routines|show\s+routines|what\s+routines\s+do\s+i\s+have)$",
+        cleaned,
+        re.IGNORECASE,
+    ):
+        return RoutineAction(action="list")
+
+    # 2. Show routine <name>
+    m_show = re.match(r"^show\s+routine\s+(.+)$", cleaned, re.IGNORECASE)
+    if m_show:
+        raw_name = m_show.group(1).strip()
+        if _has_command_chain(raw_name) or "://" in raw_name:
+            return None
+        try:
+            norm_name = validate_routine_name(raw_name)
+            return RoutineAction(action="show", name=norm_name, display_name=raw_name)
+        except RoutineValidationError:
+            return None
+
+    # 3. Delete routine <name>
+    m_del = re.match(r"^(?:delete|remove)\s+routine\s+(.+)$", cleaned, re.IGNORECASE)
+    if m_del:
+        raw_name = m_del.group(1).strip()
+        if _has_command_chain(raw_name) or "://" in raw_name:
+            return None
+        try:
+            norm_name = validate_routine_name(raw_name)
+            return RoutineAction(action="delete", name=norm_name, display_name=raw_name)
+        except RoutineValidationError:
+            return None
+
+    # 4. Save last plan as routine
+    m_last = re.match(
+        r"^save\s+(?:that|this|the\s+last\s+plan)\s+as\s+(?:a\s+)?routine(?:\s+(?:called|named))?\s+(.+)$",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if m_last:
+        raw_name = m_last.group(1).strip()
+        if _has_command_chain(raw_name) or "://" in raw_name:
+            return None
+        try:
+            norm_name = validate_routine_name(raw_name)
+            return RoutineAction(action="save_last_plan", name=norm_name, display_name=raw_name)
+        except RoutineValidationError:
+            return None
+
+    # 5. Create routine from sentence
+    m_create = re.match(
+        r"^(?:create|make|save)\s+(?:a\s+)?routine(?:\s+(?:called|named))?\s+(.+?)\s*(?::|that|to|as)\s+(.+)$",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if m_create:
+        raw_name = m_create.group(1).strip()
+        chain_sentence = m_create.group(2).strip()
+        if _has_command_chain(raw_name) or "://" in raw_name:
+            return None
+        try:
+            norm_name = validate_routine_name(raw_name)
+        except RoutineValidationError:
+            return None
+
+        if is_reminder_or_timer_pattern(chain_sentence):
+            return None
+        if any(ch in _DISALLOWED_CHARS for ch in chain_sentence) or "://" in chain_sentence:
+            return None
+
+        from core.chains import parse_chain
+        chain_plan = parse_chain(
+            chain_sentence,
+            allowed_apps=allowed_apps,
+            sites=sites,
+            state=state,
+            browser_enabled=browser_enabled,
+        )
+        if chain_plan is not None:
+            raw_steps = [
+                {"tool": getattr(s, "tool", getattr(s, "name", "")), "args": dict(getattr(s, "args", {}))}
+                for s in chain_plan.steps
+            ]
+        else:
+            single_res = parse_shortcut(
+                chain_sentence,
+                allowed_apps=allowed_apps,
+                sites=sites,
+                state=state,
+                browser_enabled=browser_enabled,
+            )
+            if isinstance(single_res, ToolCallSpec):
+                raw_steps = [{"tool": single_res.name, "args": dict(single_res.args)}]
+            elif isinstance(single_res, ShortcutPlan):
+                raw_steps = [
+                    {"tool": getattr(s, "tool", getattr(s, "name", "")), "args": dict(getattr(s, "args", {}))}
+                    for s in single_res.steps
+                ]
+            else:
+                return None
+
+        try:
+            validated_steps = validate_routine_steps(
+                raw_steps,
+                allowed_apps=allowed_apps,
+                sites=sites,
+                state=state,
+            )
+            return RoutineAction(
+                action="create",
+                name=norm_name,
+                display_name=raw_name,
+                steps=validated_steps,
+            )
+        except RoutineValidationError:
+            return None
+
+    # 6. Run routine
+    m_run1 = re.match(r"^(?:run|start|do|launch)\s+(?:my\s+)?routine\s+(.+)$", cleaned, re.IGNORECASE)
+    m_run2 = re.match(r"^run\s+(.+?)\s+routine$", cleaned, re.IGNORECASE)
+    m_run3 = re.match(r"^routine\s+(.+)$", cleaned, re.IGNORECASE)
+
+    target_name = None
+    if m_run1:
+        target_name = m_run1.group(1).strip()
+    elif m_run2:
+        target_name = m_run2.group(1).strip()
+    elif m_run3:
+        target_name = m_run3.group(1).strip()
+
+    if target_name:
+        if target_name.lower() in ("routine", "routines", "my routine"):
+            return None
+        if _has_command_chain(target_name) or "://" in target_name:
+            return None
+        try:
+            norm_name = validate_routine_name(target_name)
+            return RoutineAction(action="run", name=norm_name, display_name=target_name)
+        except RoutineValidationError:
+            return None
 
     return None
 
