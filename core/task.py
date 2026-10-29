@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 from security.audit import redact_data
+from config.paths import get_runs_log_path
 
 
 class RunStatus(Enum):
@@ -165,8 +166,8 @@ class TaskRun:
 class RunLogger:
     """Appends structured JSON-lines run records for completed task executions."""
 
-    def __init__(self, path: str = "logs/runs.jsonl") -> None:
-        self.path = Path(path)
+    def __init__(self, path: Optional[Union[str, Path]] = None) -> None:
+        self.path = Path(path if path is not None else get_runs_log_path()).resolve()
         self._warned = False
         try:
             if self.path.parent and not self.path.parent.exists():

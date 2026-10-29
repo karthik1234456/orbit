@@ -25,9 +25,15 @@ from ui.app import ConfirmDialog, OrbitWindow, PlanDialog
 
 
 def make_speech_audio(duration_s: float = 1.0, freq: float = 300.0) -> np.ndarray:
-    """Generate synthetic non-silent mono audio."""
-    t = np.linspace(0, duration_s, int(16000 * duration_s), endpoint=False, dtype=np.float32)
-    return (0.4 * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+    """Generate synthetic non-silent mono audio with speech-like envelope."""
+    n_samples = int(16000 * duration_s)
+    t = np.linspace(0, duration_s, n_samples, endpoint=False, dtype=np.float32)
+    sig = (0.4 * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+    pad = int(n_samples * 0.2)
+    if pad > 0 and n_samples > 2 * pad:
+        sig[:pad] = 0.0
+        sig[-pad:] = 0.0
+    return sig
 
 
 class FakeRecorder:

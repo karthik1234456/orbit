@@ -145,6 +145,71 @@ Key design tenets:
   - Privacy-first audio handling: recorded audio numpy arrays are strictly ephemeral, held in memory only during transcription, never written to disk, never logged, and omitted from system diagnostics.
   - Graceful hardware and package fallbacks: requires working microphone hardware and the `sounddevice` and `faster_whisper` packages. If hardware or packages are absent, the mic button is cleanly disabled with a descriptive tooltip explaining the missing requirement, while mock mode remains fully functional for offline development and testing.
 
+### Voice in Noisy Rooms
+
+#### Why Voice Defaults Are Unchanged Until Measured
+In keeping with scientific engineering discipline, every enhancement toggle (`VOICE_HIGHPASS`, `VOICE_AGC`, `VOICE_DENOISE`, `STT_PROMPT`, `VOICE_ALIASES`) defaults to `0`, `STT_BEAM=1`, and `VOICE_REVIEW="auto"`. No DSP filtering or prompt bias is turned on by default until verified against measured benchmarks on local hardware and acoustics. This guarantees that standard out-of-the-box transcription behavior reproduces existing baseline results with zero surprises.
+
+#### How Each Setting Works
+- **`VOICE_HIGHPASS`** (`0|1`, default `0`): Pure `numpy` frequency-domain high-pass filter. Zeroes FFT bins below 80 Hz with a smooth raised-cosine taper up to 100 Hz. Eliminates mechanical desk thumps, HVAC rumble, and 50/60 Hz electrical mains hum while leaving speech fundamentals intact.
+- **`VOICE_AGC`** (`0|1`, default `0`): Automatic Gain Control for quiet voices or distant microphones. Scales root-mean-square (RMS) energy to a 0.08 target with maximum gain capped at +20 dB (10x multiplier). An integrated peak limiter automatically scales audio down if any sample peak reaches or exceeds 0.98, preventing digital clipping.
+- **`VOICE_DENOISE`** (`0|1`, default `0`): Spectral subtraction noise gate. Decomposes audio using Short-Time Fourier Transform (STFT) with 25 ms Hann frames (400 samples at 16 kHz) and 50% overlap. Estimates stationary background noise profile from the quietest 15% of frames and subtracts it with a spectral floor factor of beta = 0.05 and temporal smoothing. Resynthesizes audio via overlap-add, preserving exact input sample length.
+- **`STT_BEAM`** (`1-5`, default `1`): Whisper beam search decoding width. Expanding from greedy search (`1`) to beam search (e.g. `5`) improves phoneme decoding in noisy environments at the expense of higher CPU decoding latency.
+- **`STT_PROMPT`** (`0|1`, default `0`): Injects a bounded vocabulary prompt (<= 200 characters) into Whisper decoding. Constructed strictly from keys in `config/apps.py` (`ALLOWED_APPS`), `config/sites.py` (`SITES`), command action verbs (`open`, `close`, `launch`, `search`, etc.), and `"ORBIT"`. Passed to native `hotwords` when supported by `faster-whisper`, falling back to `initial_prompt`. Never includes user chat history or private transcripts.
+- **`VOICE_ALIASES`** (`0|1`, default `0`): Deterministic multi-token split resolver (`voice/aliases.py`). Catches common acoustic word separations emitted by Whisper (e.g., `"note pad"` for `"notepad"`, `"you tube"` for `"youtube"`, `"git hub"` for `"github"`). Aliases never guess: a rewrite is applied if and only if the original text does not parse and exactly one candidate variant cleanly parses into an allowed shortcut action.
+- **`VOICE_REVIEW`** (`auto|always|never`, default `auto`): Safety review policy for voice transcripts.
+  - `always`: Every voice transcript is held for manual user review before submission.
+  - `never`: Voice transcripts are immediately auto-submitted (matching legacy behavior).
+  - `auto`: Automatically triggers review if decoding confidence is low (`avg_logprob < -1.0`), unvoiced probability is high (`no_speech_prob > 0.6`), signal-to-noise ratio is poor (`SNR < 10 dB`), or transcription length is under 2 words.
+
+#### Review Step in the Desktop GUI and Terminal
+- **Desktop Window**: When a review is triggered, the transcribed command is placed into the prompt input box rather than submitted. A colored status banner appears below the box: `"Noisy room: a headset helps"` (for SNR < 10 dB) or `"Low confidence"`. The user can inspect or edit the text and press **Enter** to submit (`source="voice-reviewed"`), or clear the box / press **Escape** to cancel. The unsubmitted text is never sent to the model until approved.
+- **Terminal CLI**: Displays the transcript and prompts `Send? (y/n/edit)`. Typing `y` submits, `n` cancels, and `edit` allows manual correction.
+
+#### Headset Guidance for Poor SNR
+Laptop microphones are positioned near internal cooling fans and capture room reverberation and echo. When estimated SNR is below 10 dB or pre-roll ambient noise is elevated, ORBIT displays an ambient noise warning: `"Noisy room: use a headset or move closer"`. Using a close-proximity headset or directional microphone provides 15-25 dB higher SNR, eliminating the need for aggressive software filtering.
+
+#### Recording Your Own Benchmark Dataset (`scripts/voice_record.py`)
+ORBIT includes a resumable, zero-dependency recording tool to build your own local evaluation dataset:
+```powershell
+# Record 24 clean development phrases:
+python scripts/voice_record.py --split dev --kind clean
+
+# Record 12 real background noise phrases (with TV or music playing in the room):
+python scripts/voice_record.py --split dev --kind real_noise
+```
+- **Resumable**: If you misread a phrase, press `r` to retake. You can stop anytime and resume where you left off.
+- **SNR Quality Check**: Clean recordings are verified to ensure estimated SNR >= 12 dB.
+- **Safe**: Strictly refuses to run in demo mode; plays zero audio; never uploads recordings.
+- **Local & Private**: All audio WAV files are stored exclusively in `data/voice_eval/` (git-ignored) and are never transmitted over the network.
+
+#### Running Sweeps, Final Tests, and the Acceptance Verdict
+1. **Development Configuration Sweep**:
+   ```powershell
+   python -m evals --voice dev --sweep
+   ```
+   Evaluates 8 configurations (`baseline`, `small`, `prompt`, `filter`, `gate`, `beam5`, `aliases`, `combined`) against clean speech and 4 deterministic noise conditions (white noise, pink noise, 50 Hz hum, and babble speech at 10 dB and 5 dB SNR).
+2. **Scientific Test Split Lock**:
+   ```powershell
+   python -m evals --voice test --config combined --final-test
+   ```
+   Running sweeps on the unseen `test` split is strictly blocked. Evaluating the `test` split requires `--final-test` and writes an immutable `.ran-<config>` marker file. Subsequent runs on the same configuration are refused unless `--force` is explicitly provided, which tags the report as `RERUN: NOT UNSEEN`.
+3. **Automated 5-Condition Acceptance Verdict**:
+   ```powershell
+   python -m evals --voice-verdict
+   ```
+   Compares candidate test reports against baseline across 5 pre-registered criteria:
+   - Noisy command-match up by at least 6.0 percentage points.
+   - Wrong-command rate increase no greater than 1.0 percentage point.
+   - Clean command-match drops by no more than 1 phrase out of 24.
+   - Median transcription latency does not exceed 5.0 seconds.
+   - Real-noise subset performance does not degrade compared to baseline.
+
+#### Known Limits
+- **Background Talkers (Cocktail Party Problem)**: Single-channel DSP filters cannot reliably separate speech when multiple people speak simultaneously at comparable volumes; directional physical microphones or headsets remain necessary.
+- **Acoustic Echo**: Spoken feedback through open speakers while the microphone is listening requires headphones or hardware acoustic echo cancellation (AEC).
+
+
 ### Tool Routing (Optional)
 - Opt-in tool filtering (`TOOL_ROUTING=1` or `settings.TOOL_ROUTING = True`, disabled by default) reducing prompt token overhead and improving precision for local small models.
 - Centralized group definitions (`core/routing.py`) mapping 9 functional areas: `system`, `notes`, `files`, `apps`, `web`, `browser`, `memory`, `docs`, and `reminders`.
@@ -160,7 +225,7 @@ Key design tenets:
 - Line-by-line syntax checking detecting malformed declarations, duplicate keys, unmatched quotation marks, and merged lines.
 - Complete secret redaction: sensitive credentials (`KEY`, `TOKEN`, `SECRET`, `PASSWORD`) display only "set" or "not set", never exposing raw values or token character lengths.
 - Stale override protection: detects and flags leftover `ORBIT_MOCK` settings that inadvertently force mock mode.
-- Whitelist of editable non-secret settings (`SPECS` in `config/settings_store.py`) covering `LLM_PROVIDER`, `OLLAMA_MODEL`, `OLLAMA_NUM_CTX`, `BROWSER_ENABLED`, `SPEAK_REPLIES`, `VOICE_IN_UI`, `COMMAND_SHORTCUTS`, `CHAINS_ENABLED`, `PLAN_PREVIEW`, `TOOL_ROUTING`, `REMINDERS_ENABLED`, `SESSION_CONTEXT`, `RAG_AUTO`, `DOCTOR_ON_START`, `STT_MODEL`, `STT_LANGUAGE`, and `ORBIT_MOCK`.
+- Whitelist of editable non-secret settings (`SPECS` in `config/settings_store.py`) covering `LLM_PROVIDER`, `OLLAMA_MODEL`, `OLLAMA_NUM_CTX`, `BROWSER_ENABLED`, `SPEAK_REPLIES`, `VOICE_IN_UI`, `VOICE_HIGHPASS`, `VOICE_AGC`, `VOICE_DENOISE`, `STT_BEAM`, `STT_PROMPT`, `VOICE_ALIASES`, `VOICE_REVIEW`, `COMMAND_SHORTCUTS`, `CHAINS_ENABLED`, `PLAN_PREVIEW`, `TOOL_ROUTING`, `REMINDERS_ENABLED`, `SESSION_CONTEXT`, `RAG_AUTO`, `DOCTOR_ON_START`, `STT_MODEL`, `STT_LANGUAGE`, and `ORBIT_MOCK`.
 - Restart-required flags distinguishing backend settings from dynamic operational controls.
 - Origin source tracking (`[default]`, `[.env]`, `[environment]`) with warnings when process environment overrides `.env` (`⚠ overridden by environment`).
 - Atomic writes via temp file with `.env.bak` backup, CRLF and BOM preservation.
@@ -190,6 +255,52 @@ Key design tenets:
 - Command parser evaluation suite (`evals/commands/`) testing single shortcuts, chained multi-step commands, and unsupported fallbacks.
 - Intent probe harness (`scripts/intent_probe.py`) evaluating tool vs no-tool classification consistency.
 - Markdown reporting with Wilson 95% confidence intervals and latency percentiles.
+
+---
+
+## Interface
+
+ORBIT includes a sci-fi desktop interface inspired by dark teal technical dashboards, rendered with pure Python and Tkinter vector graphics (original artwork only, zero external UI libraries).
+
+### Visual Core & 3D HUD Canvas
+- **3D Wireframe Core**: A rotating wireframe sphere constructed from 12 latitude circles and 24 longitude segments, flanked by 3 independently tilted orbital rings, dynamic particle streams, segmented radial arc bars, and concentric boundary tick marks.
+- **Pure Mathematical Model (`ui/hud_core.py`)**: Vector-norm-preserving 3D Euler rotations, perspective projection, depth-based color interpolation, and frame-rate-independent delta-time updates with zero GUI framework dependencies.
+- **Priority-Driven State Machine**:
+  - `CONFIRMING` (Amber hold): Active when `ConfirmDialog` or `PlanDialog` is awaiting human approval.
+  - `ERROR` (Red alert): Warning pulse with 1.5-second decay on tool or voice errors.
+  - `SPEAKING` (Green pulse): 3 Hz rhythmic pulsation during voice reply playback.
+  - `LISTENING` (Aqua pulse): Reactive breathing pulsing proportionally to live microphone audio input.
+  - `THINKING` (Cyan spin): High-speed orbital spin while the agent is executing background steps.
+  - `IDLE` (Deep cyan standby): Gentle 0.5 Hz ambient breathing cycle.
+- **Canvas Item Pooling**: All canvas visual items are allocated once during widget initialization. Subsequent animation frames perform coordinate translations and color updates on changed values without creating or destroying canvas items.
+
+### Vector-Rendered Bottom Dock
+- Focusable, keyboard-accessible bottom dock (`takefocus=True`) with 5 vector-drawn round icons:
+  - **Activity** (Ctrl+1): Toggles the Activity feed and plan progress inspector.
+  - **Routines** (Ctrl+2): Toggles the persistent multi-step routines management tab.
+  - **Microphone** (Ctrl+3 / Ctrl+M): Larger central capsule icon with dynamic audio level ring and state status.
+  - **Settings** (Ctrl+4): Opens the whitelisted `.env` settings editor dialog.
+  - **Doctor** (Ctrl+5): Runs environment diagnostic checks and opens the system doctor window.
+- Full keyboard navigation: Left/Right arrows cycle focus across icons; Space or Enter activates the focused icon.
+
+### Themes & WCAG Contrast Compliance
+ORBIT provides three distinct color palettes designed for readability and visual ergonomics:
+- **`cyan`** (Default): Deep near-black teal background (`#040d12`), dark teal panels (`#081b24`), and electric cyan highlights (`#00e5ff`).
+- **`gold`**: Near-black warm obsidian background (`#0c0a06`), warm graphite panels (`#18140c`), and champagne/gold accents (`#ffd700`).
+- **`mono`**: Deep graphite slate background (`#0a0c0f`), charcoal panels (`#14181f`), and crisp white highlights (`#ffffff`).
+
+Every primary text (`text`) and secondary label (`text_dim`) across all three palettes strictly complies with the WCAG 2.1 relative contrast ratio threshold (>= 4.5:1 against both background and panel surfaces).
+
+### Motion Modes & Adaptive Quality Governor
+- **Motion Modes (`UI_MOTION`)**:
+  - `full` (Default): 30 FPS target animation with 3D wireframe, orbit rings, particle streams, and boot banner.
+  - `reduced`: Low-framerate (~8 FPS) animation with particles disabled and gentle breathing pulse for accessibility and low-power devices.
+  - `off`: Static single-frame rendering with animations completely suspended.
+- **Adaptive Quality Governor**: Real-time performance monitor that tracks rolling 20-frame durations. If average frame rendering time exceeds 25 ms, the governor automatically drops fidelity through 4 tiers (`high` -> `medium` -> `low` -> `static`) to protect system responsiveness, backed by a 30-second hysteresis cooldown before ascending.
+
+### Layout Styles & Fail-Safe Fallback
+- Configurable via `UI_STYLE` setting: `"hud"` (default, 1180x760 minsize 960x640) or `"classic"` (preserves legacy two-pane layout).
+- Fail-safe fallback: If HUD canvas initialization encounters an exception on resource-constrained platforms, the error is logged to diagnostics (`LAST_HUD_ERROR`), a single-line notification is printed to chat, and the UI cleanly falls back to the classic layout.
 
 ---
 
@@ -360,6 +471,52 @@ python -m ui
 
 ---
 
+## Demo Mode
+
+ORBIT provides an isolated demo environment seeded with synthetic, privacy-safe sample data for demonstrations, testing, and recordings without touching your personal notes or live workspace.
+
+### How to Launch Demo Mode
+
+Launch the desktop interface in demo mode:
+```powershell
+python scripts\demo.py
+```
+
+Launch the interactive terminal CLI in demo mode:
+```powershell
+python scripts\demo.py --terminal
+```
+
+Force offline execution with local Ollama:
+```powershell
+python scripts\demo.py --offline
+```
+
+Preserve state across runs without resetting sample data:
+```powershell
+python scripts\demo.py --keep
+```
+
+### Visual and Behavioral Indicators
+- **Window Title**: The window title prominently displays ` - DEMO MODE (sample data)`.
+- **Status Bar**: A distinct orange `DEMO` chip appears in the desktop status bar.
+- **Terminal Banner**: Prints `DEMO MODE: sample data in <folder>` upon launch.
+- **Settings Protection**: Settings modification is disabled; attempting to save settings or run `/set` returns `"Settings can't be changed in demo mode"`.
+
+### What Demo Mode Isolates
+- **Filesystem Workspace**: Sandboxed in `demo_home/workspace/` (seeded with synthetic visitor policy, hardware inventory, and project plan).
+- **SQLite Databases**: Memory (`demo_home/data/memory.db`), document FTS5 index (`demo_home/data/rag.db`), reminders (`demo_home/data/reminders.db`), and routines (`demo_home/data/routines.db`) are created entirely inside `demo_home/data/`.
+- **Browser Automation Profile**: The controlled browser profile is isolated at `demo_home/data/browser_profile/`.
+- **Audit and Run Logs**: Audit logs (`demo_home/logs/audit.jsonl`), runs traces (`demo_home/logs/runs.jsonl`), and diagnostics are written to `demo_home/logs/`.
+- **Safe Reset**: Rerunning `scripts/demo.py` deletes `demo_home/` only if it contains the `.orbit_demo` marker file.
+
+### What Demo Mode Does NOT Isolate
+- **Real Model Providers**: The active model (`OLLAMA_MODEL` or Gemini) and `.env` credentials are the real configured providers.
+- **System Default Browser**: Standard web searches that open your default system browser (e.g. Edge or Chrome outside Playwright) run in your real user session, not an isolated profile.
+- **External Network Restrictions**: While `ORBIT_OFFLINE` prevents ORBIT's own Python process from establishing external network connections, it does not sandbox or restrict browser windows or desktop processes launched by the assistant.
+
+---
+
 ## Safety Model
 
 ORBIT operates under a strict, defense-in-depth security model:
@@ -463,7 +620,7 @@ ORBIT provides safe configuration management both in the terminal CLI and via a 
 Only non-secret settings explicitly listed on the code whitelist (`SPECS` in `config/settings_store.py`) can be inspected or updated:
 - **LLM & Model**: `LLM_PROVIDER` (`auto|ollama|gemini|mock`), `OLLAMA_MODEL` (text matching `[A-Za-z0-9._:/-]+`, max 60 chars), `OLLAMA_NUM_CTX` (2048–32768 tokens).
 - **Automation & Tools**: `BROWSER_ENABLED` (`auto|0|1`), `TOOL_ROUTING` (0/1), `REMINDERS_ENABLED` (0/1), `RAG_AUTO` (0/1), `SESSION_CONTEXT` (0/1), `ROUTINES_ENABLED` (0/1), `ROUTINE_PREVIEW` (`always|never`).
-- **Interface & Audio**: `SPEAK_REPLIES` (0/1), `VOICE_IN_UI` (0/1), `STT_MODEL` (`tiny.en|base.en|small.en|tiny|base|small`), `STT_LANGUAGE` (`en|hi|empty`).
+- **Interface & Audio**: `SPEAK_REPLIES` (0/1), `VOICE_IN_UI` (0/1), `VOICE_HIGHPASS` (0/1), `VOICE_AGC` (0/1), `VOICE_DENOISE` (0/1), `STT_BEAM` (1-5), `STT_PROMPT` (0/1), `VOICE_ALIASES` (0/1), `VOICE_REVIEW` (`auto|always|never`), `STT_MODEL` (`tiny.en|base.en|small.en|tiny|base|small`), `STT_LANGUAGE` (`en|hi|empty`).
 - **Execution Controls**: `COMMAND_SHORTCUTS` (0/1), `CHAINS_ENABLED` (0/1), `PLAN_PREVIEW` (`auto|always|never`), `DOCTOR_ON_START` (0/1), `ORBIT_MOCK` (0/1).
 
 ### Restart Required
@@ -632,6 +789,9 @@ Verification status for features introduced from v2.5 onward, strictly distingui
 | Environment Doctor | v2.8 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items D1–D5) |
 | Settings Panel | v2.9 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items S1–S5) |
 | Routines & Automation | v2.10 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items RT1–RT7) |
+| Demo Mode & Isolation | v2.11 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items DM1–DM4) |
+| Sci-Fi HUD & Dock | v2.13 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items HUD1–HUD8) |
+| Voice in Noisy Rooms | v2.14 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items VE1–VE6) |
 
 ---
 
@@ -704,7 +864,7 @@ pytest
 ```
 
 **Current Test Count**:
-- **1195 passed, 1 skipped** (1196 collected tests)
+- **1274 passed, 2 skipped** (1276 collected tests)
 
 ---
 
@@ -717,6 +877,7 @@ orbit/
 │   ├── apps.py              # Allowlisted desktop application definitions
 │   ├── browser_sites.py     # Browser site selectors and URL patterns
 │   ├── settings.py          # Environment settings, thresholds, and defaults
+│   ├── paths.py             # Centralized filesystem paths, ORBIT_HOME, and demo mode
 │   ├── settings_store.py    # Whitelisted settings store and atomic .env updates
 │   └── sites.py             # Structured site registry (YouTube, Google, etc.)
 ├── core/
@@ -736,7 +897,7 @@ orbit/
 │   ├── session_state.py     # SessionState for cross-turn context tracking
 │   ├── shortcuts.py         # High-frequency command shortcut parser
 │   ├── task.py              # TaskRun execution tracer
-│   └── version.py           # Centralized VERSION definition (2.10.1)
+│   └── version.py           # Centralized VERSION definition (2.11.0)
 ├── evals/
 │   ├── cases/               # 45 benchmark evaluation JSON cases (dev suite)
 │   ├── commands/            # 80 command parser benchmark cases (dev & test)
@@ -787,7 +948,19 @@ orbit/
 │   ├── settings_window.py   # SettingsWindow graphical configuration editor
 │   └── voice_controller.py  # GUI voice controller for audio capture, STT, and TTS
 ├── voice/
-│   ├── audio.py             # PyAudio input recorder
+│   ├── aliases.py           # Deterministic app/site name split resolution
+│   ├── audio.py             # Audio recording and microphone device listing
+│   ├── enhance.py           # Digital signal processing filters (highpass, agc, gate)
+│   ├── interrupt.py         # Keyboard interrupt monitor for CLI voice loops
+│   ├── review.py            # Safety review decision and noise status classification
+│   ├── session.py           # Turn-by-turn voice interaction loop
+│   ├── stt.py               # Local Whisper speech-to-text wrapper with decoding telemetry
+│   ├── text.py              # Spoken reply text cleaner and simplifier
+│   ├── tts.py               # Subprocess-isolated pyttsx3 text-to-speech worker
+│   ├── vad.py               # Voice Activity Detector state machine
+│   ├── vocab.py             # Bounded decoding vocabulary prompt construction
+│   └── wake.py              # "Hey ORBIT" wake phrase detector with pre-roll
+├── audio.py             # PyAudio input recorder
 │   ├── interrupt.py         # Keyboard interrupt monitor
 │   ├── session.py           # Turn-by-turn voice interaction loop
 │   ├── streaming.py         # Sentence chunk splitter
@@ -795,6 +968,9 @@ orbit/
 │   ├── tts.py               # Subprocess speech synthesizer
 │   ├── vad.py               # Voice Activity Detector state machine
 │   └── wake.py              # Wake phrase detector
+├── scripts/                 # Operational scripts (demo.py, doctor.py, probes)
+│   ├── demo.py              # Isolated demo environment runner and synthetic seeder
+│   └── doctor.py            # Environment doctor CLI runner
 ├── tests/                   # Automated unit, integration, and security tests
 ├── requirements.txt         # Core project dependencies
 ├── requirements-browser.txt # Optional Playwright browser dependencies

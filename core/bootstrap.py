@@ -8,6 +8,16 @@ from typing import Any, Callable, Mapping, Optional, Union
 
 from config.apps import ALLOWED_APPS
 from config import settings
+from config.paths import (
+    get_audit_log_path,
+    get_docs_dir,
+    get_memory_db_path,
+    get_rag_db_path,
+    get_reminders_db_path,
+    get_routines_db_path,
+    get_runs_log_path,
+    get_workspace_dir,
+)
 from core.agent import Agent
 from core.task import RunLogger
 from memory.store import MemoryStore
@@ -72,14 +82,14 @@ class AppPaths:
     def from_settings(cls) -> "AppPaths":
         """Build AppPaths using current active settings."""
         return cls(
-            workspace=Path(settings.WORKSPACE_DIR).resolve(),
-            docs=Path(settings.DOCS_DIR).resolve(),
-            memory_db=Path(settings.MEMORY_DB_PATH).resolve(),
-            rag_db=Path(settings.RAG_DB_PATH).resolve(),
-            audit_log=Path("logs/audit.jsonl").resolve(),
-            runs_log=Path("logs/runs.jsonl").resolve(),
-            reminders_db=Path(getattr(settings, "REMINDERS_DB_PATH", "data/reminders.db")).resolve(),
-            routines_db=Path(getattr(settings, "ROUTINES_DB_PATH", "data/routines.db")).resolve(),
+            workspace=get_workspace_dir(),
+            docs=get_docs_dir(),
+            memory_db=get_memory_db_path(),
+            rag_db=get_rag_db_path(),
+            audit_log=get_audit_log_path(),
+            runs_log=get_runs_log_path(),
+            reminders_db=get_reminders_db_path(),
+            routines_db=get_routines_db_path(),
         )
 
     @classmethod

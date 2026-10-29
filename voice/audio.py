@@ -71,6 +71,11 @@ class Recorder:
         self.max_seconds = max_seconds
         self.stream_factory = stream_factory
         self.level_callback = level_callback
+        self.pre_roll_ambient: Optional[float] = None
+
+    def get_pre_roll_ambient(self) -> Optional[float]:
+        """Get 0.5s pre-roll ambient RMS level if available (otherwise None)."""
+        return self.pre_roll_ambient
 
     def record(self, stop_event: Optional[threading.Event] = None) -> np.ndarray:
         """Record audio until stop_event is set or max_seconds elapses.
@@ -169,7 +174,11 @@ class FakeRecorder:
             self.audio = 0.5 * np.sin(2 * np.pi * 440 * t)
         self.error = error
         self.level_callback = level_callback
+        self.pre_roll_ambient: Optional[float] = None
         self.calls: int = 0
+
+    def get_pre_roll_ambient(self) -> Optional[float]:
+        return self.pre_roll_ambient
 
     def record(self, stop_event: Optional[threading.Event] = None) -> np.ndarray:
         self.calls += 1

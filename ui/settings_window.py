@@ -157,6 +157,11 @@ class SettingsWindow(tk.Toplevel):
                     width=10,
                 )
                 spin.pack(anchor="w")
+            elif spec.type == "float":
+                var = tk.StringVar(value=eff_val)
+                self.widget_vars[key] = var
+                ent = ttk.Entry(ctrl_box, textvariable=var, width=10)
+                ent.pack(anchor="w")
             else:  # text
                 var = tk.StringVar(value=eff_val)
                 self.widget_vars[key] = var
@@ -204,6 +209,12 @@ class SettingsWindow(tk.Toplevel):
         save_btn.pack(side="right")
 
     def _on_save(self) -> None:
+        from config.paths import is_demo_mode
+
+        if is_demo_mode():
+            messagebox.showerror("Save Error", "Settings can't be changed in demo mode", parent=self)
+            return
+
         changes: dict[str, str] = {}
 
         for key, spec in SPECS.items():

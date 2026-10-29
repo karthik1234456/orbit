@@ -1,3 +1,4 @@
+import statistics
 """Retrieval evaluation benchmark harness for ORBIT RAG."""
 
 from datetime import datetime
@@ -145,6 +146,7 @@ def load_retrieval_meta(
 def build_retrieval_index(
     corpus_dir: Union[str, Path],
     db_path: Union[str, Path],
+    embedder: Optional[Any] = None,
 ) -> tuple[DocumentIndex, int, int]:
     """Build a temporary DocumentIndex from corpus_dir using production chunking and scanning.
 
@@ -176,7 +178,22 @@ def build_retrieval_index(
             records.append((c_text, is_flagged))
 
         total_chunks += len(records)
-        idx.upsert_document(rel_path, sha256, records)
+        doc_vectors = None
+        embed_model_name = ""
+        if embedder is not None:
+            try:
+                chunk_texts = [c for c, _ in records]
+                doc_vectors = embedder.embed(chunk_texts)
+                embed_model_name = getattr(embedder, "model", "fake")
+            except Exception:
+                doc_vectors = None
+        idx.upsert_document(
+            path=rel_path,
+            sha256=sha256,
+            chunks=records,
+            vectors=doc_vectors,
+            embed_model=embed_model_name,
+        )
 
     return idx, total_chunks, total_flagged
 
@@ -190,6 +207,9 @@ def evaluate_item(
     max_chars: Optional[int] = None,
     outdated: Optional[list[str]] = None,
     scoring: Optional[str] = None,
+    embedder: Optional[Any] = None,
+    embed_threshold: Optional[float] = None,
+    embed_margin: Optional[float] = None,
 ) -> dict[str, Any]:
     """Evaluate a single question against the index using auto_retrieve."""
     question = item["question"]
@@ -205,6 +225,8 @@ def evaluate_item(
         else:
             outdated = []
 
+    import time
+    t0 = time.perf_counter()
     ret = auto_retrieve(
         index,
         question,
@@ -213,7 +235,11 @@ def evaluate_item(
         top_k=top_k,
         max_chars=max_chars,
         scoring=scoring,
+        embedder=embedder,
+        embed_threshold=embed_threshold,
+        embed_margin=embed_margin,
     )
+    duration_s = time.perf_counter() - t0
 
     injected_count = ret.injected
     withheld_count = ret.withheld
@@ -288,6 +314,7 @@ def evaluate_item(
         "outdated": outdated or [],
         "injected_count": injected_count,
         "withheld_count": withheld_count,
+        "duration_s": duration_s,
         "has_block": has_block,
         "has_note": has_note,
         "injected_hits": injected_hits,
@@ -715,6 +742,7 @@ def run_retrieval_eval(
     split: str,
     sweep: bool = False,
     sweep_methods: bool = False,
+    sweep_embed: bool = False,
     out_dir: str = "evals/results",
     corpus_dir: Optional[str] = None,
     dataset_dir: Optional[str] = None,
@@ -724,6 +752,9 @@ def run_retrieval_eval(
     max_chars: Optional[int] = None,
     report_filename: Optional[str] = None,
     scoring: Optional[str] = None,
+    final_test: bool = False,
+    force: bool = False,
+    embedder: Optional[Any] = None,
 ) -> int:
     """Execute retrieval evaluation pipeline, compute metrics, and write report."""
     split = split.lower().strip()
@@ -734,6 +765,15 @@ def run_retrieval_eval(
             file=sys.stderr,
         )
         return 1
+
+    if sweep_embed:
+        if split in ("test", "hard-test", "guard-test"):
+            print(
+                f"Error: --sweep-embed is refused on the '{split}' split. Test splits must remain unobserved.",
+                file=sys.stderr,
+            )
+            return 1
+        return run_sweep_embed(out_dir=out_dir, report_filename=report_filename, embedder=embedder)
 
     if sweep_methods:
         if split in ("test", "hard-test", "guard-test"):
@@ -772,19 +812,58 @@ def run_retrieval_eval(
     meta = load_retrieval_meta(split, base_dir=eff_dataset_dir)
     outdated_docs = meta.get("outdated", [])
 
+    scoring_method, parsed_thresh, parsed_margin = parse_scoring_spec(scoring)
+    clean_scoring = "fraction" if scoring_method == "fraction" else (f"{scoring_method}@{parsed_thresh:.2f}" if "@" in str(scoring) else scoring_method)
+
+    is_test_split = split in ("test", "hard-test", "guard-test")
+    marker_file = Path(eff_dataset_dir) / f".ran-{clean_scoring}"
+    marker_existed = marker_file.exists()
+
+    if is_test_split:
+        if not final_test:
+            print(
+                f"Error: Running retrieval evaluation on test split '{split}' requires explicit --final-test flag.",
+                file=sys.stderr,
+            )
+            return 1
+        if marker_existed and not force:
+            print(
+                f"Error: Split '{split}' has already been run for scoring '{clean_scoring}' (marker: {marker_file}).\n"
+                f"Test splits may only be run once. Use --force to override as dev data.",
+                file=sys.stderr,
+            )
+            return 1
+
+    eff_embed = embedder
+    if scoring_method in ("embed", "hybrid") and eff_embed is None:
+        if getattr(settings, "ORBIT_MOCK", False):
+            from rag.embeddings import FakeEmbedder
+            eff_embed = FakeEmbedder()
+        else:
+            from rag.embeddings import OllamaEmbedder
+            eff_embed = OllamaEmbedder(
+                model=getattr(settings, "RAG_EMBED_MODEL", "embeddinggemma"),
+                timeout=30.0,
+            )
+
+    embed_model_name = getattr(eff_embed, "model", eff_embed.__class__.__name__) if eff_embed else "none"
+
     commit_hash = get_git_commit()
     eff_min_terms = min_terms if min_terms is not None else getattr(settings, "RAG_AUTO_MIN_TERMS", 2)
     eff_min_coverage = min_coverage if min_coverage is not None else getattr(settings, "RAG_AUTO_MIN_COVERAGE", 0.5)
     eff_top_k = top_k if top_k is not None else getattr(settings, "RAG_AUTO_TOP_K", 3)
     eff_max_chars = max_chars if max_chars is not None else getattr(settings, "RAG_AUTO_MAX_CHARS", 1500)
-    eff_scoring = scoring if scoring is not None else getattr(settings, "RAG_AUTO_SCORING", "fraction")
+    eff_scoring = scoring_method
 
     thresholds = {
         "min_terms": eff_min_terms,
         "min_coverage": eff_min_coverage,
         "top_k": eff_top_k,
         "max_chars": eff_max_chars,
-        "scoring": eff_scoring,
+        "scoring": clean_scoring,
+        "threshold": parsed_thresh,
+        "margin": parsed_margin,
+        "embedding_model": embed_model_name,
     }
 
     print(f"\nStarting retrieval evaluation on split '{split}' ({len(items)} items)...")
@@ -794,7 +873,7 @@ def run_retrieval_eval(
     # Build temporary index in a clean temp directory
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_db = Path(temp_dir) / "retrieval_eval.db"
-        idx, total_chunks, total_flagged = build_retrieval_index(eff_corpus_dir, temp_db)
+        idx, total_chunks, total_flagged = build_retrieval_index(eff_corpus_dir, temp_db, embedder=eff_embed)
         print(f"Corpus index built: {total_chunks} chunks, {total_flagged} flagged chunks.")
 
         # Evaluate each item under the effective thresholds
@@ -811,6 +890,9 @@ def run_retrieval_eval(
                 max_chars=eff_max_chars,
                 outdated=outdated_docs,
                 scoring=eff_scoring,
+                embedder=eff_embed,
+                embed_threshold=parsed_thresh,
+                embed_margin=parsed_margin,
             )
             total_withheld += res["withheld_count"]
             results.append(res)
@@ -857,11 +939,43 @@ def run_retrieval_eval(
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     timestamp_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # If rerun under force on test split, watermark the report
+    if is_test_split and marker_existed and force:
+        report_content = "> **RERUN: NOT UNSEEN**\n\n" + report_content
+
     if report_filename:
         report_file = out_path / report_filename
     else:
-        report_file = out_path / f"retrieval-{split}-{timestamp_tag}.md"
+        report_file = out_path / f"retrieval-{split}-{clean_scoring}-{timestamp_tag}.md"
     report_file.write_text(report_content, encoding="utf-8")
+
+    # Write JSON results file alongside markdown report
+    json_file = report_file.with_suffix(".json")
+    json_data = {
+        "split": split,
+        "scoring": clean_scoring,
+        "timestamp": datetime.now().isoformat(),
+        "commit": commit_hash,
+        "dirty": "-dirty" in commit_hash,
+        "model": getattr(settings, "MODEL_NAME", "unknown"),
+        "embedding_model": embed_model_name,
+        "thresholds": thresholds,
+        "metrics": metrics,
+        "results": results,
+    }
+    json_file.write_text(json.dumps(json_data, indent=2), encoding="utf-8")
+
+    # Write .ran-<scoring> marker for test splits
+    if is_test_split:
+        marker_content = (
+            f"date: {datetime.now().isoformat()}\n"
+            f"commit: {commit_hash}\n"
+            f"dirty: {'-dirty' in commit_hash}\n"
+            f"embedding_model: {embed_model_name}\n"
+            f"scoring: {clean_scoring}\n"
+        )
+        marker_file.write_text(marker_content, encoding="utf-8")
 
     print(f"\nReport written to: {report_file}")
     print("\n" + "=" * 40)
@@ -884,3 +998,438 @@ def run_retrieval_eval(
     return 0
 
 
+
+def parse_scoring_spec(scoring_str: Optional[str]) -> tuple[str, float, float]:
+    """Parse scoring specification string into (method_name, threshold, margin).
+
+    Formats accepted:
+    - 'fraction' -> ('fraction', 0.5, 0.08)
+    - 'embed' -> ('embed', 0.65, 0.08)
+    - 'embed@0.55' -> ('embed', 0.55, 0.08)
+    - 'hybrid' -> ('hybrid', 0.65, 0.08)
+    - 'hybrid@0.65' -> ('hybrid', 0.65, 0.08)
+    - 'rarest3' -> ('rarest3', 0.5, 0.08)
+    - 'idf' -> ('idf', 0.5, 0.08)
+    """
+    if not scoring_str or not scoring_str.strip():
+        return ("fraction", 0.5, 0.08)
+
+    raw = scoring_str.strip().lower()
+    if "@" in raw:
+        method, thresh_str = raw.split("@", 1)
+        try:
+            thresh = float(thresh_str)
+        except ValueError:
+            thresh = 0.65
+        return (method, thresh, 0.08)
+
+    if raw in ("embed", "hybrid"):
+        return (raw, 0.65, 0.08)
+
+    return (raw, 0.5, 0.08)
+
+
+# Fixed grid for embedding sweep
+FIXED_EMBED_GRID = [
+    ("fraction", 0.5, 0.0),
+    ("embed", 0.55, 0.08),
+    ("embed", 0.65, 0.08),
+    ("embed", 0.75, 0.08),
+    ("hybrid", 0.55, 0.08),
+    ("hybrid", 0.65, 0.08),
+    ("hybrid", 0.75, 0.08),
+]
+
+
+def select_best_setting(
+    sweep_table: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], Optional[dict[str, Any]]]:
+    """Apply the pre-registered eligibility and selection rule to the sweep matrix.
+
+    PRE-REGISTERED ELIGIBILITY RULE:
+    1. At most 1 false injection across the 34 general questions of easy-dev (10), hard-dev (4), and guard-dev (20):
+       (easy_gen_injected + hard_gen_injected + guard_gen_injected) <= 1
+    2. At most 1 irrelevant block across the 10 personal-no-answer questions of hard-dev (4) and easy-dev (6):
+       (hard_pna_with_block + easy_pna_with_block) <= 1
+
+    SELECTION CRITERIA AMONG ELIGIBLE:
+    1. Highest hard-dev recall
+    2. Ties broken by lower wrong-document rate (hard-dev)
+    3. Ties broken by lower outdated-injected rate (hard-dev)
+    4. Ties broken by simpler method: fraction < hybrid < embed
+    """
+    method_simplicity = {"fraction": 0, "hybrid": 1, "embed": 2}
+    eligible: list[dict[str, Any]] = []
+
+    for row in sweep_table:
+        total_false_injections = (
+            row["easy_gen_injected"] + row["hard_gen_injected"] + row["guard_false_inj_count"]
+        )
+        total_pna_blocks = row["hard_pna_with_block"] + row["easy_pna_with_block"]
+
+        is_eligible = (total_false_injections <= 1) and (total_pna_blocks <= 1)
+        row["total_false_injections"] = total_false_injections
+        row["total_pna_blocks"] = total_pna_blocks
+        row["is_eligible"] = is_eligible
+        if is_eligible:
+            eligible.append(row)
+
+    if not eligible:
+        return [], None
+
+    def sort_key(r: dict[str, Any]):
+        method_rank = method_simplicity.get(r["scoring"], 99)
+        return (
+            -r["hard_recall"],
+            r["wrong_doc_rate"],
+            r["outdated_injected_rate"],
+            method_rank,
+            r.get("threshold", 0.0),
+        )
+
+    eligible_sorted = sorted(eligible, key=sort_key)
+    return eligible, eligible_sorted[0]
+
+
+def run_sweep_embed(
+    out_dir: str = "evals/results",
+    report_filename: Optional[str] = None,
+    embedder: Optional[Any] = None,
+    grid: Optional[list[tuple[str, float, float]]] = None,
+) -> int:
+    """Execute fixed grid embedding retrieval sweep over hard-dev, easy-dev, and guard-dev."""
+    # Strict check: sweep refuses any grid other than the fixed one
+    if grid is not None and grid != FIXED_EMBED_GRID:
+        print("Error: --sweep-embed refuses any grid other than the fixed grid.", file=sys.stderr)
+        return 1
+
+    active_grid = FIXED_EMBED_GRID
+    commit_hash = get_git_commit()
+
+    hard_dev_items = load_retrieval_dataset("hard-dev")
+    easy_dev_items = load_retrieval_dataset("dev")
+    guard_dev_items = load_retrieval_dataset("guard-dev")
+
+    hard_outdated = load_retrieval_meta("hard-dev").get("outdated", [])
+    easy_outdated = load_retrieval_meta("dev").get("outdated", [])
+
+    # Instantiate embedder
+    eff_embed = embedder
+    if eff_embed is None:
+        if getattr(settings, "ORBIT_MOCK", False):
+            from rag.embeddings import FakeEmbedder
+            eff_embed = FakeEmbedder()
+        else:
+            from rag.embeddings import OllamaEmbedder
+            eff_embed = OllamaEmbedder(
+                model=getattr(settings, "RAG_EMBED_MODEL", "embeddinggemma"),
+                timeout=30.0,
+            )
+
+    embed_model_name = getattr(eff_embed, "model", eff_embed.__class__.__name__)
+    print(f"\nStarting Fixed Grid Embedding Retrieval Sweep (Embedder: {embed_model_name})...")
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        hard_db = Path(temp_dir) / "hard_corpus.db"
+        easy_db = Path(temp_dir) / "easy_corpus.db"
+
+        print("Building embedded indexes for evaluation corpora...")
+        hard_idx, hard_total, _ = build_retrieval_index("evals/retrieval_hard/corpus", hard_db, embedder=eff_embed)
+        easy_idx, easy_total, _ = build_retrieval_index("evals/retrieval/corpus", easy_db, embedder=eff_embed)
+        print(f"Indexes built: Hard ({hard_total} chunks), Easy ({easy_total} chunks).")
+
+        sweep_table: list[dict[str, Any]] = []
+
+        for scoring, thresh, margin in active_grid:
+            label = "fraction" if scoring == "fraction" else f"{scoring}@{thresh:.2f}"
+            print(f"  Evaluating {label}...")
+
+            # 1. Hard-dev
+            hard_results = [
+                evaluate_item(
+                    hard_idx,
+                    item,
+                    scoring=scoring,
+                    embedder=eff_embed,
+                    embed_threshold=thresh,
+                    embed_margin=margin,
+                    outdated=hard_outdated,
+                )
+                for item in hard_dev_items
+            ]
+            hard_metrics = compute_retrieval_metrics(hard_results)
+
+            # 2. Easy-dev
+            easy_results = [
+                evaluate_item(
+                    easy_idx,
+                    item,
+                    scoring=scoring,
+                    embedder=eff_embed,
+                    embed_threshold=thresh,
+                    embed_margin=margin,
+                    outdated=easy_outdated,
+                )
+                for item in easy_dev_items
+            ]
+            easy_metrics = compute_retrieval_metrics(easy_results)
+
+            # 3. Guard-dev (uses hard corpus index)
+            guard_results = [
+                evaluate_item(
+                    hard_idx,
+                    item,
+                    scoring=scoring,
+                    embedder=eff_embed,
+                    embed_threshold=thresh,
+                    embed_margin=margin,
+                )
+                for item in guard_dev_items
+            ]
+            guard_metrics = compute_retrieval_metrics(guard_results)
+
+            # PNA questions with irrelevant blocks
+            hard_pna_with_block = sum(1 for r in hard_results if r["kind"] == "personal-no-answer" and r["has_block"])
+            easy_pna_with_block = sum(1 for r in easy_results if r["kind"] == "personal-no-answer" and r["has_block"])
+
+            # Compute median retrieval time across all evaluated queries
+            all_durations = [
+                r["duration_s"] for r in (hard_results + easy_results + guard_results) if "duration_s" in r
+            ]
+            med_time_ms = (statistics.median(all_durations) * 1000.0) if all_durations else 0.0
+
+            sweep_table.append({
+                "label": label,
+                "scoring": scoring,
+                "threshold": thresh,
+                "margin": margin,
+                "hard_recall": hard_metrics["recall"],
+                "hard_doc_passed": hard_metrics["doc_passed"],
+                "hard_doc_total": hard_metrics["doc_total"],
+                "hard_tags": hard_metrics.get("recall_by_tag", {}),
+                "hard_gen_injected": hard_metrics["gen_injected"],
+                "hard_gen_total": hard_metrics["gen_total"],
+                "wrong_doc_rate": hard_metrics["injected_wrong_doc_rate"],
+                "wrong_doc_count": hard_metrics["doc_with_wrong"],
+                "outdated_injected_rate": hard_metrics.get("outdated_injected_rate", 0.0),
+                "outdated_doc_count": hard_metrics.get("doc_with_outdated", 0),
+                "easy_recall": easy_metrics["recall"],
+                "easy_doc_passed": easy_metrics["doc_passed"],
+                "easy_doc_total": easy_metrics["doc_total"],
+                "easy_false_inj_rate": easy_metrics["false_injection_rate"],
+                "easy_gen_injected": easy_metrics["gen_injected"],
+                "easy_gen_total": easy_metrics["gen_total"],
+                "guard_false_inj_count": guard_metrics["gen_injected"],
+                "guard_gen_total": guard_metrics["gen_total"],
+                "guard_false_inj_rate": guard_metrics["false_injection_rate"],
+                "hard_pna_with_block": hard_pna_with_block,
+                "hard_pna_total": hard_metrics["pna_total"],
+                "easy_pna_with_block": easy_pna_with_block,
+                "easy_pna_total": easy_metrics["pna_total"],
+                "avg_injected_passages": hard_metrics["avg_injected_passages"],
+                "median_time_ms": med_time_ms,
+            })
+
+    # Apply pre-registered eligibility and selection rule
+    eligible_list, selected_row = select_best_setting(sweep_table)
+
+    # Render report markdown
+    lines = [
+        "# ORBIT Fixed Grid Embedding Retrieval Sweep Report",
+        "",
+        f"- **Execution Timestamp**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"- **Git Commit Hash**: `{commit_hash}`",
+        f"- **Embedding Model**: `{embed_model_name}`",
+        "",
+        "## Pre-Registered Eligibility Rule",
+        "> A setting is eligible only with at most 1 false injection across the 34 general questions of easy-dev (10), hard-dev (4), and guard-dev (20)",
+        "> and at most 1 irrelevant block across the 10 personal-no-answer questions of hard-dev (4) and easy-dev (6).",
+        "> Among eligible settings, pick the highest hard-dev recall, with ties broken by lower wrong-document rate,",
+        "> then lower outdated-injected rate, then simpler method (fraction < hybrid < embed).",
+        "",
+        "## Grid Comparison Matrix",
+        "",
+        "| Setting | Hard Recall | Wrong-Doc | Outdated-Inj | Easy Recall | Easy FI | Guard FI | Hard PNA | Easy PNA | Avg Passages | Med Time | Eligible? |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
+    ]
+
+    for row in sweep_table:
+        hr_str = f"{row['hard_recall'] * 100:.1f}% ({row['hard_doc_passed']}/{row['hard_doc_total']})"
+        wd_str = f"{row['wrong_doc_rate'] * 100:.1f}%"
+        out_str = f"{row['outdated_injected_rate'] * 100:.1f}%"
+        er_str = f"{row['easy_recall'] * 100:.1f}%"
+        efi_str = f"{row['easy_gen_injected']}/{row['easy_gen_total']}"
+        gfi_str = f"{row['guard_false_inj_count']}/{row['guard_gen_total']}"
+        hpna_str = f"{row['hard_pna_with_block']}/{row['hard_pna_total']}"
+        epna_str = f"{row['easy_pna_with_block']}/{row['easy_pna_total']}"
+        passages_str = f"{row['avg_injected_passages']:.2f}"
+        time_str = f"{row['median_time_ms']:.1f} ms"
+        elig_str = "YES" if row.get("is_eligible") else "NO"
+
+        lines.append(
+            f"| `{row['label']}` | {hr_str} | {wd_str} | {out_str} | {er_str} | {efi_str} | {gfi_str} | {hpna_str} | {epna_str} | {passages_str} | {time_str} | {elig_str} |"
+        )
+
+    # Per-tag recall table
+    all_tags = sorted({tag for row in sweep_table for tag in row["hard_tags"].keys()})
+    lines.extend([
+        "",
+        "## Hard-dev Per-Tag Recall",
+        "",
+        "| Setting | " + " | ".join(f"`{t}`" for t in all_tags) + " |",
+        "|---|" + "|".join("---" for _ in all_tags) + "|",
+    ])
+    for row in sweep_table:
+        tag_cols = []
+        for t in all_tags:
+            t_data = row["hard_tags"].get(t)
+            if t_data:
+                tag_cols.append(f"{t_data['recall'] * 100:.1f}% ({t_data['passed']}/{t_data['total']})")
+            else:
+                tag_cols.append("-")
+        lines.append(f"| `{row['label']}` | " + " | ".join(tag_cols) + " |")
+
+    eligible_str = ", ".join(f"`{r['label']}`" for r in eligible_list) if eligible_list else "None"
+    sel_label = selected_row["label"] if selected_row else "None"
+    lines.extend([
+        "",
+        "## Selection Outcome",
+        f"- **Eligible Configurations**: {eligible_str}",
+        f"- **Pre-Registered Rule Selected Setting**: **`{sel_label}`**",
+    ])
+
+    report_content = "\n".join(lines) + "\n"
+    out_path = Path(out_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    timestamp_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
+    report_file = out_path / (report_filename or f"retrieval-sweep-embed-{timestamp_tag}.md")
+    report_file.write_text(report_content, encoding="utf-8")
+
+    # Also save structured JSON
+    json_file = out_path / (report_filename.replace(".md", ".json") if report_filename and report_filename.endswith(".md") else f"retrieval-sweep-embed-{timestamp_tag}.json")
+    json_data = {
+        "timestamp": datetime.now().isoformat(),
+        "commit": commit_hash,
+        "embedding_model": embed_model_name,
+        "grid": sweep_table,
+        "eligible": [r["label"] for r in eligible_list],
+        "selected": selected_row["label"] if selected_row else None,
+    }
+    json_file.write_text(json.dumps(json_data, indent=2), encoding="utf-8")
+
+    # Console output
+    print("\n" + "=" * 135)
+    print("ORBIT FIXED GRID EMBEDDING RETRIEVAL SWEEP SUMMARY")
+    print("=" * 135)
+    print(f"{'Setting':<16} {'Hard-Recall':<18} {'Wrong-Doc':<12} {'Outdated':<12} {'Easy-Recall':<14} {'Easy-FI':<10} {'Guard-FI':<10} {'Hard-PNA':<10} {'Easy-PNA':<10} {'Passages':<10} {'Time':<10} {'Eligible'}")
+    print("-" * 135)
+    for row in sweep_table:
+        hr_str = f"{row['hard_recall'] * 100:.1f}% ({row['hard_doc_passed']}/{row['hard_doc_total']})"
+        wd_str = f"{row['wrong_doc_rate'] * 100:.1f}%"
+        out_str = f"{row['outdated_injected_rate'] * 100:.1f}%"
+        er_str = f"{row['easy_recall'] * 100:.1f}%"
+        efi_str = f"{row['easy_gen_injected']}/{row['easy_gen_total']}"
+        gfi_str = f"{row['guard_false_inj_count']}/{row['guard_gen_total']}"
+        hpna_str = f"{row['hard_pna_with_block']}/{row['hard_pna_total']}"
+        epna_str = f"{row['easy_pna_with_block']}/{row['easy_pna_total']}"
+        passages_str = f"{row['avg_injected_passages']:.2f}"
+        time_str = f"{row['median_time_ms']:.1f}ms"
+        elig_str = "YES" if row.get("is_eligible") else "NO"
+        print(f"{row['label']:<16} {hr_str:<18} {wd_str:<12} {out_str:<12} {er_str:<14} {efi_str:<10} {gfi_str:<10} {hpna_str:<10} {epna_str:<10} {passages_str:<10} {time_str:<10} {elig_str}")
+    print("=" * 135)
+    print(f"Eligible settings: {', '.join(r['label'] for r in eligible_list) if eligible_list else 'None'}")
+    print(f"Rule selected setting: {selected_row['label'] if selected_row else 'None'}")
+    print(f"Report written to: {report_file}\n")
+
+    return 0
+
+
+def run_retrieval_verdict(candidate_scoring: str, out_dir: str = "evals/results") -> int:
+    """Evaluate candidate scoring against baseline fraction using test split results by pre-registered rule."""
+    out_path = Path(out_dir)
+    clean_candidate = candidate_scoring.replace("/", "_")
+
+    # Find test files in results directory
+    # Expected reports:
+    # 1. hard-test baseline (fraction)
+    # 2. guard-test baseline (fraction)
+    # 3. hard-test candidate (candidate_scoring)
+    # 4. guard-test candidate (candidate_scoring)
+    
+    def find_latest_test_json(split: str, scoring_name: str) -> Optional[dict]:
+        clean_name = scoring_name.replace("/", "_")
+        matches = sorted(out_path.glob(f"retrieval-{split}-*-{clean_name}-*.json"))
+        if not matches:
+            # Also check without scoring in name if fraction
+            if scoring_name == "fraction":
+                matches = sorted(out_path.glob(f"retrieval-{split}-*.json"))
+                # Filter out files with other scorings in name
+                matches = [m for m in matches if "@" not in m.name and "hybrid" not in m.name and "embed" not in m.name]
+        if not matches:
+            return None
+        try:
+            return json.loads(matches[-1].read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+    hard_base = find_latest_test_json("hard-test", "fraction")
+    guard_base = find_latest_test_json("guard-test", "fraction")
+    hard_cand = find_latest_test_json("hard-test", clean_candidate)
+    guard_cand = find_latest_test_json("guard-test", clean_candidate)
+
+    missing = []
+    if not hard_base:
+        missing.append("hard-test (fraction baseline)")
+    if not guard_base:
+        missing.append("guard-test (fraction baseline)")
+    if not hard_cand:
+        missing.append(f"hard-test ({candidate_scoring} candidate)")
+    if not guard_cand:
+        missing.append(f"guard-test ({candidate_scoring} candidate)")
+
+    if missing:
+        missing_list_str = "\n- ".join(missing)
+        print(f"Error: Missing required test result files for verdict evaluation:\n- {missing_list_str}", file=sys.stderr)
+        return 1
+
+    # Extract metrics
+    base_hard_passed = hard_base["metrics"]["doc_passed"]
+    cand_hard_passed = hard_cand["metrics"]["doc_passed"]
+    base_wrong_rate = hard_base["metrics"]["injected_wrong_doc_rate"]
+    cand_wrong_rate = hard_cand["metrics"]["injected_wrong_doc_rate"]
+    base_outdated_rate = hard_base["metrics"].get("outdated_injected_rate", 0.0)
+    cand_outdated_rate = hard_cand["metrics"].get("outdated_injected_rate", 0.0)
+    cand_hard_pna_with_block = sum(1 for r in hard_cand.get("results", []) if r.get("kind") == "personal-no-answer" and r.get("has_block"))
+    cand_guard_false_inj = guard_cand["metrics"]["gen_injected"]
+
+    # Pre-registered validation rule:
+    # 1. hard-test recall improved by at least 3 of 16
+    c1 = (cand_hard_passed >= base_hard_passed + 3)
+    # 2. wrong-document rate not higher than baseline
+    c2 = (cand_wrong_rate <= base_wrong_rate)
+    # 3. outdated-injected rate not higher than baseline
+    c3 = (cand_outdated_rate <= base_outdated_rate)
+    # 4. at most 1 irrelevant block on the hard-test personal questions
+    c4 = (cand_hard_pna_with_block <= 1)
+    # 5. at most 1 false injection of 20 on guard-test
+    c5 = (cand_guard_false_inj <= 1)
+
+    overall_pass = c1 and c2 and c3 and c4 and c5
+
+    print("\n" + "=" * 55)
+    print(f"RETRIEVAL VALIDATION VERDICT: {'PASS' if overall_pass else 'FAIL'}")
+    print("=" * 55)
+    print(f"Candidate Scoring: '{candidate_scoring}' vs Baseline 'fraction'\n")
+    print(f"[{'PASS' if c1 else 'FAIL'}] Criterion 1 (Recall improvement):")
+    print(f"       Hard-test recall: {cand_hard_passed}/16 vs baseline {base_hard_passed}/16 (improvement: +{cand_hard_passed - base_hard_passed}, required >= +3)")
+    print(f"[{'PASS' if c2 else 'FAIL'}] Criterion 2 (Wrong-document rate):")
+    print(f"       Candidate {cand_wrong_rate * 100:.1f}% <= baseline {base_wrong_rate * 100:.1f}%")
+    print(f"[{'PASS' if c3 else 'FAIL'}] Criterion 3 (Outdated-injected rate):")
+    print(f"       Candidate {cand_outdated_rate * 100:.1f}% <= baseline {base_outdated_rate * 100:.1f}%")
+    print(f"[{'PASS' if c4 else 'FAIL'}] Criterion 4 (Personal questions irrelevant block):")
+    print(f"       Hard-test personal blocks: {cand_hard_pna_with_block} (allowed <= 1)")
+    print(f"[{'PASS' if c5 else 'FAIL'}] Criterion 5 (Guard-test false injections):")
+    print(f"       Guard-test false injections: {cand_guard_false_inj}/20 (allowed <= 1)")
+    print("=" * 55 + "\n")
+
+    return 0 if overall_pass else 1

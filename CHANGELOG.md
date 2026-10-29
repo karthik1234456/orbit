@@ -7,6 +7,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.14.0] - 2026-10-29
+
+### Added & Enhanced
+- **Digital Signal Processing Audio Enhancement (`voice/enhance.py`)**:
+  - Pure `numpy` DSP functions with zero new external dependencies (no `scipy` required) operating on 16 kHz float32 audio arrays.
+  - High-pass filtering (`highpass`): FFT frequency-domain zeroing below 80 Hz with a smooth raised-cosine taper from 80 Hz to 100 Hz to eliminate HVAC, mechanical rumble, and 50/60 Hz electrical hum.
+  - Automatic Gain Control (`agc`): levels quiet speech up to a 0.08 target RMS with gain capped at +20 dB (10x max multiplier) and an integrated clip guard preventing sample peaks from exceeding 0.98.
+  - Spectral Noise Gate (`spectral_gate`): STFT-based spectral subtraction with 25 ms Hann analysis windows (400 samples at 16 kHz) and 50% overlap (200 samples); computes background noise profiles from the quietest 15% of frames and applies spectral attenuation with floor beta = 0.05, time smoothing, and overlap-add resynthesis preserving exact input lengths.
+  - Signal-to-Noise Ratio Estimation (`estimate_snr_db`): fast, robust SNR estimation computed from the energy ratio of the loudest 15% to quietest 15% frames.
+  - Top-level `enhance(audio, settings)`: applies enabled pipeline steps in fixed order (`highpass` -> `agc` -> `spectral_gate`); never raises exceptions (falls back to raw audio on failure and logs error reason to `LAST_ENHANCE_ERROR`).
+- **Decoder Prompting & Whisper Beam Search Expansion (`voice/stt.py`, `voice/vocab.py`)**:
+  - `Transcript` dataclass expanded with decoding diagnostics: `avg_logprob`, `no_speech_prob`, and `decode_seconds`.
+  - Vocabulary Prompt Construction (`voice/vocab.py`): builds bounded decoding prompt strings (<= 200 chars) strictly from keys in `config/apps.py` (`ALLOWED_APPS`), `config/sites.py` (`SITES`), common action verbs, and `"ORBIT"`.
+  - Dynamic Whisper Integration (`voice/stt.py`): checks transcriber model signature for native `hotwords` support; falls back to `initial_prompt` when `hotwords` is unavailable; accepts configurable beam size (`STT_BEAM`, 1-5, default 1).
+  - Defaults preserve exact prior transcribe arguments and keyword defaults when flags are off.
+- **Deterministic Multi-Token Alias Resolution (`voice/aliases.py`)**:
+  - `variants(text, allowed_apps, sites)` generates candidate multi-word splits (e.g., `"note pad"`, `"you tube"`, `"git hub"`, `"wiki pedia"`) strictly from registered applications and sites.
+  - `resolve(text, parse_fn)`: resolves to rewritten text only when the original text does not parse and exactly one candidate variant cleanly parses into a valid action; multiple matches or zero matches leave original user input untouched (never guesses).
+- **Safety Review Gating & Noise Calibration (`voice/review.py`, `ui/voice_controller.py`, `ui/app.py`, `main.py`)**:
+  - Multi-condition review decision (`compute_needs_review`): triggers when `VOICE_REVIEW="always"`, or when `VOICE_REVIEW="auto"` and confidence is low (`avg_logprob < -1.0`), unvoiced probability is high (`no_speech_prob > 0.6`), SNR is poor (`< 10 dB`), or transcription length is under 2 words.
+  - Desktop GUI & CLI Review Flow: holds unconfident speech transcripts in the input prompt with a visual status banner (`"Low confidence"` or `"Noisy room: a headset helps"`) without submitting to the agent loop; user can review, edit, or submit via Enter (`source="voice-reviewed"`), or clear the input to cancel.
+  - Pre-roll Ambient Noise Calibration: reads 0.5s pre-roll ambient audio from `Recorder` to estimate room SNR before speech, displaying warning notifications when background noise is elevated.
+  - Categorized noise status mapping: `snr_to_noise_status` classifies room acoustics into `Noise: low` (>= 18 dB), `Noise: medium` (10-18 dB), and `Noise: high` (< 10 dB).
+- **Configuration & Diagnostics (`config/settings.py`, `config/settings_store.py`, `core/diagnostics.py`, `core/doctor.py`)**:
+  - Added safe configuration toggles: `VOICE_HIGHPASS` (0|1, def 0), `VOICE_AGC` (0|1, def 0), `VOICE_DENOISE` (0|1, def 0), `STT_BEAM` (1-5, def 1), `STT_PROMPT` (0|1, def 0), `VOICE_ALIASES` (0|1, def 0), `VOICE_REVIEW` (`auto`|`always`|`never`, def `auto`), and expanded `STT_MODEL` validation to permit `small.en`.
+  - Diagnostics (`core/diagnostics.py`): updated `=== VOICE ===` to report all enhancement toggles, last estimated SNR, and review reason without leaking private audio samples or user text.
+  - Doctor (`core/doctor.py`): `check_voice_enhancement` verifies scipy-free numpy DSP availability, STT model caching, and reports local evaluation recording counts with recording hints.
+- **Voice Measurement Kit & Scientific Evaluation (`evals/voice_eval.py`, `evals/voice_phrases.json`, `scripts/voice_record.py`)**:
+  - 48 pre-registered benchmark phrases partitioned into 24 development and 24 unseen test phrases across disjoint applications and websites; all phrases verifiably parse into valid shortcut actions.
+  - Resumable recording CLI (`scripts/voice_record.py`): records 16 kHz mono 16-bit WAV files under `data/voice_eval/` (git-ignored); enforces minimum SNR quality checks and strictly refuses demo mode.
+  - Noise synthesis pipeline: deterministic synthesis of white noise, pink noise, 50 Hz hum with harmonics, and babble speech mixed at 10 dB and 5 dB SNR across active speech frames.
+  - Automated configuration sweep (`--voice dev --sweep`): evaluates 8 configurations (`baseline`, `small`, `prompt`, `filter`, `gate`, `beam5`, `aliases`, `combined`) across command match, wrong-command rate, WER, and median latency.
+  - Scientific test lock: test split sweep is blocked; requires `--final-test` and writes immutable `.ran-<config>` markers. Subsequent test runs are refused unless `--force` is provided (marking report `RERUN: NOT UNSEEN`).
+  - Pre-registered acceptance verdict (`--voice-verdict`): simultaneously checks all 5 pre-registered acceptance criteria against baseline (noisy gain >= +6.0 pts, wrong rate increase <= +1.0 pt, clean drop <= 1/24 phrases, latency <= 5.0s, real noise preserved) and reports metric diffs.
+- **Documentation & Threat Modeling**:
+  - Updated `README.md` with "Voice in Noisy Rooms" section covering settings, review flow, headset guidance, local recording instructions, and limitations.
+  - Updated `docs/THREAT_MODEL.md` with Threat 20 and Section 15 on acoustic injection defense.
+  - Updated `docs/TEST_CHECKLIST.md` with verification items `VE1`-`VE6`.
+
+---
+
+## [2.13.0] - 2026-10-29
+
+### Added & Enhanced
+- **Sci-Fi HUD Desktop Interface (`ui/hud.py`, `ui/hud_core.py`)**:
+  - Rotating 3D wireframe sphere (12 latitude circles, 24 longitude lines), 3 tilted orbital rings with animated particle streams, segmented radial arc rings, and concentric outer boundary tick marks.
+  - Pure Python math core (`ui/hud_core.py`) with zero GUI dependencies: vector-length-preserving 3D Euler rotations, perspective projection, depth-based color interpolation, and frame-rate-independent delta-time updates.
+  - Strict state priority hierarchy: `CONFIRMING` (amber hold) > `ERROR` (red warning with 1.5s decay) > `SPEAKING` (3 Hz rhythmic pulse) > `LISTENING` (rms-proportional pulse) > `THINKING` (busy orbital spin) > `IDLE` (gentle 0.5 Hz breathing cycle).
+  - Canvas item pooling: pre-allocates all visual items once during initialization; zero per-frame canvas item creation/deletion with debounced coordinate caching.
+  - Motion modes: `full` (30 FPS default with particle streams and boot animation), `reduced` (~8 FPS, slow pulse, particles disabled), and `off` (static frame).
+  - Adaptive Quality Governor: monitors rolling 20-frame durations with a 25ms threshold and 30-second hysteresis cooldown, stepping down fidelity (`high` -> `medium` -> `low` -> `static`) if frame times exceed thresholds.
+- **Theming System & WCAG Contrast Compliance (`ui/theme.py`)**:
+  - Three distinct palettes: `"cyan"` (deep near-black teal background with bright cyan accents), `"gold"` (near-black obsidian with warm gold and champagne accents), and `"mono"` (graphite slate with crisp white accents).
+  - WCAG 2.1 relative luminance and contrast verification: every text and text_dim color strictly meets or exceeds the 4.5:1 contrast threshold against both background and panel surfaces across all three palettes.
+  - Heading and data font selectors with graceful fallbacks (Bahnschrift SemiLight / Segoe UI for headings; Consolas / Cascadia Code / TkFixedFont for data).
+  - TTK styling: maps palette colors across buttons, entries, notebooks, treeviews, and text tags.
+- **Vector-Rendered Bottom Dock (`ui/dock.py`)**:
+  - Keyboard-accessible bottom dock (`takefocus=True`) with 5 vector-drawn round icons: Activity (clock dial), Routines (linked nodes), Microphone (center capsule with dynamic audio level ring and state indicator), Settings (gear), and Doctor (heartbeat pulse line).
+  - Full keyboard navigation: Left/Right arrow focus cycling, Space/Enter activation, and `Ctrl+1`..`5` global hotkey triggers.
+  - Hover glow, tooltips, and distinct focus ring styling. Calls existing action handlers without changing security or permission paths.
+- **Layout Integration & Fail-Safe Fallback (`ui/app.py`)**:
+  - Default layout `UI_STYLE="hud"` with default window dimensions 1180x760 (minsize 960x640); legacy layout preserved when `UI_STYLE="classic"`.
+  - Right-hand notebook panel toggleable via dock icons (Activity, Routines).
+  - Exception-safe construction: if HUD canvas initialization fails, the error is logged to diagnostics (`LAST_HUD_ERROR`), a single-line system notice is displayed in chat, and the window safely falls back to the classic layout.
+  - Modal dialog security: `ConfirmDialog` and `PlanDialog` adopt active palette styling while retaining strict `-topmost True`, modal grabbing, auto-deny countdown, and voice-input immunity.
+- **Configuration & Diagnostics (`config/settings.py`, `config/settings_store.py`, `core/diagnostics.py`)**:
+  - Added non-secret settings: `UI_STYLE` (`hud`|`classic`), `UI_THEME` (`cyan`|`gold`|`mono`), `UI_MOTION` (`full`|`reduced`|`off`), and `HUD_FPS` (`15`|`24`|`30`).
+  - Added `=== HUD ===` section to system diagnostics reporting style, theme, motion, FPS, active quality governor tier, average frame time, and downgrade count.
+- **Developer & Benchmark Tools (`scripts/hud_preview.py`, `scripts/hud_bench.py`)**:
+  - `scripts/hud_preview.py`: interactive standalone preview window supporting real-time state forcing (keys 1-6), motion switching (M), theme switching (T), mic slider, and live telemetry.
+  - `scripts/hud_bench.py`: automated 5-second per-tier benchmark measuring avg, p95, and worst frame times to calculate recommended `HUD_FPS`.
+- **Documentation & Verification**:
+  - Updated `README.md` with "Interface" section describing HUD architecture, themes, dock navigation, and motion controls.
+  - Updated `docs/THREAT_MODEL.md` with Threat 19 confirming HUD/dock cosmetic-only boundaries.
+  - Updated `docs/TEST_CHECKLIST.md` with verification items `HUD1`–`HUD8`.
+
+---
+
+## [2.11.0] - 2026-10-29
+
+### Added & Enhanced
+- **Centralized Path Resolution & ORBIT_HOME Isolation (`config/paths.py`)**:
+  - Centralized all filesystem paths, database files, and log locations in `config/paths.py`.
+  - Added `ORBIT_HOME` environment variable: when unset/empty, all default paths preserve exact legacy locations; when set, storage paths (`workspace/`, `workspace/docs`, `data/memory.db`, `data/rag.db`, `data/reminders.db`, `data/routines.db`, `data/browser_profile`, and `logs/`) move under the configured directory.
+  - Strict validation: rejects values that are a drive root (`C:\`, `/`), the user's home directory (`Path.home()`), or the project repository root.
+  - Explicit per-path environment variables (`WORKSPACE_DIR`, `MEMORY_DB_PATH`, `DOCS_DIR`, etc.) continue to take precedence over `ORBIT_HOME`.
+- **Isolated Demo Mode & Runner (`scripts/demo.py`)**:
+  - Added `scripts/demo.py` with CLI arguments `--home`, `--offline`, `--ui`, `--terminal`, and `--keep`.
+  - Implemented safe reset mechanism: refuses to delete target folder unless it contains the `.orbit_demo` marker file, and never deletes symlink targets or follows symlinks.
+  - Synthetic sample data seeder: creates `workspace/docs/` with three privacy-safe markdown documents (`visitor_policy.md`, `hardware_inventory.md`, and `project_plan.md` containing a harmless injection attempt) and `workspace/notes/` with two short notes.
+  - Documents are indexed directly via the shared `index_docs_directory` pipeline into a clean SQLite FTS5 database; no memory, reminders, or routines are pre-created.
+  - Launches child UI or terminal process with isolated environment (`ORBIT_HOME`, `DEMO_MODE=1`, and optionally `ORBIT_OFFLINE=1` / `LLM_PROVIDER=ollama`) without mutating parent process or repository state.
+- **Demo Mode UI & CLI Indicators**:
+  - Desktop window title appends `" - DEMO MODE (sample data)"`.
+  - Desktop status bar displays an orange `"DEMO"` chip.
+  - Terminal startup banner prints `"DEMO MODE: sample data in <folder>"`.
+  - Environment doctor and `/diag` report active demo mode and `ORBIT_HOME` folder name (folder name only, never leaking full system path).
+  - Settings modifications are disabled in demo mode: the settings editor dialog and `/set` command refuse to save with friendly message `"Settings can't be changed in demo mode"`.
+- **Documentation & Verification Checklist**:
+  - Added "Demo mode" section to `README.md` explaining launch procedures, isolation boundaries, and security model.
+  - Created `docs/DEMO_SCRIPT.md` containing a 90-second recording shot list with exact phrases, expected results, checklist tags, and pre-recording guidance.
+  - Updated `docs/TEST_CHECKLIST.md` with items `DM1`–`DM4` and a note that all live checklist items can run against either normal mode or demo mode.
+  - Added `demo_home/` to `.gitignore` and enforced in `tests/test_repo_hygiene.py`.
+
+---
+
 ## [2.10.1] - 2026-10-27
 
 ### Added & Enhanced

@@ -4,6 +4,9 @@ This document provides a repeatable, human-executable verification checklist for
 
 Each test case specifies the feature area, exact command or user action, expected behavior, verification outcome, and space for tester notes.
 
+> [!NOTE]
+> **Execution Mode Agnostic**: Every live verification item in this checklist can be executed against either normal mode (`python main.py` / `python -m ui`) or isolated demo mode (`python scripts/demo.py` / `python scripts/demo.py --terminal`). In demo mode, all stores, logs, and browser profiles are redirected under `demo_home/`, leaving the real repository environment clean and untouched.
+
 ---
 
 ## 1. Summary of Test Sections
@@ -18,6 +21,9 @@ Each test case specifies the feature area, exact command or user action, expecte
 | **Environment Doctor** | v2.8 | Read-only configuration, hardware, dependency, and security checks | Terminal CLI & GUI |
 | **Settings Panel & CLI** | v2.9 | Whitelisted settings, .env.bak backup, environment overrides, CRLF | Desktop GUI & CLI |
 | **Named Routines** | v2.10 | Save approval, preview gate on run, limits, store, UI tab, isolation | Desktop GUI & CLI |
+| **Demo Mode & Isolation** | v2.11 | Isolated storage, synthetic seeding, marker reset, settings protection | Scripts, Desktop GUI & CLI |
+| **Sci-Fi HUD & Dock** | v2.13 | 3D wireframe sphere, particle rings, dock icons, themes, quality governor | Desktop GUI |
+| **Voice in Noisy Rooms** | v2.14 | Noise filtering, AGC, spectral gate, vocab prompt, aliases, review gate | Desktop GUI & Evals |
 
 ---
 
@@ -72,6 +78,26 @@ Each test case specifies the feature area, exact command or user action, expecte
 | **RT5** | **v2.10 Routines: Desktop Routines Tab** | Open the **Routines** tab in the desktop GUI. | Displays table with `Name`, `Steps`, `Last Run`, `Runs`. Clicking **Run** submits `run routine <name>`. Clicking **Show steps** displays formatted steps. Clicking **Delete** prompts confirmation messagebox before deleting. | `PASS` | Full GUI management interface. |
 | **RT6** | **v2.10 Routines: Stale Allowlist Safety** | Remove an app from `ALLOWED_APPS` after saving a routine that uses it. Enter: `"run routine <name>"`. | Pre-execution re-validation detects stale app and refuses before step 1 (`no longer in the allowed list`). Zero steps execute. | `PASS` | Fails closed before any step runs. |
 | **RT7** | **v2.10 Routines: Model & Safety Isolation** | Save and run routines. Inspect LLM call logs, prompts, memory, and `/diag`. | Model is never invoked during routine operations; routine names/steps never appear in prompt context or memory; `/diag` `=== ROUTINES ===` outputs count only. | `PASS` | Strict isolation from model and memory. |
+| **DM1** | **v2.11 Demo: Window Title & Status Chip** | Launch: `python scripts/demo.py` | GUI window title displays `ORBIT v2.11.0 Desktop Assistant - DEMO MODE (sample data)`; status bar displays orange `DEMO` badge. | `PASS` | Visual demo mode indicator verified. |
+| **DM2** | **v2.11 Demo: Storage Isolation** | In demo mode, create a file `"notes/demo_test.txt"`. Inspect `workspace/` and `demo_home/workspace/`. | File is created strictly in `demo_home/workspace/notes/demo_test.txt`; real repository `workspace/` remains clean and empty. | `PASS` | Filesystem storage isolation verified. |
+| **DM3** | **v2.11 Demo: Settings Protection** | In demo mode, enter `/set SPEAK_REPLIES 1` or open Settings GUI and click Save. | Rejection message appears: `"Settings can't be changed in demo mode"`. Neither `.env` nor `.env.bak` is written. | `PASS` | Config protection in demo mode verified. |
+| **DM4** | **v2.11 Demo: Marker Reset Safety** | Create a non-empty directory without `.orbit_demo` marker. Pass `--home <dir>` to `scripts/demo.py`. | Execution stops with clear error and deletes nothing (`does not contain the '.orbit_demo' marker. Refusing to delete`). | `PASS` | Safe reset protection verified. |
+| **DM5** | **v2.11 Demo: Path Invariance Unset** | Launch ORBIT without ORBIT_HOME. Query paths via config.paths. | All storage and log paths resolve to standard repository defaults (workspace/, data/, logs/); no redirection occurs. | PASS | Baseline path invariance verified. |
+| **DM6** | **v2.11 Demo: Browser Profile Isolation** | Launch python scripts/demo.py. Open browser via tool (search wikipedia for Python). | Playwright uses clean demo_home/data/browser_profile/; personal cookies and active sessions from default profile are absent. | PASS | Profile sandbox isolation verified. |
+| **HUD1** | **v2.13 HUD: 3D Wireframe Sphere & Math** | Launch `python -m ui` (or preview with `scripts/hud_preview.py`). | 3D rotating wireframe sphere (12 lat, 24 lon circles), 3 tilted orbit rings, and concentric boundary ticks render smoothly; 3D rotation strictly preserves Euclidean vector lengths. | `PASS` | Pure math verified in `test_hud.py`. |
+| **HUD2** | **v2.13 HUD: State Priority Hierarchy** | Trigger confirming dialog, error, speaking, listening, and busy states. | HUD resolves states strictly: Confirming (amber hold) > Error (red warning with 1.5s decay) > Speaking (3 Hz pulse) > Listening (mic-responsive pulse) > Thinking (busy spin) > Idle (gentle breathing). | `PASS` | Priority precedence enforced across all permutations. |
+| **HUD3** | **v2.13 HUD: Quality Governor & Dynamic Tiers** | Benchmark or record frame times exceeding 25ms threshold over 20 frames. | Quality governor automatically downgrades fidelity tier (`high` [400 particles] -> `medium` [200] -> `low` [100, no glow] -> `static`); respects 30-second hysteresis cooldown. | `PASS` | Adaptive load shedding verified. |
+| **HUD4** | **v2.13 HUD: Theme Contrast Verification** | Switch themes (`cyan`, `gold`, `mono`) via settings or preview tool. | All text (`text`) and secondary text (`text_dim`) colors achieve WCAG 2.1 relative contrast ratios >= 4.5:1 against both `bg` and `panel` surfaces across all three palettes. | `PASS` | Verified with WCAG luminance calculations. |
+| **HUD5** | **v2.13 HUD: Canvas Item Pooling & Resource Conservation** | Run HUD animation and inspect Canvas item IDs. | All canvas visual elements (lines, arcs, ovals, particles) are pre-allocated once during initialization. No canvas items are created or deleted per frame; only coords and colors are updated when changed. | `PASS` | Zero memory leak or item thrashing. |
+| **HUD6** | **v2.13 HUD: Bottom Dock Navigation & Shortcuts** | Use Left/Right arrow keys, Space/Enter, and `Ctrl+1`..`5` on bottom dock. | Focus moves visibly with distinct focus ring. Space/Enter or Ctrl+1..5 triggers Activity, Routines, Mic, Settings, and Doctor; center mic icon dynamically pulses with live audio level ring. | `PASS` | Keyboard accessibility verified. |
+| **HUD7** | **v2.13 HUD: Dialog Topmost & Voice Immunity** | Trigger sensitive action requiring approval while HUD is animating. | `ConfirmDialog` and `PlanDialog` maintain `-topmost True`, modal grabbing, and auto-deny timer above the animated canvas; voice input is strictly refused and cannot confirm dialogs. | `PASS` | Human-in-the-loop security boundary intact. |
+| **HUD8** | **v2.13 HUD: Graceful Fallback on Canvas Exception** | Simulate a canvas or HUD initialization exception under `UI_STYLE="hud"`. | Application catches the error, logs it to diagnostics (`LAST_HUD_ERROR`), prints a one-line system notice in chat, and safely falls back to the classic panels layout without crashing. | `PASS` | Fail-safe UI resilience verified. |
+| **VE1** | **v2.14 Voice: DSP Enhancement Pipeline** | Feed synthetic audio with steady 50 Hz hum and low volume through `enhance()`. | Highpass removes <80Hz hum, AGC normalizes RMS to 0.08 target without clipping (peak < 0.98), and spectral noise gate suppresses quiet background floors without throwing exceptions. | `PASS` | Pure numpy DSP verified in `test_voice_enhance.py`. |
+| **VE2** | **v2.14 Voice: Vocabulary Prompt & Beam Size** | Call `WhisperTranscriber.transcribe()` with `STT_PROMPT=1` and `STT_BEAM=5`. | Passes vocabulary prompt (bounded <= 200 chars) to model `hotwords` or `initial_prompt` and sets beam size to 5; default settings reproduce prior version transcribe kwargs exactly. | `PASS` | Verified in `test_voice_eval.py`. |
+| **VE3** | **v2.14 Voice: Deterministic Alias Resolution** | Pass multi-token split phrases (e.g. *"open note pad"*, *"open you tube"*) to `voice.aliases.resolve()`. | Resolves to single parsed candidate (`"open notepad"`, `"open youtube"`) when unique; zero matches or ambiguous multi-matches leave text completely untouched. | `PASS` | Verified in `test_voice_aliases.py`. |
+| **VE4** | **v2.14 Voice: Review Step & Source Tracking** | Transcribe noisy speech with SNR < 10 dB, avg logprob < -1.0, or single-word command under `VOICE_REVIEW="auto"`. | Transcription halts auto-submission, displays review warning banner (`"Noisy room: a headset helps"` or `"Low confidence"`), and populates input box; pressing Enter submits with `source="voice-reviewed"`. | `PASS` | Verified in `test_voice_review.py`. |
+| **VE5** | **v2.14 Voice: Dev/Test Split Isolation & Final Test Lock** | Attempt configuration sweep on test split, and run `--final-test` on candidate config. | Test sweep is strictly refused; final test requires `--final-test`, records `.ran-<config>` marker on first run, and blocks second run unless `--force` is passed (marking report `RERUN: NOT UNSEEN`). | `PASS` | Verified in `test_voice_eval.py`. |
+| **VE6** | **v2.14 Voice: Scientific Acceptance Verdict** | Run `python -m evals --voice-verdict` across baseline and candidate test reports. | Requires all 5 pre-registered acceptance criteria simultaneously (noisy gain >= +6.0 pts, wrong rate increase <= +1.0 pt, clean drop <= 1/24 phrases, latency <= 5.0s, real noise preserved); reports explicit metrics and score diffs. | `PASS` | Verified in `test_voice_eval.py`. |
 
 ---
 
@@ -125,3 +151,53 @@ Launch `python main.py` and run `/doctor`.
 3. Test desktop GUI doctor:
 Launch `python -m ui`, click the **Doctor** button or the status bar chip.
 
+### E. Running Demo Mode Verification
+
+1. Launch demo GUI:
+```powershell
+python scripts/demo.py
+```
+2. Launch demo terminal:
+```powershell
+python scripts/demo.py --terminal
+```
+3. Launch offline demo:
+```powershell
+python scripts/demo.py --offline
+```
+
+### F. Running HUD Preview & Benchmark
+
+1. Launch standalone interactive preview:
+```powershell
+python scripts/hud_preview.py
+```
+2. Run automated performance benchmark across tiers:
+```powershell
+python scripts/hud_bench.py
+```
+### G. Running Voice Evaluation & Measurement Kit
+
+1. Record benchmark phrases (resumable, requires microphone hardware):
+```powershell
+# Record 24 clean development phrases:
+python scripts/voice_record.py --split dev --kind clean
+
+# Record 12 real background noise development phrases:
+python scripts/voice_record.py --split dev --kind real_noise
+```
+
+2. Run development configuration sweep across noise conditions:
+```powershell
+python -m evals --voice dev --sweep
+```
+
+3. Run candidate configuration on unseen test split (scientific final test):
+```powershell
+python -m evals --voice test --config combined --final-test
+```
+
+4. Evaluate pre-registered 5-condition acceptance verdict:
+```powershell
+python -m evals --voice-verdict
+```

@@ -7,6 +7,8 @@ from pathlib import Path
 import sqlite3
 from typing import Any, Callable, Generator, Optional, Union
 
+from config.paths import get_reminders_db_path
+
 ALLOWED_STATUSES = {"active", "fired", "missed", "dismissed", "cancelled"}
 ALLOWED_KINDS = {"reminder", "timer"}
 MAX_ACTIVE_ITEMS = 20
@@ -98,10 +100,10 @@ class ReminderStore:
 
     def __init__(
         self,
-        path: Union[str, Path] = "data/reminders.db",
+        path: Optional[Union[str, Path]] = None,
         clock: Optional[Callable[[], datetime]] = None,
     ):
-        self.path = Path(path).resolve()
+        self.path = Path(path if path is not None else get_reminders_db_path()).resolve()
         self.clock = clock or (lambda: datetime.now(timezone.utc))
 
         self.path.parent.mkdir(parents=True, exist_ok=True)

@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 import re
 import sqlite3
-from typing import Generator, List, Tuple, Union
+from typing import Generator, List, Optional, Tuple, Union
+
+from config.paths import get_memory_db_path
 
 from memory.safety import validate_memory
 
@@ -44,8 +46,8 @@ def _escape_like(text: str) -> str:
 class MemoryStore:
     """Persistent SQLite-backed memory store with validation, deduplication, and word search."""
 
-    def __init__(self, path: Union[str, Path] = "data/memory.db", max_items: int = 500):
-        self.path = Path(path).resolve()
+    def __init__(self, path: Optional[Union[str, Path]] = None, max_items: int = 500):
+        self.path = Path(path if path is not None else get_memory_db_path()).resolve()
         self.max_items = max_items
 
         # Ensure parent folder exists

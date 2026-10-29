@@ -36,7 +36,7 @@ from rag.safety import build_docs_block
 from voice.audio import Recorder, list_input_devices
 from voice.interrupt import InterruptMonitor
 from voice.session import VoiceSession
-from voice.stt import FakeTranscriber, WhisperTranscriber
+from voice.stt import FakeTranscriber, WhisperTranscriber, filter_hallucinations
 from voice.tts import NullSpeaker, SubprocessSpeaker
 from voice.vad import UtteranceSegmenter, capture_utterance
 from voice.wake import WakeDetector
@@ -56,6 +56,13 @@ def format_startup_banner(
             lines.append(reason)
     elif notice:
         lines.append(notice)
+    from config.paths import get_orbit_home, is_demo_mode
+
+    if is_demo_mode():
+        home = get_orbit_home()
+        folder = home.name if home is not None else "demo_home"
+        lines.append(f"DEMO MODE: sample data in {folder}")
+
     return "\n".join(lines)
 
 
@@ -112,6 +119,13 @@ def format_status(info: dict[str, Any]) -> str:
         f"Ollama server: {srv_status}",
         f"Ollama model '{info['ollama_model']}': {model_status}",
     ]
+    from config.paths import get_orbit_home, is_demo_mode
+
+    if is_demo_mode():
+        home = get_orbit_home()
+        folder = home.name if home is not None else "demo_home"
+        lines.append(f"DEMO MODE: sample data in {folder}")
+
     return "\n".join(lines)
 
 
@@ -182,6 +196,12 @@ def handle_set_command(
     print_func: Callable[..., None] = print,
 ) -> None:
     """Validate, confirm, and atomically persist an editable setting from the CLI."""
+    from config.paths import is_demo_mode
+
+    if is_demo_mode():
+        print_func("Settings can't be changed in demo mode")
+        return
+
     parts = raw_cmd.split(maxsplit=2)
     if len(parts) < 3:
         print_func("Usage: /set KEY VALUE")
@@ -858,11 +878,88 @@ def main() -> None:
 
                             if recorded_chunks and len(recorded_chunks[0]) > 0:
                                 try:
-                                    reply = voice_session.turn(audio=recorded_chunks[0])
-                                    if reply is not None:
-                                        for name, args, result in agent.last_tool_events:
-                                            print(f"[tool] {name}({args}) -> {result}")
-                                        print(f"ORBIT: {reply}")
+                                    audio = recorded_chunks[0]
+                                    from voice.enhance import enhance, estimate_snr_db
+                                    from voice.review import compute_needs_review, snr_to_noise_status
+                                    from voice.stt import Transcript
+
+                                    snr_db = estimate_snr_db(audio)
+                                    noise_status = snr_to_noise_status(snr_db)
+                                    audio = enhance(audio, settings)
+
+                                    transcript_obj = transcriber.transcribe(audio)
+                                    raw_text = transcript_obj.text.strip() if transcript_obj and transcript_obj.text else ""
+                                    clean_text = filter_hallucinations(raw_text).strip()
+
+                                    if not clean_text:
+                                        print("I didn't hear anything")
+                                        continue
+
+                                    text_to_use = clean_text
+                                    understood_as = None
+                                    if bool(getattr(settings, "VOICE_ALIASES", 0)):
+                                        try:
+                                            from voice.aliases import resolve
+                                            from core.shortcuts import parse_shortcut
+                                            from core.chains import parse_chain
+                                            from config.apps import ALLOWED_APPS
+                                            from config.sites import SITES
+
+                                            def _parse_candidate(t: str) -> Any:
+                                                browser_on = getattr(settings, "BROWSER_ENABLED", "auto") != "0"
+                                                sc = parse_shortcut(t, allowed_apps=ALLOWED_APPS, sites=SITES, browser_enabled=browser_on)
+                                                if sc is not None:
+                                                    return sc
+                                                if bool(getattr(settings, "CHAINS_ENABLED", True)):
+                                                    ch = parse_chain(t, allowed_apps=ALLOWED_APPS, sites=SITES, browser_enabled=browser_on)
+                                                    if ch is not None:
+                                                        return ch
+                                                return None
+
+                                            text_to_use, understood_as = resolve(clean_text, _parse_candidate, allowed_apps=ALLOWED_APPS, sites=SITES)
+                                        except Exception:
+                                            text_to_use = clean_text
+                                            understood_as = None
+
+                                    eval_trans = Transcript(
+                                        text=text_to_use,
+                                        language=getattr(transcript_obj, "language", None),
+                                        duration_s=getattr(transcript_obj, "duration_s", 0.0),
+                                        avg_logprob=getattr(transcript_obj, "avg_logprob", None),
+                                        no_speech_prob=getattr(transcript_obj, "no_speech_prob", None),
+                                        decode_seconds=getattr(transcript_obj, "decode_seconds", None),
+                                    )
+                                    rev_setting = getattr(settings, "VOICE_REVIEW", "auto")
+                                    needs_review, reason = compute_needs_review(eval_trans, snr_db, rev_setting)
+
+                                    if understood_as:
+                                        print(f'Understood as: "{text_to_use}"')
+
+                                    final_text = None
+                                    if needs_review:
+                                        print(f'Heard: "{text_to_use}" ({reason}, {noise_status})')
+                                        print("Send? (y/n/edit): ", end="", flush=True)
+                                        ans = input().strip().lower()
+                                        if ans in ("y", "yes"):
+                                            final_text = text_to_use
+                                        elif ans in ("edit", "e"):
+                                            print("Edit text: ", end="", flush=True)
+                                            edited = input().strip()
+                                            if edited:
+                                                final_text = edited
+                                        else:
+                                            print("Cancelled.")
+                                            continue
+                                    else:
+                                        print(f'Heard: "{text_to_use}" ({noise_status})')
+                                        final_text = text_to_use
+
+                                    if final_text:
+                                        reply = voice_session.respond(final_text)
+                                        if reply is not None:
+                                            for name, args, result in agent.last_tool_events:
+                                                print(f"[tool] {name}({args}) -> {result}")
+                                            print(f"ORBIT: {reply}")
                                 except Exception as exc:
                                     print(f"Voice turn error: {exc}")
                             else:

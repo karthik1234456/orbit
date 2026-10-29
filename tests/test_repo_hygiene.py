@@ -177,7 +177,7 @@ def test_gitignore_lists_required_entries():
         if line.strip() and not line.startswith("#")
     }
 
-    required = [".env", ".env.bak", "logs/", "data/", "workspace/", "evals/results/"]
+    required = [".env", ".env.bak", "logs/", "data/", "workspace/", "evals/results/", "demo_home/", "data/voice_eval/"]
     for req in required:
         req_clean = req.rstrip("/")
         match = any(
@@ -193,3 +193,18 @@ def test_routines_db_not_tracked():
     assert not any(
         f.endswith("routines.db") for f in tracked
     ), "A routines.db database file is tracked in git"
+
+
+def test_no_sqlite_db_files_tracked():
+    """Verify that no *.db database file is ever tracked in git."""
+    tracked = _get_tracked_files()
+    db_files = [f for f in tracked if f.endswith(".db")]
+    assert not db_files, f"Database files (*.db) are tracked in git: {db_files}"
+
+
+def test_voice_eval_not_tracked():
+    """Verify that nothing under data/voice_eval/ is tracked in git."""
+    tracked = _get_tracked_files()
+    assert not any(f.startswith("data/voice_eval/") for f in tracked), (
+        "Files under data/voice_eval/ must never be tracked in git"
+    )

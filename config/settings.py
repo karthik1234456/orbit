@@ -1,19 +1,33 @@
 import os
 from dotenv import load_dotenv
 
-from pathlib import Path
+
 from typing import Any, Optional, Union
+from config.paths import (
+    get_audit_log_path,
+    get_browser_profile_dir,
+    get_data_dir,
+    get_diag_dir,
+    get_docs_dir,
+    get_logs_dir,
+    get_memory_db_path,
+    get_rag_db_path,
+    get_reminders_db_path,
+    get_routines_db_path,
+    get_runs_log_path,
+    get_workspace_dir,
+)
 
 # Load environment variables from .env file
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 MODEL_NAME = os.getenv("MODEL_NAME", "gemini-3.8-flash")
-WORKSPACE_DIR: Path = Path(os.getenv("WORKSPACE_DIR", "workspace")).resolve()
+
 MAX_TOOL_CALLS: int = int(os.getenv("MAX_TOOL_CALLS", "12"))
 MAX_CONSECUTIVE_ERRORS: int = int(os.getenv("MAX_CONSECUTIVE_ERRORS", "3"))
 MAX_TASK_SECONDS: float = float(os.getenv("MAX_TASK_SECONDS", "120"))
-MEMORY_DB_PATH: Path = Path(os.getenv("MEMORY_DB_PATH", "data/memory.db")).resolve()
+
 MEMORY_MAX_ITEMS: int = int(os.getenv("MEMORY_MAX_ITEMS", "500"))
 MEMORY_INJECT_LIMIT: int = int(os.getenv("MEMORY_INJECT_LIMIT", "5"))
 
@@ -23,6 +37,48 @@ import warnings
 logger = logging.getLogger(__name__)
 
 ALLOWED_LLM_PROVIDERS = ("auto", "gemini", "ollama", "mock")
+ALLOWED_VOICE_REVIEWS = ("auto", "always", "never")
+
+
+def _parse_voice_review(val: Optional[str], default: str = "auto") -> str:
+    if val is None or not val.strip():
+        return default
+    v = val.strip().lower()
+    if v in ALLOWED_VOICE_REVIEWS:
+        return v
+    msg = f"Unknown VOICE_REVIEW '{val}'; falling back to '{default}'."
+    logger.warning(msg)
+    warnings.warn(msg, UserWarning, stacklevel=2)
+    return default
+
+
+def _parse_stt_beam(val: Optional[str], default: int = 1) -> int:
+    if val is None or not val.strip():
+        return default
+    try:
+        iv = int(val.strip())
+        if 1 <= iv <= 5:
+            return iv
+    except (ValueError, AttributeError):
+        pass
+    msg = f"Invalid STT_BEAM '{val}' (must be 1-5); falling back to {default}."
+    logger.warning(msg)
+    warnings.warn(msg, UserWarning, stacklevel=2)
+    return default
+
+
+def _parse_stt_model(val: Optional[str], default: str = "base.en") -> str:
+    ALLOWED_STT_MODELS = ("tiny.en", "base.en", "small.en", "tiny", "base", "small")
+    if val is None or not val.strip():
+        return default
+    v = val.strip().lower()
+    if v in ALLOWED_STT_MODELS:
+        return v
+    msg = f"Unknown STT_MODEL '{val}'; falling back to '{default}'."
+    logger.warning(msg)
+    warnings.warn(msg, UserWarning, stacklevel=2)
+    return default
+
 
 
 def _parse_llm_provider(val: Optional[str], default: str = "auto") -> str:
@@ -105,13 +161,21 @@ OLLAMA_INLINE_TOOLS: bool = _parse_bool(os.getenv("OLLAMA_INLINE_TOOLS"), False)
 ORBIT_OFFLINE: bool = _parse_bool(os.getenv("ORBIT_OFFLINE"), False)
 
 
-DOCS_DIR: Path = Path(os.getenv("DOCS_DIR", str(WORKSPACE_DIR / "docs"))).resolve()
-RAG_DB_PATH: Path = Path(os.getenv("RAG_DB_PATH", "data/rag.db")).resolve()
+
+
 RAG_TOP_K: int = int(os.getenv("RAG_TOP_K", "4"))
 RAG_MAX_CHARS: int = int(os.getenv("RAG_MAX_CHARS", "2500"))
 RAG_INCLUDE_FLAGGED: bool = os.getenv("RAG_INCLUDE_FLAGGED", "false").lower() in ("true", "1", "yes")
 
-ALLOWED_RAG_AUTO_SCORING = ("fraction", "rarest3", "idf")
+ALLOWED_RAG_AUTO_SCORING = ("fraction", "embed", "hybrid", "rarest3", "idf")
+
+RAG_EMBEDDINGS: bool = _parse_bool(os.getenv("RAG_EMBEDDINGS"), False)
+RAG_EMBED_MODEL: str = _parse_str(os.getenv("RAG_EMBED_MODEL"), "embeddinggemma")
+RAG_EMBED_CPU_ONLY: bool = _parse_bool(os.getenv("RAG_EMBED_CPU_ONLY"), True)
+RAG_EMBED_BATCH: int = _parse_int(os.getenv("RAG_EMBED_BATCH"), 16)
+RAG_EMBED_THRESHOLD: float = _parse_float(os.getenv("RAG_EMBED_THRESHOLD"), 0.65)
+RAG_EMBED_MARGIN: float = _parse_float(os.getenv("RAG_EMBED_MARGIN"), 0.08)
+RAG_EMBED_TOOL: bool = _parse_bool(os.getenv("RAG_EMBED_TOOL"), False)
 
 
 def _parse_rag_auto_scoring(val: Optional[str], default: str = "fraction") -> str:
@@ -134,7 +198,7 @@ RAG_AUTO_MAX_CHARS: int = _parse_int(os.getenv("RAG_AUTO_MAX_CHARS"), 1500)
 RAG_AUTO_SCORING: str = _parse_rag_auto_scoring(os.getenv("RAG_AUTO_SCORING"), "fraction")
 
 
-STT_MODEL: str = _parse_str(os.getenv("STT_MODEL"), "base.en")
+STT_MODEL: str = _parse_stt_model(os.getenv("STT_MODEL"), "base.en")
 STT_LANGUAGE: str = _parse_str(os.getenv("STT_LANGUAGE"), "en")
 MIC_DEVICE: Optional[Union[int, str]] = _parse_mic_device(os.getenv("MIC_DEVICE"))
 MAX_RECORD_SECONDS: int = _parse_int(os.getenv("MAX_RECORD_SECONDS"), 30)
@@ -142,6 +206,13 @@ TTS_RATE: int = _parse_int(os.getenv("TTS_RATE"), 180)
 SPEAK_MAX_CHARS: int = _parse_int(os.getenv("SPEAK_MAX_CHARS"), 500)
 SPEAK_REPLIES: bool = _parse_bool(os.getenv("SPEAK_REPLIES"), False)
 VOICE_IN_UI: bool = _parse_bool(os.getenv("VOICE_IN_UI"), True)
+VOICE_HIGHPASS: int = _parse_int(os.getenv("VOICE_HIGHPASS"), 0)
+VOICE_AGC: int = _parse_int(os.getenv("VOICE_AGC"), 0)
+VOICE_DENOISE: int = _parse_int(os.getenv("VOICE_DENOISE"), 0)
+STT_BEAM: int = _parse_stt_beam(os.getenv("STT_BEAM"), 1)
+STT_PROMPT: int = _parse_int(os.getenv("STT_PROMPT"), 0)
+VOICE_ALIASES: int = _parse_int(os.getenv("VOICE_ALIASES"), 0)
+VOICE_REVIEW: str = _parse_voice_review(os.getenv("VOICE_REVIEW"), "auto")
 
 WAKE_PHRASE: str = os.getenv("WAKE_PHRASE", "hey orbit")
 WAKE_STT_MODEL: str = os.getenv("WAKE_STT_MODEL", "tiny.en")
@@ -155,7 +226,7 @@ CHAINS_ENABLED: bool = _parse_bool(os.getenv("CHAINS_ENABLED"), True)
 SESSION_CONTEXT: bool = _parse_bool(os.getenv("SESSION_CONTEXT"), True)
 SESSION_TTL_SECONDS: float = _parse_float(os.getenv("SESSION_TTL_SECONDS"), 1800.0)
 REMINDERS_ENABLED: bool = _parse_bool(os.getenv("REMINDERS_ENABLED"), True)
-REMINDERS_DB_PATH: Path = Path(os.getenv("REMINDERS_DB_PATH", "data/reminders.db")).resolve()
+
 TOOL_ROUTING: bool = _parse_bool(os.getenv("TOOL_ROUTING"), False)
 DOCTOR_ON_START: bool = _parse_bool(os.getenv("DOCTOR_ON_START"), True)
 
@@ -204,7 +275,7 @@ PLAN_MAX_SECONDS: float = _parse_float(os.getenv("PLAN_MAX_SECONDS"), 180.0)
 
 
 ROUTINES_ENABLED: bool = _parse_bool(os.getenv("ROUTINES_ENABLED"), True)
-ROUTINES_DB_PATH: Path = Path(os.getenv("ROUTINES_DB_PATH", "data/routines.db")).resolve()
+
 
 
 def _parse_routine_preview(val: Optional[str], default: str = "always") -> str:
@@ -224,6 +295,57 @@ def routines_enabled() -> bool:
     return _parse_bool(os.getenv("ROUTINES_ENABLED"), True)
 
 
+ALLOWED_UI_STYLE = ("hud", "classic")
+ALLOWED_UI_THEME = ("cyan", "gold", "mono")
+ALLOWED_UI_MOTION = ("full", "reduced", "off")
+ALLOWED_HUD_FPS = (15, 24, 30)
+
+
+def _parse_ui_style(val: Optional[str], default: str = "hud") -> str:
+    if val is None or not val.strip():
+        return default
+    v = val.strip().lower()
+    if v in ALLOWED_UI_STYLE:
+        return v
+    return default
+
+
+def _parse_ui_theme(val: Optional[str], default: str = "cyan") -> str:
+    if val is None or not val.strip():
+        return default
+    v = val.strip().lower()
+    if v in ALLOWED_UI_THEME:
+        return v
+    return default
+
+
+def _parse_ui_motion(val: Optional[str], default: str = "full") -> str:
+    if val is None or not val.strip():
+        return default
+    v = val.strip().lower()
+    if v in ALLOWED_UI_MOTION:
+        return v
+    return default
+
+
+def _parse_hud_fps(val: Any, default: int = 30) -> int:
+    if val is None:
+        return default
+    try:
+        v = int(val)
+        if v in ALLOWED_HUD_FPS:
+            return v
+    except (ValueError, TypeError):
+        pass
+    return default
+
+
+UI_STYLE: str = _parse_ui_style(os.getenv("UI_STYLE"), "hud")
+UI_THEME: str = _parse_ui_theme(os.getenv("UI_THEME"), "cyan")
+UI_MOTION: str = _parse_ui_motion(os.getenv("UI_MOTION"), "full")
+HUD_FPS: int = _parse_hud_fps(os.getenv("HUD_FPS"), 30)
+
+
 def __getattr__(name: str) -> Any:
     if name == "BROWSER_ENABLED":
         return browser_enabled()
@@ -240,7 +362,21 @@ def __getattr__(name: str) -> Any:
     if name == "VOICE_IN_UI":
         return _parse_bool(os.getenv("VOICE_IN_UI"), True)
     if name == "STT_MODEL":
-        return _parse_str(os.getenv("STT_MODEL"), "base.en")
+        return _parse_stt_model(os.getenv("STT_MODEL"), "base.en")
+    if name == "VOICE_HIGHPASS":
+        return _parse_int(os.getenv("VOICE_HIGHPASS"), 0)
+    if name == "VOICE_AGC":
+        return _parse_int(os.getenv("VOICE_AGC"), 0)
+    if name == "VOICE_DENOISE":
+        return _parse_int(os.getenv("VOICE_DENOISE"), 0)
+    if name == "STT_BEAM":
+        return _parse_stt_beam(os.getenv("STT_BEAM"), 1)
+    if name == "STT_PROMPT":
+        return _parse_int(os.getenv("STT_PROMPT"), 0)
+    if name == "VOICE_ALIASES":
+        return _parse_int(os.getenv("VOICE_ALIASES"), 0)
+    if name == "VOICE_REVIEW":
+        return _parse_voice_review(os.getenv("VOICE_REVIEW"), "auto")
     if name == "STT_LANGUAGE":
         return _parse_str(os.getenv("STT_LANGUAGE"), "en")
     if name == "MIC_DEVICE":
@@ -250,22 +386,113 @@ def __getattr__(name: str) -> Any:
     if name == "REMINDERS_ENABLED":
         return _parse_bool(os.getenv("REMINDERS_ENABLED"), True)
     if name == "REMINDERS_DB_PATH":
-        return Path(os.getenv("REMINDERS_DB_PATH", "data/reminders.db")).resolve()
+        return get_reminders_db_path()
     if name == "ROUTINES_ENABLED":
         return routines_enabled()
     if name == "ROUTINES_DB_PATH":
-        return Path(os.getenv("ROUTINES_DB_PATH", "data/routines.db")).resolve()
+        return get_routines_db_path()
     if name == "ROUTINE_PREVIEW":
         return _parse_routine_preview(os.getenv("ROUTINE_PREVIEW"), "always")
     if name == "TOOL_ROUTING":
         return tool_routing_enabled()
     if name == "DOCTOR_ON_START":
         return _parse_bool(os.getenv("DOCTOR_ON_START"), True)
+    if name == "UI_STYLE":
+        return _parse_ui_style(os.getenv("UI_STYLE"), "hud")
+    if name == "UI_THEME":
+        return _parse_ui_theme(os.getenv("UI_THEME"), "cyan")
+    if name == "UI_MOTION":
+        return _parse_ui_motion(os.getenv("UI_MOTION"), "full")
+    if name == "HUD_FPS":
+        return _parse_hud_fps(os.getenv("HUD_FPS"), 30)
+    if name == "RAG_EMBEDDINGS":
+        return _parse_bool(os.getenv("RAG_EMBEDDINGS"), False)
+    if name == "RAG_EMBED_MODEL":
+        return _parse_str(os.getenv("RAG_EMBED_MODEL"), "embeddinggemma")
+    if name == "RAG_EMBED_CPU_ONLY":
+        return _parse_bool(os.getenv("RAG_EMBED_CPU_ONLY"), True)
+    if name == "RAG_EMBED_BATCH":
+        return _parse_int(os.getenv("RAG_EMBED_BATCH"), 16)
+    if name == "RAG_AUTO_SCORING":
+        return _parse_rag_auto_scoring(os.getenv("RAG_AUTO_SCORING"), "fraction")
+    if name == "RAG_EMBED_THRESHOLD":
+        return _parse_float(os.getenv("RAG_EMBED_THRESHOLD"), 0.65)
+    if name == "RAG_EMBED_MARGIN":
+        return _parse_float(os.getenv("RAG_EMBED_MARGIN"), 0.08)
+    if name == "RAG_EMBED_TOOL":
+        return _parse_bool(os.getenv("RAG_EMBED_TOOL"), False)
+    if name == "WORKSPACE_DIR":
+        return get_workspace_dir()
+    if name == "DOCS_DIR":
+        return get_docs_dir()
+    if name == "MEMORY_DB_PATH":
+        return get_memory_db_path()
+    if name == "RAG_DB_PATH":
+        return get_rag_db_path()
+    if name == "BROWSER_PROFILE_DIR":
+        return str(get_browser_profile_dir())
+    if name == "AUDIT_LOG_PATH":
+        return get_audit_log_path()
+    if name == "RUNS_LOG_PATH":
+        return get_runs_log_path()
+    if name == "DIAG_DIR":
+        return get_diag_dir()
+    if name == "LOGS_DIR":
+        return get_logs_dir()
+    if name == "DATA_DIR":
+        return get_data_dir()
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 
+def __dir__() -> list[str]:
+    return sorted(
+        set(globals().keys())
+        | {
+            "WORKSPACE_DIR",
+            "DOCS_DIR",
+            "MEMORY_DB_PATH",
+            "RAG_DB_PATH",
+            "REMINDERS_DB_PATH",
+            "ROUTINES_DB_PATH",
+            "BROWSER_PROFILE_DIR",
+            "AUDIT_LOG_PATH",
+            "RUNS_LOG_PATH",
+            "DIAG_DIR",
+            "LOGS_DIR",
+            "DATA_DIR",
+            "BROWSER_ENABLED",
+            "CHAINS_ENABLED",
+            "PLAN_PREVIEW",
+            "PLAN_MAX_STEPS",
+            "PLAN_MAX_SECONDS",
+            "SPEAK_REPLIES",
+            "VOICE_IN_UI",
+            "VOICE_HIGHPASS",
+            "VOICE_AGC",
+            "VOICE_DENOISE",
+            "STT_BEAM",
+            "STT_PROMPT",
+            "VOICE_ALIASES",
+            "VOICE_REVIEW",
+            "STT_MODEL",
+            "STT_LANGUAGE",
+            "MIC_DEVICE",
+            "MAX_RECORD_SECONDS",
+            "REMINDERS_ENABLED",
+            "ROUTINES_ENABLED",
+            "ROUTINE_PREVIEW",
+            "TOOL_ROUTING",
+            "DOCTOR_ON_START",
+            "UI_STYLE",
+            "UI_THEME",
+            "UI_MOTION",
+            "HUD_FPS",
+        }
+    )
+
+
 BROWSER_CHANNEL: str = _parse_str(os.getenv("BROWSER_CHANNEL"), "chrome")
-BROWSER_PROFILE_DIR: str = _parse_str(os.getenv("BROWSER_PROFILE_DIR"), "data/browser_profile")
+
 BROWSER_COMMAND_TIMEOUT_S: int = _parse_int(os.getenv("BROWSER_COMMAND_TIMEOUT_S"), 20)
 BROWSER_ALLOW_SIGNIN: bool = _parse_bool(os.getenv("BROWSER_ALLOW_SIGNIN"), False)
 BROWSER_CHROMIUM_SANDBOX: bool = _parse_bool(os.getenv("BROWSER_CHROMIUM_SANDBOX"), True)

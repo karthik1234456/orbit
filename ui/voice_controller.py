@@ -68,6 +68,8 @@ class VoiceUiController:
         self.state: str = "idle"
         self.last_error: str = ""
         self.last_transcription_duration_s: float = 0.0
+        self.last_snr_db: Optional[float] = None
+        self.last_review_reason: Optional[str] = None
         self.speak_replies: bool = bool(getattr(settings, "SPEAK_REPLIES", False))
 
         self._recorder_factory = recorder_factory
@@ -211,6 +213,18 @@ class VoiceUiController:
                 if hasattr(recorder, "level_callback"):
                     recorder.level_callback = self._level_callback
 
+            # Ambient pre-roll calibration check if supported
+            ambient = getattr(recorder, "pre_roll_ambient", None)
+            if ambient is None and callable(getattr(recorder, "get_pre_roll_ambient", None)):
+                try:
+                    ambient = recorder.get_pre_roll_ambient()
+                except Exception:
+                    ambient = None
+            if ambient is not None and isinstance(ambient, (int, float)) and ambient > 0.05:
+                self.emit("voice_calibration_warning", {
+                    "text": "Noisy room: use a headset or move closer"
+                })
+
             # Record until stop_event or MAX_RECORD_SECONDS
             audio = recorder.record(stop_event=self._stop_event)
 
@@ -244,6 +258,18 @@ class VoiceUiController:
                 self._emit_state("idle")
                 return
 
+            # Enhancement and SNR estimation (runs on worker thread, never UI thread)
+            from voice.enhance import enhance, estimate_snr_db
+            from voice.review import compute_needs_review, snr_to_noise_status
+            from voice.stt import Transcript
+
+            snr_db = estimate_snr_db(audio, sr=sample_rate)
+            self.last_snr_db = snr_db
+            noise_status = snr_to_noise_status(snr_db)
+
+            # Apply enhancement
+            audio = enhance(audio, settings)
+
             # Transcribe
             self._emit_state("transcribing")
 
@@ -274,7 +300,60 @@ class VoiceUiController:
             clean_text = filter_hallucinations(raw_text).strip()
 
             if clean_text:
-                self.emit("voice_transcript", {"text": clean_text, "source": "voice"})
+                text_to_use = clean_text
+                understood_as = None
+                if bool(getattr(settings, "VOICE_ALIASES", 0)):
+                    try:
+                        from voice.aliases import resolve
+                        from core.shortcuts import parse_shortcut
+                        from core.chains import parse_chain
+                        from config.apps import ALLOWED_APPS
+                        from config.sites import SITES
+
+                        def _parse_cand(t: str) -> Any:
+                            browser_on = getattr(settings, "BROWSER_ENABLED", "auto") != "0"
+                            sc = parse_shortcut(t, allowed_apps=ALLOWED_APPS, sites=SITES, browser_enabled=browser_on)
+                            if sc is not None:
+                                return sc
+                            if bool(getattr(settings, "CHAINS_ENABLED", True)):
+                                ch = parse_chain(t, allowed_apps=ALLOWED_APPS, sites=SITES, browser_enabled=browser_on)
+                                if ch is not None:
+                                    return ch
+                            return None
+
+                        text_to_use, understood_as = resolve(clean_text, _parse_cand, allowed_apps=ALLOWED_APPS, sites=SITES)
+                    except Exception:
+                        text_to_use = clean_text
+                        understood_as = None
+
+                eval_trans = Transcript(
+                    text=text_to_use,
+                    language=getattr(transcript_obj, "language", None),
+                    duration_s=getattr(transcript_obj, "duration_s", 0.0),
+                    avg_logprob=getattr(transcript_obj, "avg_logprob", None),
+                    no_speech_prob=getattr(transcript_obj, "no_speech_prob", None),
+                    decode_seconds=getattr(transcript_obj, "decode_seconds", None),
+                )
+                rev_setting = getattr(settings, "VOICE_REVIEW", "auto")
+                needs_review, reason = compute_needs_review(eval_trans, snr_db, rev_setting)
+                self.last_review_reason = reason
+
+                if needs_review:
+                    self.emit("voice_review_needed", {
+                        "text": text_to_use,
+                        "reason": reason,
+                        "noise_status": noise_status,
+                        "snr_db": snr_db,
+                        "understood_as": understood_as,
+                    })
+                else:
+                    self.emit("voice_transcript", {
+                        "text": text_to_use,
+                        "source": "voice",
+                        "noise_status": noise_status,
+                        "snr_db": snr_db,
+                        "understood_as": understood_as,
+                    })
 
             self._emit_state("idle")
 

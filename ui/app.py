@@ -17,6 +17,12 @@ from typing import Any, Callable, Optional
 
 from config import settings
 from core.version import VERSION
+from ui.dock import DockCanvas
+from ui.hud import HudCanvas
+from ui.hud_core import HudModel
+from ui.theme import apply_theme, get_data_font, get_palette, style_chat_tags
+
+LAST_HUD_ERROR: Optional[str] = None
 from ui.controller import ChatController, ConfirmRequest, UiEvent
 
 
@@ -97,6 +103,11 @@ class ConfirmDialog(tk.Toplevel):
             self.attributes("-topmost", True)
         except Exception:
             pass
+        palette = getattr(parent, "palette", None) or get_palette()
+        try:
+            self.configure(bg=palette.bg)
+        except Exception:
+            pass
 
         # Build modal content
         self._build_ui()
@@ -155,7 +166,17 @@ class ConfirmDialog(tk.Toplevel):
         args_lbl = ttk.Label(frame, text="Parameters (redacted):")
         args_lbl.pack(anchor="w", pady=(0, 4))
 
-        self.args_text = tk.Text(frame, height=6, width=55, wrap=tk.WORD, font=("Consolas", 9))
+        palette = getattr(self.master, "palette", None) or get_palette()
+        self.args_text = tk.Text(
+            frame,
+            height=6,
+            width=55,
+            wrap=tk.WORD,
+            font=("Consolas", 9),
+            bg=palette.panel,
+            fg=palette.text,
+            insertbackground=palette.accent,
+        )
         self.args_text.pack(fill="both", expand=True, pady=(0, 10))
         try:
             formatted_args = json.dumps(self.request.args, indent=2)
@@ -285,6 +306,11 @@ class PlanDialog(tk.Toplevel):
             self.attributes("-topmost", True)
         except Exception:
             pass
+        palette = getattr(parent, "palette", None) or get_palette()
+        try:
+            self.configure(bg=palette.bg)
+        except Exception:
+            pass
 
         self._build_ui()
         self.text_area = self.steps_text
@@ -358,12 +384,16 @@ class PlanDialog(tk.Toplevel):
 
         steps_text_content = "\n".join(steps_lines)
 
+        palette = getattr(self.master, "palette", None) or get_palette()
         self.steps_text = tk.Text(
             frame,
             height=min(8, max(3, len(self.labels) + 2)),
             width=55,
             wrap=tk.WORD,
             font=("Consolas", 9),
+            bg=palette.panel,
+            fg=palette.text,
+            insertbackground=palette.accent,
         )
         self.steps_text.pack(fill="both", expand=True, pady=(0, 6))
         self.steps_text.insert("1.0", steps_text_content)
@@ -601,6 +631,12 @@ class DoctorWindow(tk.Toplevel):
         self.minsize(500, 350)
         self.report_text = report_text
 
+        palette = getattr(parent, "palette", None) or get_palette()
+        try:
+            self.configure(bg=palette.bg)
+        except Exception:
+            pass
+
         container = ttk.Frame(self, padding=8)
         container.pack(fill="both", expand=True)
 
@@ -608,6 +644,9 @@ class DoctorWindow(tk.Toplevel):
             container,
             wrap=tk.WORD,
             font=("Consolas", 9),
+            bg=palette.panel,
+            fg=palette.text,
+            insertbackground=palette.accent,
         )
         self.text_area.insert("1.0", report_text)
         self.text_area.configure(state="disabled")
@@ -659,10 +698,31 @@ class OrbitWindow:
         self._last_activity_task: Optional[int] = None
         self._tasks_with_ui_error: set[int] = set()
         self._current_task_had_denial: bool = False
+        self._pending_voice_reviewed: bool = False
 
-        self.root.title(f"ORBIT v{VERSION} Desktop Assistant")
-        self.root.geometry("1020x680")
-        self.root.minsize(800, 500)
+        from config.paths import is_demo_mode
+
+        base_title = f"ORBIT v{VERSION} Desktop Assistant"
+        if is_demo_mode():
+            base_title += " - DEMO MODE (sample data)"
+        self.root.title(base_title)
+
+        ui_style = getattr(settings, "UI_STYLE", "hud").lower().strip()
+        if ui_style == "hud":
+            self.root.geometry("1180x760")
+            self.root.minsize(960, 640)
+        else:
+            self.root.geometry("1020x680")
+            self.root.minsize(800, 500)
+
+        theme_name = getattr(settings, "UI_THEME", "cyan")
+        self.palette = get_palette(theme_name)
+        apply_theme(self.root, self.palette)
+
+        self.hud_model: Optional[HudModel] = None
+        self.hud_canvas: Optional[HudCanvas] = None
+        self.dock_canvas: Optional[DockCanvas] = None
+        self._notebook_visible = True
 
         # Wire shutdown protocols
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -766,6 +826,8 @@ class OrbitWindow:
         self.routine_store = getattr(self.controller, "routine_store", None)
         if self.routine_store is None and hasattr(self.controller, "app"):
             self.routine_store = getattr(self.controller.app, "routine_store", None)
+
+        self.hud_model = HudModel(clock=self.clock)
 
         # Build UI layout
         self._build_layout()
@@ -898,21 +960,222 @@ class OrbitWindow:
             self.voice_controller.speak_replies = val
 
     def _build_layout(self) -> None:
+        ui_style = getattr(settings, "UI_STYLE", "hud").lower().strip()
+        if ui_style == "classic":
+            self._build_classic_layout()
+            return
+
+        try:
+            self._build_hud_layout()
+        except Exception as exc:
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+            global LAST_HUD_ERROR
+            LAST_HUD_ERROR = f"HUD initialization failed: {exc}"
+            self._cleanup_failed_hud_build()
+            self._build_classic_layout()
+            self._append_chat(
+                f"HUD initialization failed ({exc}); falling back to classic layout.\n\n",
+                ("system",),
+            )
+
+    def _cleanup_failed_hud_build(self) -> None:
+        if self.hud_canvas is not None:
+            try:
+                self.hud_canvas.destroy()
+            except Exception:
+                pass
+            self.hud_canvas = None
+        if self.dock_canvas is not None:
+            try:
+                self.dock_canvas.destroy()
+            except Exception:
+                pass
+            self.dock_canvas = None
+        for child in list(self.root.winfo_children()):
+            try:
+                child.destroy()
+            except Exception:
+                pass
+
+    def _build_hud_layout(self) -> None:
+        main_container = tk.Frame(self.root, bg=self.palette.bg)
+        main_container.pack(fill="both", expand=True)
+
+        # Status Bar at the bottom
+        self._build_status_bar(main_container)
+
+        # Dock Canvas right above the status bar
+        self.dock_canvas = DockCanvas(
+            main_container,
+            palette=self.palette,
+            on_activity=self._on_dock_activity,
+            on_routines=self._on_dock_routines,
+            on_mic=self._on_toggle_mic,
+            on_settings=self._on_settings_click,
+            on_doctor=self._on_doctor_click,
+            get_voice_state=self._get_dock_voice_state,
+        )
+        self.dock_canvas.pack(fill="x", side="bottom", pady=(2, 4))
+
+        # Main horizontal split: Center (HUD + Chat + Input) | Right (Tabs)
+        self.paned = ttk.PanedWindow(main_container, orient="horizontal")
+        self.paned.pack(fill="both", expand=True, padx=8, pady=(8, 2))
+
+        # --- Center Column ---
+        self.left_frame = tk.Frame(self.paned, bg=self.palette.bg)
+        self.paned.add(self.left_frame, weight=3)
+
+        # 1. Top HUD Canvas
+        fps_val = getattr(settings, "HUD_FPS", 30)
+        motion_val = getattr(settings, "UI_MOTION", "full")
+        self.hud_canvas = HudCanvas(
+            self.left_frame,
+            model=self.hud_model,
+            palette=self.palette,
+            fps=fps_val,
+            motion=motion_val,
+            height=210,
+        )
+        self.hud_canvas.pack(fill="x", side="top", pady=(0, 4))
+
+        # 2. Chat history & input container
+        chat_box = tk.Frame(self.left_frame, bg=self.palette.bg)
+        chat_box.pack(fill="both", expand=True)
+
+        self.history = scrolledtext.ScrolledText(
+            chat_box,
+            wrap=tk.WORD,
+            state="disabled",
+            font=get_data_font(self.root, 10),
+            bg=self.palette.panel,
+            fg=self.palette.text,
+            insertbackground=self.palette.accent,
+            selectbackground=self.palette.panel_edge,
+            selectforeground=self.palette.text,
+            bd=1,
+            relief="solid",
+            highlightthickness=1,
+            highlightbackground=self.palette.panel_edge,
+            highlightcolor=self.palette.accent_dim,
+        )
+        self.history.pack(fill="both", expand=True, pady=(0, 6))
+        style_chat_tags(self.history, self.palette)
+
+        # Voice status bar (above input frame, packed when active)
+        self.voice_bar = tk.Frame(chat_box, bg=self.palette.bg, padx=0, pady=2)
+        self.voice_status_lbl = tk.Label(
+            self.voice_bar,
+            text="",
+            font=("Segoe UI", 9, "italic"),
+            fg=self.palette.accent,
+            bg=self.palette.bg,
+        )
+        self.voice_status_lbl.pack(side="left", padx=(0, 8))
+
+        self.level_bar = ttk.Progressbar(
+            self.voice_bar,
+            orient="horizontal",
+            mode="determinate",
+            length=100,
+            maximum=100,
+        )
+
+        # Input frame
+        input_frame = tk.Frame(chat_box, bg=self.palette.bg)
+        input_frame.pack(fill="x", side="bottom")
+
+        self.input_text = tk.Text(
+            input_frame,
+            height=3,
+            wrap=tk.WORD,
+            font=get_data_font(self.root, 10),
+            bg=self.palette.panel,
+            fg=self.palette.text,
+            insertbackground=self.palette.accent,
+            selectbackground=self.palette.panel_edge,
+            selectforeground=self.palette.text,
+            bd=1,
+            relief="solid",
+            highlightthickness=1,
+            highlightbackground=self.palette.panel_edge,
+            highlightcolor=self.palette.accent_dim,
+        )
+        self.input_text.pack(side="left", fill="both", expand=True, padx=(0, 6))
+
+        # Bind Enter to send and Shift+Enter to newline
+        self.input_text.bind("<Return>", self._on_enter)
+        self.input_text.bind("<Shift-Return>", self._on_shift_enter)
+
+        btn_box = tk.Frame(input_frame, bg=self.palette.bg)
+        btn_box.pack(side="right", fill="y")
+
+        self.send_btn = ttk.Button(btn_box, text="Send", command=self._on_send)
+        self.send_btn.pack(fill="x", pady=(0, 2))
+
+        is_mock = "MOCK" in self.mode_label or bool(getattr(settings, "ORBIT_MOCK", False))
+        mic_text = "mock voice" if is_mock else "Mic"
+        self.mic_btn = ttk.Button(btn_box, text=mic_text, command=self._on_toggle_mic)
+        self.mic_btn.pack(fill="x", pady=(0, 2))
+        self.mic_tooltip = ToolTip(self.mic_btn, "")
+
+        self.stop_btn = ttk.Button(btn_box, text="Stop", command=self._on_stop)
+        self.stop_btn.pack(fill="x", pady=(0, 2))
+        self.stop_btn.configure(state="disabled")
+
+        self.speak_replies_var = tk.BooleanVar(value=self._speak_replies)
+        self.speak_replies_cb = ttk.Checkbutton(
+            btn_box,
+            text="Speak replies",
+            variable=self.speak_replies_var,
+            command=self._on_toggle_speak_replies,
+        )
+        self.speak_replies_cb.pack(fill="x")
+
+        # Hide mic button and speak replies checkbox if VOICE_IN_UI is False
+        if not getattr(settings, "VOICE_IN_UI", True):
+            self.mic_btn.pack_forget()
+            self.speak_replies_cb.pack_forget()
+
+        # Keyboard shortcuts for voice
+        self.input_text.bind("<Control-m>", self._on_ctrl_m)
+        self.input_text.bind("<Control-M>", self._on_ctrl_m)
+        self.root.bind("<Control-m>", self._on_ctrl_m)
+        self.root.bind("<Control-M>", self._on_ctrl_m)
+
+        self._update_voice_ui()
+
+        # --- Right Column: Notebook ---
+        self.right_frame = tk.Frame(self.paned, bg=self.palette.bg, padx=2, pady=2)
+        self.paned.add(self.right_frame, weight=2)
+
+        self.notebook = ttk.Notebook(self.right_frame)
+        self.notebook.pack(fill="both", expand=True)
+
+        self._build_activity_tab()
+        self._build_context_tab()
+        self._build_memories_tab()
+        self._build_documents_tab()
+        self._build_reminders_tab()
+        self._build_routines_tab()
+        self._build_last_run_tab()
+
+    def _build_classic_layout(self) -> None:
         # Main vertical splitter: content area + bottom status bar
         main_container = ttk.Frame(self.root)
         main_container.pack(fill="both", expand=True)
 
         # Horizontal paned layout: Left (Chat + Input) | Right (Tabs)
-        paned = ttk.PanedWindow(main_container, orient="horizontal")
-        paned.pack(fill="both", expand=True, padx=8, pady=(8, 4))
+        self.paned = ttk.PanedWindow(main_container, orient="horizontal")
+        self.paned.pack(fill="both", expand=True, padx=8, pady=(8, 4))
 
         # --- Left Pane: Chat history & input ---
-        left_frame = ttk.Frame(paned, padding=4)
-        paned.add(left_frame, weight=3)
+        self.left_frame = ttk.Frame(self.paned, padding=4)
+        self.paned.add(self.left_frame, weight=3)
 
         # Read-only ScrolledText for chat history
         self.history = scrolledtext.ScrolledText(
-            left_frame,
+            self.left_frame,
             wrap=tk.WORD,
             state="disabled",
             font=("Segoe UI", 10),
@@ -920,14 +1183,10 @@ class OrbitWindow:
         self.history.pack(fill="both", expand=True, pady=(0, 8))
 
         # Color and style tags
-        self.history.tag_configure("user", foreground="#0d47a1", font=("Segoe UI", 10, "bold"))
-        self.history.tag_configure("orbit_prefix", foreground="#1b5e20", font=("Segoe UI", 10, "bold"))
-        self.history.tag_configure("orbit", foreground="#111111", font=("Segoe UI", 10))
-        self.history.tag_configure("system", foreground="#616161", font=("Segoe UI", 9, "italic"))
-        self.history.tag_configure("error", foreground="#b71c1c", font=("Segoe UI", 10, "bold"))
+        style_chat_tags(self.history, self.palette)
 
         # Voice status bar (above input frame, packed when active)
-        self.voice_bar = ttk.Frame(left_frame, padding=(0, 2))
+        self.voice_bar = ttk.Frame(self.left_frame, padding=(0, 2))
         self.voice_status_lbl = ttk.Label(
             self.voice_bar,
             text="",
@@ -945,7 +1204,7 @@ class OrbitWindow:
         )
 
         # Input frame
-        input_frame = ttk.Frame(left_frame)
+        input_frame = ttk.Frame(self.left_frame)
         input_frame.pack(fill="x", side="bottom")
 
         self.input_text = tk.Text(
@@ -999,10 +1258,10 @@ class OrbitWindow:
         self._update_voice_ui()
 
         # --- Right Pane: Notebook with Tabs ---
-        right_frame = ttk.Frame(paned, padding=4)
-        paned.add(right_frame, weight=2)
+        self.right_frame = ttk.Frame(self.paned, padding=4)
+        self.paned.add(self.right_frame, weight=2)
 
-        self.notebook = ttk.Notebook(right_frame)
+        self.notebook = ttk.Notebook(self.right_frame)
         self.notebook.pack(fill="both", expand=True)
 
         self._build_activity_tab()
@@ -1015,6 +1274,46 @@ class OrbitWindow:
 
         # --- Status Bar ---
         self._build_status_bar(main_container)
+
+    def _on_dock_activity(self) -> None:
+        self._toggle_or_select_tab(self.activity_frame)
+
+    def _on_dock_routines(self) -> None:
+        self._toggle_or_select_tab(self.routines_frame)
+
+    def _toggle_or_select_tab(self, target_frame: tk.Widget) -> None:
+        if not hasattr(self, "paned") or not hasattr(self, "right_frame"):
+            return
+        if not self._notebook_visible:
+            try:
+                self.paned.add(self.right_frame, weight=2)
+                self._notebook_visible = True
+            except Exception:
+                pass
+            if hasattr(self, "notebook"):
+                self.notebook.select(target_frame)
+        else:
+            try:
+                curr = self.notebook.select()
+                if str(curr) == str(target_frame):
+                    self.paned.forget(self.right_frame)
+                    self._notebook_visible = False
+                else:
+                    self.notebook.select(target_frame)
+            except Exception:
+                self.notebook.select(target_frame)
+
+    def _get_dock_voice_state(self) -> tuple[str, bool, str]:
+        can_use, reason = self._check_voice_hardware_and_packages()
+        if not can_use:
+            return ("disabled", True, reason)
+        blocked = self._is_blocked()
+        if blocked:
+            return ("blocked", True, "Voice input unavailable while busy")
+        vc_state = "idle"
+        if getattr(self, "voice_controller", None) is not None:
+            vc_state = getattr(self.voice_controller, "state", "idle")
+        return (vc_state, False, "")
 
     def _build_activity_tab(self) -> None:
         self.activity_frame = ttk.Frame(self.notebook, padding=6)
@@ -1503,6 +1802,21 @@ class OrbitWindow:
         )
         self.mode_lbl.pack(side="left", padx=(0, 10))
 
+        # Demo mode chip
+        from config.paths import is_demo_mode
+
+        self.demo_chip = tk.Label(
+            status_bar,
+            text="DEMO",
+            fg="#e67e22",
+            font=("Segoe UI", 8, "bold"),
+            relief="groove",
+            padx=4,
+            pady=1,
+        )
+        if is_demo_mode():
+            self.demo_chip.pack(side="left", padx=(0, 10))
+
         # Busy indicator
         self.busy_lbl = tk.Label(
             status_bar,
@@ -1615,6 +1929,22 @@ class OrbitWindow:
                     self.notebook.add(self.docs_frame, text="Documents")
                     self._refresh_documents()
         finally:
+            if hasattr(self, "hud_model") and self.hud_model is not None:
+                is_conf = (
+                    self._confirm_dialog is not None
+                    and not getattr(self._confirm_dialog, "_resolved", False)
+                ) or (
+                    self._plan_dialog is not None
+                    and not getattr(self._plan_dialog, "_resolved", False)
+                )
+                self.hud_model.set_confirming(is_conf)
+                self.hud_model.set_busy(bool(self.controller.is_busy))
+                vc = getattr(self, "voice_controller", None)
+                is_spk = vc is not None and getattr(vc, "is_speaking", lambda: False)()
+                self.hud_model.set_speaking(is_spk)
+                is_lis = vc is not None and getattr(vc, "state", "idle") == "listening"
+                self.hud_model.set_listening(is_lis)
+
             try:
                 self._update_busy_ui(self.controller.is_busy)
             except Exception:
@@ -1798,6 +2128,20 @@ class OrbitWindow:
                     self.voice_bar.pack_forget()
             self._update_voice_ui()
 
+            if hasattr(self, "hud_model") and self.hud_model is not None:
+
+                self.hud_model.set_listening(st == "listening")
+
+                self.hud_model.set_speaking(st == "speaking")
+
+                if st == "error":
+
+                    self.hud_model.flash_error()
+
+            if hasattr(self, "dock_canvas") and self.dock_canvas is not None:
+
+                self.dock_canvas.redraw()
+
         elif kind == "voice_level":
             try:
                 lvl = float(data.get("level", 0.0) or 0.0)
@@ -1805,22 +2149,64 @@ class OrbitWindow:
                 lvl = 0.0
             if hasattr(self, "level_bar"):
                 self.level_bar["value"] = max(0, min(100, int(lvl * 100)))
+            if hasattr(self, "hud_model") and self.hud_model is not None:
+                self.hud_model.set_mic_level(lvl)
+            if hasattr(self, "dock_canvas") and self.dock_canvas is not None:
+                self.dock_canvas.set_mic_level(lvl)
+
+        elif kind == "voice_calibration_warning":
+            warn_text = data.get("text") or "Noisy room: use a headset or move closer"
+            self._append_chat(f"Voice: {warn_text}\n\n", ("system",))
+            if hasattr(self, "status_lbl"):
+                self.status_lbl.configure(text=f"Voice: {warn_text}")
+
+        elif kind == "voice_review_needed":
+            text = (data.get("text") or "").strip()
+            reason = data.get("reason", "Low confidence")
+            noise_st = data.get("noise_status", "")
+            understood = data.get("understood_as")
+
+            self.input_text.delete("1.0", tk.END)
+            self.input_text.insert("1.0", text)
+            self.input_text.mark_set("insert", tk.END)
+            self.input_text.focus_set()
+            self._pending_voice_reviewed = True
+
+            reason_msg = f"Voice Review: {reason}"
+            if noise_st:
+                reason_msg += f" ({noise_st})"
+            if understood:
+                reason_msg += f" | Understood as: {understood}"
+            self._append_chat(f"{reason_msg}\n\n", ("system",))
+            if hasattr(self, "status_lbl"):
+                self.status_lbl.configure(text=reason_msg)
 
         elif kind == "voice_transcript":
             text = (data.get("text") or "").strip()
+            noise_st = data.get("noise_status", "")
+            understood = data.get("understood_as")
             if text:
-                self._append_chat(f"Heard: {text}\n", ("system",))
+                heard_str = f"Heard: {text}"
+                if noise_st:
+                    heard_str += f" ({noise_st})"
+                if understood:
+                    heard_str += f" | Understood as: {understood}"
+                self._append_chat(f"{heard_str}\n", ("system",))
                 self._append_chat(f"User: {text}\n", ("user",))
                 self.controller.submit(text, source="voice")
 
         elif kind == "voice_error":
             err_text = data.get("text") or data.get("error") or "Voice error"
             self._append_chat(f"Voice: {err_text}\n\n", ("system",))
+            if hasattr(self, "hud_model") and self.hud_model is not None:
+                self.hud_model.flash_error()
 
         elif kind == "error":
             self._mark_running_steps_interrupted()
             msg = data.get("message") or data.get("error", "An error occurred.")
             self._append_chat(f"Error: {msg}\n\n", ("error",))
+            if hasattr(self, "hud_model") and self.hud_model is not None:
+                self.hud_model.flash_error()
             self._streaming = False
             self._current_task_had_denial = False
             if data.get("task") is None:
@@ -2129,10 +2515,16 @@ class OrbitWindow:
         if not text:
             return
 
+        source = "voice-reviewed" if getattr(self, "_pending_voice_reviewed", False) else "ui"
+        self._pending_voice_reviewed = False
+
         self._append_chat(f"User: {text}\n", ("user",))
         self.input_text.delete("1.0", tk.END)
 
-        submitted = self.controller.submit(text)
+        try:
+            submitted = self.controller.submit(text, source=source)
+        except TypeError:
+            submitted = self.controller.submit(text)
         if not submitted:
             pending_tool = getattr(self.controller, "pending_tool", None)
             if not pending_tool and self._confirm_dialog and self._confirm_dialog.winfo_exists():

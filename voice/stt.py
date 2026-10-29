@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import inspect
 import re
+import time
 from typing import Any, Optional, Union
 import numpy as np
 
@@ -22,6 +23,9 @@ class Transcript:
     text: str
     language: Optional[str]
     duration_s: float
+    avg_logprob: Optional[float] = None
+    no_speech_prob: Optional[float] = None
+    decode_seconds: Optional[float] = None
 
 
 class TranscriptionError(Exception):
@@ -103,11 +107,15 @@ class WhisperTranscriber(Transcriber):
         language: Optional[str] = "en",
         device: str = "cpu",
         compute_type: str = "int8",
+        beam_size: Optional[int] = None,
+        initial_prompt: Optional[str] = None,
     ) -> None:
         self.model_name = model_name
         self.language = language
         self.device = device
         self.compute_type = compute_type
+        self.beam_size = beam_size
+        self.initial_prompt = initial_prompt
         self._model: Any = None
 
     def _load_model(self) -> Any:
@@ -176,23 +184,59 @@ class WhisperTranscriber(Transcriber):
 
         model = self._load_model()
 
+        beam = self.beam_size
+        if beam is None:
+            beam = int(getattr(settings, "STT_BEAM", 1))
+        beam = max(1, min(5, beam))
+
+        transcribe_kwargs: dict[str, Any] = {
+            "language": self.language or None,
+            "vad_filter": True,
+            "beam_size": beam,
+            "condition_on_previous_text": False,
+        }
+
+        prompt_enabled = bool(getattr(settings, "STT_PROMPT", 0))
+        prompt_text = self.initial_prompt
+        if prompt_enabled and prompt_text is None:
+            try:
+                from voice.vocab import build_vocab_prompt
+                prompt_text = build_vocab_prompt()
+            except Exception:
+                prompt_text = None
+
+        if prompt_text:
+            sig = inspect.signature(model.transcribe)
+            if "hotwords" in sig.parameters:
+                transcribe_kwargs["hotwords"] = prompt_text
+            elif "initial_prompt" in sig.parameters:
+                transcribe_kwargs["initial_prompt"] = prompt_text
+
+        t_start = time.perf_counter()
         try:
-            segments, info = model.transcribe(
-                audio,
-                language=self.language or None,
-                vad_filter=True,
-                beam_size=1,
-                condition_on_previous_text=False,
-            )
-            # Join segment texts
-            pieces = [seg.text.strip() for seg in segments if hasattr(seg, "text") and seg.text.strip()]
+            segments, info = model.transcribe(audio, **transcribe_kwargs)
+            seg_list = list(segments)
+            decode_seconds = time.perf_counter() - t_start
+            pieces = [seg.text.strip() for seg in seg_list if hasattr(seg, "text") and seg.text.strip()]
             raw_text = " ".join(pieces).strip()
             detected_language = getattr(info, "language", self.language) or self.language
+
+            logprobs = [getattr(seg, "avg_logprob", None) for seg in seg_list if getattr(seg, "avg_logprob", None) is not None]
+            no_speech_probs = [getattr(seg, "no_speech_prob", None) for seg in seg_list if getattr(seg, "no_speech_prob", None) is not None]
+            avg_logprob = float(np.mean(logprobs)) if logprobs else None
+            no_speech_prob = float(np.max(no_speech_probs)) if no_speech_probs else None
         except Exception as exc:
             raise TranscriptionError(f"Transcription failed: {exc}") from exc
 
         clean_text = filter_hallucinations(raw_text)
-        return Transcript(text=clean_text, language=detected_language, duration_s=round(duration_s, 2))
+        return Transcript(
+            text=clean_text,
+            language=detected_language,
+            duration_s=round(duration_s, 2),
+            avg_logprob=avg_logprob,
+            no_speech_prob=no_speech_prob,
+            decode_seconds=round(decode_seconds, 2),
+        )
 
 
 class FakeTranscriber(Transcriber):
@@ -203,10 +247,16 @@ class FakeTranscriber(Transcriber):
         scripted: Optional[list[Union[str, Transcript]]] = None,
         default_text: str = "",
         default_language: Optional[str] = "en",
+        avg_logprob: Optional[float] = None,
+        no_speech_prob: Optional[float] = None,
+        decode_seconds: Optional[float] = None,
     ) -> None:
         self.scripted = list(scripted) if scripted is not None else []
         self.default_text = default_text
         self.default_language = default_language
+        self.avg_logprob = avg_logprob
+        self.no_speech_prob = no_speech_prob
+        self.decode_seconds = decode_seconds
         self.calls: list[tuple[np.ndarray, int]] = []
 
     def transcribe(self, audio: np.ndarray, sample_rate: int = 16000) -> Transcript:
@@ -219,6 +269,20 @@ class FakeTranscriber(Transcriber):
                 raise item
             if isinstance(item, Transcript):
                 return item
-            return Transcript(text=str(item), language=self.default_language, duration_s=round(duration_s, 2))
+            return Transcript(
+                text=str(item),
+                language=self.default_language,
+                duration_s=round(duration_s, 2),
+                avg_logprob=self.avg_logprob,
+                no_speech_prob=self.no_speech_prob,
+                decode_seconds=self.decode_seconds,
+            )
 
-        return Transcript(text=self.default_text, language=self.default_language, duration_s=round(duration_s, 2))
+        return Transcript(
+            text=self.default_text,
+            language=self.default_language,
+            duration_s=round(duration_s, 2),
+            avg_logprob=self.avg_logprob,
+            no_speech_prob=self.no_speech_prob,
+            decode_seconds=self.decode_seconds,
+        )

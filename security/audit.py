@@ -3,7 +3,9 @@
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Union
+
+from config.paths import get_audit_log_path
 
 # Keywords that trigger automatic credential/secret redaction
 _SENSITIVE_KEYWORDS = ("password", "token", "secret", "key", "credential")
@@ -33,8 +35,8 @@ class AuditLogger:
 
     _redact_data = staticmethod(redact_data)
 
-    def __init__(self, path: str = "logs/audit.jsonl") -> None:
-        self.path = Path(path)
+    def __init__(self, path: Optional[Union[str, Path]] = None) -> None:
+        self.path = Path(path if path is not None else get_audit_log_path()).resolve()
         self._warned = False
 
         # Attempt to create parent directory ahead of time

@@ -28,10 +28,12 @@ class SettingSpec:
     """Specification for an editable, non-secret setting."""
 
     key: str
-    type: str  # "enum", "text", "int", "bool"
+    type: str  # "enum", "text", "int", "bool", "float"
     allowed: Optional[tuple[str, ...]] = None
     min_val: Optional[int] = None
     max_val: Optional[int] = None
+    min_float: Optional[float] = None
+    max_float: Optional[float] = None
     default: str = ""
     description: str = ""
     restart_required: bool = False
@@ -151,12 +153,127 @@ SPECS: dict[str, SettingSpec] = {
         description="Automatic retrieval augmentation from workspace docs",
         restart_required=False,
     ),
+    "RAG_EMBEDDINGS": SettingSpec(
+        key="RAG_EMBEDDINGS",
+        type="bool",
+        default="1" if getattr(settings, "RAG_EMBEDDINGS", False) else "0",
+        description="Enable embedding-based semantic document retrieval",
+        restart_required=True,
+    ),
+    "RAG_AUTO_SCORING": SettingSpec(
+        key="RAG_AUTO_SCORING",
+        type="enum",
+        allowed=("fraction", "embed", "hybrid"),
+        default=getattr(settings, "RAG_AUTO_SCORING", "fraction"),
+        description="Automatic retrieval candidate scoring method (fraction, embed, hybrid)",
+        restart_required=True,
+    ),
+    "RAG_EMBED_MODEL": SettingSpec(
+        key="RAG_EMBED_MODEL",
+        type="text",
+        default=str(getattr(settings, "RAG_EMBED_MODEL", "embeddinggemma")),
+        description="Local Ollama embedding model name",
+        restart_required=True,
+    ),
+    "RAG_EMBED_THRESHOLD": SettingSpec(
+        key="RAG_EMBED_THRESHOLD",
+        type="float",
+        min_float=0.40,
+        max_float=0.90,
+        default=str(getattr(settings, "RAG_EMBED_THRESHOLD", 0.65)),
+        description="Minimum cosine similarity threshold for embedding retrieval (0.40-0.90)",
+        restart_required=True,
+    ),
+    "UI_STYLE": SettingSpec(
+        key="UI_STYLE",
+        type="enum",
+        allowed=("hud", "classic"),
+        default=str(getattr(settings, "UI_STYLE", "hud")),
+        description="User interface layout style (hud: sci-fi HUD dashboard, classic: standard panels)",
+        restart_required=True,
+    ),
+    "UI_THEME": SettingSpec(
+        key="UI_THEME",
+        type="enum",
+        allowed=("cyan", "gold", "mono"),
+        default=str(getattr(settings, "UI_THEME", "cyan")),
+        description="Color palette theme (cyan, gold, mono)",
+        restart_required=True,
+    ),
+    "UI_MOTION": SettingSpec(
+        key="UI_MOTION",
+        type="enum",
+        allowed=("full", "reduced", "off"),
+        default=str(getattr(settings, "UI_MOTION", "full")),
+        description="Animation motion level (full: 30 FPS with particles, reduced: low-rate pulse, off: static)",
+        restart_required=True,
+    ),
+    "HUD_FPS": SettingSpec(
+        key="HUD_FPS",
+        type="enum",
+        allowed=("15", "24", "30"),
+        default=str(getattr(settings, "HUD_FPS", 30)),
+        description="Target framerate for HUD animations (15, 24, 30)",
+        restart_required=True,
+    ),
     "DOCTOR_ON_START": SettingSpec(
         key="DOCTOR_ON_START",
         type="bool",
         default="1" if getattr(settings, "DOCTOR_ON_START", True) else "0",
         description="Run environment doctor checks on startup",
         restart_required=True,
+    ),
+    "VOICE_HIGHPASS": SettingSpec(
+        key="VOICE_HIGHPASS",
+        type="bool",
+        default="1" if getattr(settings, "VOICE_HIGHPASS", 0) else "0",
+        description="High-pass filter below 80 Hz to eliminate low-frequency rumble",
+        restart_required=False,
+    ),
+    "VOICE_AGC": SettingSpec(
+        key="VOICE_AGC",
+        type="bool",
+        default="1" if getattr(settings, "VOICE_AGC", 0) else "0",
+        description="Automatic gain control to level voice volume and prevent clipping",
+        restart_required=False,
+    ),
+    "VOICE_DENOISE": SettingSpec(
+        key="VOICE_DENOISE",
+        type="bool",
+        default="1" if getattr(settings, "VOICE_DENOISE", 0) else "0",
+        description="Spectral gate noise reduction for ambient room noise",
+        restart_required=False,
+    ),
+    "STT_BEAM": SettingSpec(
+        key="STT_BEAM",
+        type="int",
+        min_val=1,
+        max_val=5,
+        default=str(getattr(settings, "STT_BEAM", 1)),
+        description="Whisper beam search decoding size (1-5)",
+        restart_required=False,
+    ),
+    "STT_PROMPT": SettingSpec(
+        key="STT_PROMPT",
+        type="bool",
+        default="1" if getattr(settings, "STT_PROMPT", 0) else "0",
+        description="Guide Whisper decoding with fixed app/site command vocabulary",
+        restart_required=False,
+    ),
+    "VOICE_ALIASES": SettingSpec(
+        key="VOICE_ALIASES",
+        type="bool",
+        default="1" if getattr(settings, "VOICE_ALIASES", 0) else "0",
+        description="Deterministic split-name alias resolution for app and site names",
+        restart_required=False,
+    ),
+    "VOICE_REVIEW": SettingSpec(
+        key="VOICE_REVIEW",
+        type="enum",
+        allowed=("auto", "always", "never"),
+        default=str(getattr(settings, "VOICE_REVIEW", "auto")),
+        description="Voice review gate (auto: confidence/noise check, always: review every phrase, never: instant dispatch)",
+        restart_required=False,
     ),
     "STT_MODEL": SettingSpec(
         key="STT_MODEL",
@@ -263,15 +380,26 @@ def validate(key: str, raw: Any) -> str:
             raise SettingsError(f"Value for '{key}' must be at most {spec.max_val}.")
         return str(num)
 
+    if spec.type == "float":
+        try:
+            f_num = float(stripped)
+        except ValueError:
+            raise SettingsError(f"Value for '{key}' must be a number, got '{val}'.")
+        if spec.min_float is not None and f_num < spec.min_float:
+            raise SettingsError(f"Value for '{key}' must be at least {spec.min_float:.2f}.")
+        if spec.max_float is not None and f_num > spec.max_float:
+            raise SettingsError(f"Value for '{key}' must be at most {spec.max_float:.2f}.")
+        return f"{f_num:.2f}"
+
     if spec.type == "text":
-        if key == "OLLAMA_MODEL":
+        if key in ("OLLAMA_MODEL", "RAG_EMBED_MODEL"):
             if not stripped:
-                raise SettingsError("OLLAMA_MODEL cannot be empty.")
+                raise SettingsError(f"{key} cannot be empty.")
             if len(stripped) > 60:
-                raise SettingsError("OLLAMA_MODEL must be at most 60 characters.")
+                raise SettingsError(f"{key} must be at most 60 characters.")
             if not re.match(r"^[A-Za-z0-9._:/-]+$", stripped):
                 raise SettingsError(
-                    f"OLLAMA_MODEL '{stripped}' contains invalid characters. Must match [A-Za-z0-9._:/-]+."
+                    f"{key} '{stripped}' contains invalid characters. Must match [A-Za-z0-9._:/-]+."
                 )
             return stripped
         return stripped
@@ -428,6 +556,11 @@ def save(
     - Leaves original byte-identical and cleans temp file on any failure.
     - ORBIT_MOCK=1 writes line; ORBIT_MOCK=0 removes line with warning.
     """
+    from config.paths import is_demo_mode
+
+    if is_demo_mode():
+        raise SettingsError("Settings can't be changed in demo mode")
+
     path = Path(env_path)
 
     # 1. Validate all requested changes upfront

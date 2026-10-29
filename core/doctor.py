@@ -113,6 +113,23 @@ def default_http_get(url: str, timeout: float = 2.0) -> HttpResponse:
         return HttpResponse(status_code=0, text=str(exc))
 
 
+def default_http_post(url: str, json_data: Any = None, timeout: float = 2.0) -> HttpResponse:
+    """Execute HTTP POST with explicit timeout."""
+    import json
+    data = json.dumps(json_data).encode("utf-8") if json_data is not None else None
+    headers = {"User-Agent": "ORBIT-Doctor", "Content-Type": "application/json"}
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            content = resp.read().decode("utf-8", errors="replace")
+            return HttpResponse(status_code=resp.status, text=content)
+    except urllib.error.HTTPError as exc:
+        content = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else ""
+        return HttpResponse(status_code=exc.code, text=content)
+    except Exception as exc:
+        return HttpResponse(status_code=0, text=str(exc))
+
+
 def default_run_command(cmd: list[str], timeout: float = 5.0) -> CommandResult:
     """Execute fixed command arguments with explicit timeout and shell=False."""
     try:
@@ -182,6 +199,7 @@ class Probes:
     """Injectable system probes ensuring tests never invoke real network, shell, or hardware."""
 
     http_get: Callable[..., Any] = default_http_get
+    http_post: Callable[..., Any] = default_http_post
     run_command: Callable[..., Any] = default_run_command
     find_spec: Callable[[str], Any] = default_find_spec
     which: Callable[[str], Optional[str]] = default_which
@@ -905,6 +923,62 @@ def check_microphone(probes: Probes) -> Check:
     )
 
 
+
+
+def check_voice_enhancement(probes: Probes) -> Check:
+    """Check voice enhancement settings, scipy-free numpy DSP, and measurement kit recording counts."""
+    hp = _probe_env(probes, "VOICE_HIGHPASS", "0")
+    agc = _probe_env(probes, "VOICE_AGC", "0")
+    denoise = _probe_env(probes, "VOICE_DENOISE", "0")
+    beam = _probe_env(probes, "STT_BEAM", "1")
+    prompt = _probe_env(probes, "STT_PROMPT", "0")
+    aliases = _probe_env(probes, "VOICE_ALIASES", "0")
+    review = _probe_env(probes, "VOICE_REVIEW", "auto")
+
+    has_numpy = probes.find_spec("numpy") is not None
+    numpy_status = "numpy available (scipy-free DSP)" if has_numpy else "numpy missing"
+
+    raw_home = _probe_env(probes, "ORBIT_HOME")
+    base_data = Path(raw_home.strip()) / "data" if raw_home and raw_home.strip() else Path("data")
+    eval_dir = base_data / "voice_eval"
+
+    dev_count = 0
+    test_count = 0
+    if probes.path_exists(eval_dir):
+        dev_clean = eval_dir / "dev" / "clean"
+        dev_noise = eval_dir / "dev" / "real_noise"
+        test_clean = eval_dir / "test" / "clean"
+        test_noise = eval_dir / "test" / "real_noise"
+
+        for d in (dev_clean, dev_noise):
+            if probes.path_exists(d):
+                try:
+                    dev_count += len(list(d.glob("*.wav")))
+                except Exception:
+                    pass
+        for d in (test_clean, test_noise):
+            if probes.path_exists(d):
+                try:
+                    test_count += len(list(d.glob("*.wav")))
+                except Exception:
+                    pass
+
+    counts_str = f"Recordings: dev={dev_count}, test={test_count}"
+    settings_str = f"Settings: HP={hp}, AGC={agc}, Denoise={denoise}, Beam={beam}, Prompt={prompt}, Aliases={aliases}, Review={review}"
+    detail = f"{numpy_status}; {settings_str}; {counts_str}"
+
+    fix = None
+    if dev_count == 0 and test_count == 0:
+        fix = "Record benchmark phrases using: python scripts/voice_record.py --split dev --kind clean"
+
+    return Check(
+        name="Voice enhancement & eval",
+        status="OK" if has_numpy else "WARN",
+        detail=detail,
+        fix=fix,
+    )
+
+
 def check_whisper_cache(probes: Probes) -> Check:
     """(i) Check Hugging Face hub cache for configured Whisper model (heuristic)."""
     stt_model = _probe_env(probes, "STT_MODEL", "base.en")
@@ -941,7 +1015,12 @@ def check_whisper_cache(probes: Probes) -> Check:
 
 def check_folders(probes: Probes) -> Check:
     """(j) Check workspace, data, logs exist, are writable, and free disk space >= 2 GB."""
-    folders = [Path("workspace"), Path("data"), Path("logs")]
+    raw_home = _probe_env(probes, "ORBIT_HOME")
+    if raw_home and raw_home.strip():
+        base = Path(raw_home.strip()).resolve()
+        folders = [base / "workspace", base / "data", base / "logs"]
+    else:
+        folders = [Path("workspace"), Path("data"), Path("logs")]
     min_free = float("inf")
 
     for folder in folders:
@@ -1229,7 +1308,147 @@ def check_leftover_risks(probes: Probes) -> Check:
     )
 
 
+def check_demo_mode(probes: Probes) -> Check:
+    """Report demo mode status and active ORBIT_HOME storage folder."""
+    raw_home = _probe_env(probes, "ORBIT_HOME")
+    demo_env = _probe_env(probes, "DEMO_MODE", "false")
+    demo_active = demo_env.strip().lower() in ("true", "1", "yes", "on")
+
+    home_name = Path(raw_home.strip()).name if raw_home and raw_home.strip() else "none"
+    demo_status = "active" if demo_active else "inactive"
+
+    if raw_home and raw_home.strip():
+        try:
+            from config.paths import get_orbit_home
+            get_orbit_home()
+        except ValueError as exc:
+            return Check(
+                name="Demo mode",
+                status="FAIL",
+                detail=f"Invalid ORBIT_HOME: {exc}",
+                fix="Set ORBIT_HOME to an isolated subdirectory",
+            )
+
+    if demo_active:
+        return Check(
+            name="Demo mode",
+            status="OK",
+            detail=f"DEMO_MODE={demo_status}; ORBIT_HOME={home_name} (sample data; real data/logs not modified)",
+            fix=None,
+        )
+
+    return Check(
+        name="Demo mode",
+        status="OK",
+        detail=f"DEMO_MODE={demo_status}; ORBIT_HOME={home_name}",
+        fix=None,
+    )
+
+
 # --- Core Runner & Formatter ---
+
+
+
+def check_rag_embeddings(probes: Probes, fast: bool = False) -> Check:
+    """Check RAG embedding model installation, vector counts, and test embedding reachability."""
+    raw_enabled = _probe_env(probes, "RAG_EMBEDDINGS", "false")
+    is_enabled = str(raw_enabled).strip().lower() in ("1", "true", "yes")
+
+    if not is_enabled:
+        return Check(
+            name="RAG embeddings",
+            status="OK",
+            detail="Disabled (lexical FTS5 retrieval active)",
+            fix=None,
+        )
+
+    embed_model = _probe_env(probes, "RAG_EMBED_MODEL", "embeddinggemma")
+    ollama_host = _probe_env(probes, "OLLAMA_HOST", "http://127.0.0.1:11434")
+
+    # 1. Check if model is installed in Ollama
+    installed_models: list[str] = []
+    try:
+        tags_resp = probes.http_get(f"{ollama_host.rstrip('/')}/api/tags", timeout=2.0)
+        if tags_resp.status_code == 200:
+            t_data = tags_resp.json() if hasattr(tags_resp, "json") else {}
+            if isinstance(t_data, dict):
+                models = t_data.get("models", [])
+                installed_models = [m.get("name") for m in models if isinstance(m, dict) and "name" in m]
+    except Exception:
+        pass
+
+    from core.providers import _is_model_installed
+
+    model_installed = _is_model_installed(installed_models, embed_model)
+    if installed_models and not model_installed:
+        return Check(
+            name="RAG embeddings",
+            status="WARN",
+            detail=f"Embedding model '{embed_model}' is not installed in Ollama",
+            fix=f"Run: ollama pull {embed_model}",
+        )
+
+    # 2. Check test embedding reachability (skip in fast mode)
+    if not fast:
+        try:
+            embed_resp = probes.http_post(
+                f"{ollama_host.rstrip('/')}/api/embed",
+                json_data={"model": embed_model, "input": ["test"]},
+                timeout=3.0,
+            )
+            if embed_resp.status_code == 404:
+                return Check(
+                    name="RAG embeddings",
+                    status="WARN",
+                    detail=f"Embedding model '{embed_model}' not found in Ollama",
+                    fix=f"Run: ollama pull {embed_model}",
+                )
+            elif embed_resp.status_code != 200:
+                return Check(
+                    name="RAG embeddings",
+                    status="WARN",
+                    detail=f"Ollama /api/embed returned HTTP {embed_resp.status_code}",
+                    fix="Verify Ollama server health",
+                )
+        except Exception as exc:
+            return Check(
+                name="RAG embeddings",
+                status="WARN",
+                detail=f"Ollama embedding test request failed: {exc}",
+                fix="Ensure Ollama is running and accessible",
+            )
+
+    # 3. Check vector count versus chunk count and stale count
+    try:
+        from rag.index import DocumentIndex
+        idx = DocumentIndex()
+        stats = idx.get_vector_stats(model=embed_model)
+        total = stats["total_chunks"]
+        valid = stats["valid_vectors"]
+        stale = stats["stale_vectors"]
+        missing = stats["missing_vectors"]
+        detail = f"Model '{embed_model}': {valid}/{total} chunks embedded ({stale} stale, {missing} missing)"
+
+        if stale > 0 or missing > 0:
+            return Check(
+                name="RAG embeddings",
+                status="WARN",
+                detail=detail,
+                fix="Run /index in chat or 'index_documents' to generate embeddings",
+            )
+        return Check(
+            name="RAG embeddings",
+            status="OK",
+            detail=detail,
+            fix=None,
+        )
+    except Exception as exc:
+        return Check(
+            name="RAG embeddings",
+            status="OK",
+            detail=f"Model '{embed_model}': vector database not yet created ({exc})",
+            fix=None,
+        )
 
 
 def run_checks(probes: Optional[Probes] = None, fast: bool = False) -> list[Check]:
@@ -1299,12 +1518,15 @@ def run_checks(probes: Optional[Probes] = None, fast: bool = False) -> list[Chec
     _execute("Browser", lambda: check_browser(p))
     _execute("Microphone", lambda: check_microphone(p))
     _execute("Whisper model cache", lambda: check_whisper_cache(p))
+    _execute("Voice enhancement & eval", lambda: check_voice_enhancement(p))
     _execute("Storage folders", lambda: check_folders(p))
     _execute("Git hygiene", lambda: check_git_hygiene(p))
     _execute("Allowed apps", lambda: check_allowed_apps(p))
     _execute("SQLite FTS5", lambda: check_fts5(p))
     _execute("Offline readiness", lambda: check_offline_readiness(p))
     _execute("Diagnostic risks", lambda: check_leftover_risks(p))
+    _execute("Demo mode", lambda: check_demo_mode(p))
+    _execute("RAG embeddings", lambda: check_rag_embeddings(p, fast=fast))
 
     return checks
 

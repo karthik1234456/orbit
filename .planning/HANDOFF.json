@@ -1,0 +1,100 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-10-29T16:29:21+05:30",
+  "phase": "2.12.0",
+  "phase_name": "rag-embedding-retrieval",
+  "phase_dir": ".planning",
+  "plan": 1,
+  "task": 3,
+  "total_tasks": 4,
+  "status": "paused",
+  "completed_tasks": [
+    {
+      "id": 1,
+      "name": "Implement core embedding engine, index schema v4, retrieval scoring, settings, and diagnostics",
+      "status": "done",
+      "progress": "Implemented rag/embeddings.py, rag/index.py v4 chunk_vectors, rag/retrieval.py embed/hybrid scoring, settings and SPECS float validation, doctor probe, diagnostics section, documentation (threat model, test checklist, changelog, version bump)"
+    },
+    {
+      "id": 2,
+      "name": "Implement evaluation sweep and pre-registered validation rules",
+      "status": "done",
+      "progress": "Added --scoring, --sweep-embed, select_best_setting eligibility rule, single-run .ran-<scoring> marker protection, and --retrieval-verdict in evals/retrieval_eval.py and evals/__main__.py"
+    },
+    {
+      "id": 3,
+      "name": "Write unit and integration tests in tests/test_embeddings.py",
+      "status": "in_progress",
+      "progress": "tests/test_embeddings.py written covering all 10 areas; 14 tests passing, 4 minor parameter/naming adjustments remaining to reach 100% pass"
+    }
+  ],
+  "remaining_tasks": [
+    {
+      "id": 3,
+      "name": "Fix 4 minor parameter/naming adjustments in tests/test_embeddings.py and verify test pass",
+      "status": "not_started"
+    },
+    {
+      "id": 4,
+      "name": "Update README.md with embedding docs, verification status row, and sync test count, then run ruff and full pytest",
+      "status": "not_started"
+    }
+  ],
+  "blockers": [],
+  "human_actions_pending": [],
+  "decisions": [
+    {
+      "decision": "Use struct.pack/unpack for float32 vectors in SQLite chunk_vectors table",
+      "rationale": "Avoids external vector database dependencies while keeping retrieval fully local and deterministic",
+      "phase": "2.12.0"
+    },
+    {
+      "decision": "Pre-registered eligibility rule: <= 1 false injection across general questions and <= 1 irrelevant block across PNA questions",
+      "rationale": "Prevents regression against baseline lexical search while evaluating semantic recall gains",
+      "phase": "2.12.0"
+    },
+    {
+      "decision": "Privacy boundary: no raw vector coordinates or document text in doctor detail or diagnostics",
+      "rationale": "Prevents leaking sensitive data into logs or console outputs",
+      "phase": "2.12.0"
+    }
+  ],
+  "uncommitted_files": [
+    ".gitignore",
+    "CHANGELOG.md",
+    "README.md",
+    "config/paths.py",
+    "config/settings.py",
+    "config/settings_store.py",
+    "core/bootstrap.py",
+    "core/diagnostics.py",
+    "core/doctor.py",
+    "core/task.py",
+    "core/version.py",
+    "docs/DEMO_SCRIPT.md",
+    "docs/TEST_CHECKLIST.md",
+    "docs/THREAT_MODEL.md",
+    "evals/SPLITS.md",
+    "evals/__main__.py",
+    "evals/retrieval_eval.py",
+    "main.py",
+    "memory/store.py",
+    "rag/embeddings.py",
+    "rag/index.py",
+    "rag/retrieval.py",
+    "reminders/store.py",
+    "routines/store.py",
+    "scripts/demo.py",
+    "security/audit.py",
+    "tests/test_demo_mode.py",
+    "tests/test_desktop.py",
+    "tests/test_embeddings.py",
+    "tests/test_repo_hygiene.py",
+    "tools/doc_tools.py",
+    "ui/app.py",
+    "ui/settings_window.py"
+  ],
+  "next_action": "Fix DocumentIndex.upsert_document call arguments (replace model= with embed_model=), fix test split error string match, fix json glob in evals/retrieval_eval.py, and fix probes monkeypatch in tests/test_embeddings.py, then run pytest tests/test_embeddings.py",
+  "context_notes": "All functional code and tests for optional RAG embedding retrieval are in place. Just need to finish test assertions in test_embeddings.py, update README.md, and run ruff + full pytest."
+}
+

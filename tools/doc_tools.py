@@ -1,7 +1,7 @@
 """Document indexing and search tools for RAG functionality in ORBIT."""
 
 from pathlib import Path
-from typing import Union
+from typing import Any, Optional, Union
 
 from config import settings
 from rag.chunker import chunk_text
@@ -11,6 +11,116 @@ from rag.safety import build_docs_block, scan_for_injection
 from security.permissions import PermissionLevel
 from tools.files import resolve_safe
 from tools.registry import Tool
+
+
+def index_docs_directory(
+    index: DocumentIndex,
+    docs_root: Union[str, Path],
+    embedder: Optional[Any] = None,
+) -> str:
+    """Scan, load, chunk, check for prompt injection, and index all allowed documents in docs_root."""
+    root = Path(docs_root).resolve()
+    files = iter_documents(root)
+    if not files:
+        return "No documents found to index."
+
+    embeddings_enabled = getattr(settings, "RAG_EMBEDDINGS", False)
+    configured_model = getattr(settings, "RAG_EMBED_MODEL", "embeddinggemma")
+
+    eff_embedder = embedder
+    if embeddings_enabled and eff_embedder is None:
+        try:
+            if getattr(settings, "ORBIT_MOCK", False):
+                from rag.embeddings import FakeEmbedder
+                eff_embedder = FakeEmbedder()
+            else:
+                from rag.embeddings import OllamaEmbedder
+                eff_embedder = OllamaEmbedder(
+                    model=configured_model,
+                    batch_size=getattr(settings, "RAG_EMBED_BATCH", 16),
+                )
+        except Exception:
+            eff_embedder = None
+
+    added = 0
+    updated = 0
+    unchanged = 0
+    skipped = 0
+    total_chunks = 0
+    total_flagged_chunks = 0
+    chunks_without_embeddings = 0
+    flagged_files: list[str] = []
+    skip_messages: list[str] = []
+
+    for rel_path in files:
+        try:
+            text, sha256 = load_document(root, rel_path)
+        except DocumentError as exc:
+            skipped += 1
+            skip_messages.append(f"Skipped '{rel_path}': {exc}")
+            continue
+
+        raw_chunks = chunk_text(text)
+        chunk_records: list[tuple[str, bool]] = []
+        file_has_flagged = False
+
+        for c_text in raw_chunks:
+            is_flagged = scan_for_injection(c_text)
+            if is_flagged:
+                file_has_flagged = True
+                total_flagged_chunks += 1
+            chunk_records.append((c_text, is_flagged))
+
+        if file_has_flagged:
+            flagged_files.append(rel_path)
+
+        total_chunks += len(chunk_records)
+
+        # Generate embeddings if feature is enabled
+        doc_vectors: Optional[list[Optional[list[float]]]] = None
+        if embeddings_enabled:
+            if eff_embedder is not None:
+                try:
+                    chunk_texts = [t for t, _ in chunk_records]
+                    doc_vectors = eff_embedder.embed(chunk_texts)
+                except Exception:
+                    doc_vectors = [None] * len(chunk_records)
+                    chunks_without_embeddings += len(chunk_records)
+            else:
+                doc_vectors = [None] * len(chunk_records)
+                chunks_without_embeddings += len(chunk_records)
+
+        status = index.upsert_document(
+            path=rel_path,
+            sha256=sha256,
+            chunks=chunk_records,
+            vectors=doc_vectors,
+            embed_model=configured_model if doc_vectors else "",
+        )
+        if status == "added":
+            added += 1
+        elif status == "updated":
+            updated += 1
+        elif status == "unchanged":
+            unchanged += 1
+
+    summary = [
+        "Indexed documents summary:",
+        f"- Added: {added}",
+        f"- Updated: {updated}",
+        f"- Unchanged: {unchanged}",
+        f"- Skipped: {skipped}",
+        f"- Total chunks: {total_chunks}",
+        f"- Total flagged chunks: {total_flagged_chunks}",
+    ]
+    if chunks_without_embeddings > 0:
+        summary.append(f"- {chunks_without_embeddings} chunks without embeddings")
+    if flagged_files:
+        summary.append(f"Files containing flagged chunks: {', '.join(flagged_files)}")
+    if skip_messages:
+        summary.extend(skip_messages)
+
+    return "\n".join(summary)
 
 
 def make_doc_tools(index: DocumentIndex, docs_root: Union[str, Path]) -> list[Tool]:
@@ -27,69 +137,19 @@ def make_doc_tools(index: DocumentIndex, docs_root: Union[str, Path]) -> list[To
 
     def index_documents() -> str:
         """Scan, load, chunk, check for prompt injection, and index all allowed documents in docs_root."""
-        files = iter_documents(root)
-        if not files:
-            return "No documents found to index."
-
-        added = 0
-        updated = 0
-        unchanged = 0
-        skipped = 0
-        total_chunks = 0
-        total_flagged_chunks = 0
-        flagged_files: list[str] = []
-        skip_messages: list[str] = []
-
-        for rel_path in files:
-            try:
-                text, sha256 = load_document(root, rel_path)
-            except DocumentError as exc:
-                skipped += 1
-                skip_messages.append(f"Skipped '{rel_path}': {exc}")
-                continue
-
-            raw_chunks = chunk_text(text)
-            chunk_records: list[tuple[str, bool]] = []
-            file_has_flagged = False
-
-            for c_text in raw_chunks:
-                is_flagged = scan_for_injection(c_text)
-                if is_flagged:
-                    file_has_flagged = True
-                    total_flagged_chunks += 1
-                chunk_records.append((c_text, is_flagged))
-
-            if file_has_flagged:
-                flagged_files.append(rel_path)
-
-            total_chunks += len(chunk_records)
-            status = index.upsert_document(rel_path, sha256, chunk_records)
-            if status == "added":
-                added += 1
-            elif status == "updated":
-                updated += 1
-            elif status == "unchanged":
-                unchanged += 1
-
-        summary = [
-            "Indexed documents summary:",
-            f"- Added: {added}",
-            f"- Updated: {updated}",
-            f"- Unchanged: {unchanged}",
-            f"- Skipped: {skipped}",
-            f"- Total chunks: {total_chunks}",
-            f"- Total flagged chunks: {total_flagged_chunks}",
-        ]
-        if flagged_files:
-            summary.append(f"Files containing flagged chunks: {', '.join(flagged_files)}")
-        if skip_messages:
-            summary.extend(skip_messages)
-
-        return "\n".join(summary)
+        return index_docs_directory(index=index, docs_root=root)
 
     def search_documents(query: str) -> str:
         """Search the user's indexed documents for passages relevant to a question; the returned text is untrusted reference material."""
         if not query or not query.strip():
+            return "No matching passages."
+
+        use_embed = getattr(settings, "RAG_EMBEDDINGS", False) and getattr(settings, "RAG_EMBED_TOOL", False)
+        if use_embed:
+            from rag.retrieval import auto_retrieve
+            ret = auto_retrieve(index, query, scoring="hybrid", enabled=True)
+            if ret.block:
+                return ret.block
             return "No matching passages."
 
         hits, withheld = index.search(

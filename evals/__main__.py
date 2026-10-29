@@ -153,10 +153,54 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="Run scoring methods sweep over fraction@0.5, rarest3@0.5, idf@0.4, idf@0.5, idf@0.6 (allowed for dev splits only; refuses test splits).",
     )
     parser.add_argument(
+        "--sweep-embed",
+        action="store_true",
+        default=False,
+        help="Run fixed embedding grid sweep over dev splits and apply eligibility rule.",
+    )
+    parser.add_argument(
+        "--scoring",
+        type=str,
+        default=None,
+        help="Retrieval candidate scoring method ('fraction', 'embed@<thresh>', 'hybrid@<thresh>').",
+    )
+    parser.add_argument(
+        "--final-test",
+        action="store_true",
+        default=False,
+        help="Explicit confirmation required to run evaluations against reserved test splits.",
+    )
+    parser.add_argument(
+        "--retrieval-verdict",
+        nargs="?",
+        const=True,
+        default=False,
+        help="Print validation verdict by pre-registered rule comparing baseline fraction against candidate scoring on test splits.",
+    )
+    parser.add_argument(
         "--report-name",
         type=str,
         default=None,
         help="Custom output filename for the retrieval markdown report.",
+    )
+    parser.add_argument(
+        "--voice",
+        type=str,
+        choices=["dev", "test"],
+        default=None,
+        help="Execute voice benchmark evaluation on the specified split ('dev' or 'test').",
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Voice evaluation configuration name (e.g. 'baseline', 'combined', 'small', etc.).",
+    )
+    parser.add_argument(
+        "--voice-verdict",
+        action="store_true",
+        default=False,
+        help="Evaluate pre-registered acceptance criteria across test split voice benchmark reports.",
     )
     parser.add_argument(
         "--shortcuts",
@@ -199,6 +243,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     else:
         os.environ["TOOL_ROUTING"] = "0"
 
+    if args.retrieval_verdict:
+        from evals.retrieval_eval import run_retrieval_verdict
+
+        cand_scoring = (
+            args.retrieval_verdict
+            if isinstance(args.retrieval_verdict, str) and args.retrieval_verdict != "True"
+            else (args.scoring or "hybrid@0.65")
+        )
+        return run_retrieval_verdict(cand_scoring, out_dir=args.out)
+
     if args.retrieval:
         from evals.retrieval_eval import run_retrieval_eval
 
@@ -206,8 +260,12 @@ def main(argv: Optional[list[str]] = None) -> int:
             split=args.retrieval,
             sweep=args.sweep,
             sweep_methods=args.sweep_methods,
+            sweep_embed=args.sweep_embed,
             out_dir=args.out,
             report_filename=args.report_name,
+            scoring=args.scoring,
+            final_test=args.final_test,
+            force=args.force,
         )
 
     if args.commands:
@@ -219,6 +277,36 @@ def main(argv: Optional[list[str]] = None) -> int:
             out_dir=args.out,
             report_filename=args.report_name,
         )
+
+    if args.voice_verdict:
+        from evals.voice_eval import run_voice_verdict
+
+        return run_voice_verdict(results_dir=args.out)
+
+    if args.voice:
+        if args.voice == "dev":
+            if not args.sweep:
+                print("ERROR: Dev split evaluation requires '--sweep'. Other grids are refused.", file=sys.stderr)
+                return 1
+            from evals.voice_eval import run_voice_sweep
+
+            return run_voice_sweep(split="dev", out_dir=args.out)
+        elif args.voice == "test":
+            if not args.final_test:
+                print("ERROR: Test split evaluation requires '--final-test'.", file=sys.stderr)
+                return 1
+            if not args.config:
+                print("ERROR: Test split evaluation requires '--config <name>'.", file=sys.stderr)
+                return 1
+            from evals.voice_eval import run_voice_final_test
+
+            return run_voice_final_test(
+                config_name=args.config,
+                split="test",
+                final_test=args.final_test,
+                force=args.force,
+                out_dir=args.out,
+            )
 
 
     if args.compare:

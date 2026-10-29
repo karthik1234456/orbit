@@ -13,11 +13,12 @@ from pathlib import Path
 import platform
 import re
 import sys
-from typing import Any, Optional
+from typing import Any, Optional, Union
 from urllib.parse import urlparse
 
 from browser.guards import page_type
 from config import settings
+from config.paths import get_diag_dir, get_orbit_home, is_demo_mode
 from core.version import VERSION
 from security.audit import AuditLogger, redact_data
 
@@ -136,6 +137,9 @@ def build_diagnostics_text(
     py_ver = sys.version.split()[0]
     os_ver = f"{platform.system()} {platform.release()} ({platform.version()})"
     now_utc = datetime.now(timezone.utc).isoformat()
+    home_dir = get_orbit_home()
+    orbit_home_name = home_dir.name if home_dir is not None else "none"
+    demo_status = "active" if is_demo_mode() else "inactive"
 
     sections.append(
         "=== ORBIT SYSTEM DIAGNOSTICS ===\n"
@@ -143,7 +147,9 @@ def build_diagnostics_text(
         f"ORBIT Version: {VERSION}\n"
         f"Git Commit: {git_commit}\n"
         f"Python Version: {py_ver}\n"
-        f"OS Version: {os_ver}"
+        f"OS Version: {os_ver}\n"
+        f"ORBIT_HOME: {orbit_home_name}\n"
+        f"DEMO_MODE: {demo_status}"
     )
 
     # 2. Provider and Model
@@ -189,7 +195,19 @@ def build_diagnostics_text(
     speak_flag = getattr(voice_ctrl, "speak_replies", getattr(settings, "SPEAK_REPLIES", False))
     last_voice_err = getattr(voice_ctrl, "last_error", "") or "none"
     last_duration = getattr(voice_ctrl, "last_transcription_duration_s", 0.0)
-    duration_str = f"{last_duration}s" if last_duration > 0 else "none"
+    duration_str = (f"{last_duration}s" if (isinstance(last_duration, (int, float)) and last_duration > 0) else "none")
+
+    hp = getattr(settings, "VOICE_HIGHPASS", 0)
+    agc_val = getattr(settings, "VOICE_AGC", 0)
+    denoise_val = getattr(settings, "VOICE_DENOISE", 0)
+    beam_val = getattr(settings, "STT_BEAM", 1)
+    prompt_val = getattr(settings, "STT_PROMPT", 0)
+    aliases_val = getattr(settings, "VOICE_ALIASES", 0)
+    review_val = getattr(settings, "VOICE_REVIEW", "auto")
+
+    last_snr = getattr(voice_controller, "last_snr_db", None)
+    snr_str = f"{last_snr:.1f} dB" if (last_snr is not None and isinstance(last_snr, (int, float))) else "none"
+    last_reason = getattr(voice_controller, "last_review_reason", None) or "none"
 
     sections.append(
         "=== VOICE ===\n"
@@ -197,8 +215,71 @@ def build_diagnostics_text(
         f"Speech Model: {stt_model}\n"
         f"Speech Language: {stt_lang}\n"
         f"Speak Replies: {speak_flag}\n"
+        f"Voice Settings: Highpass={hp}, AGC={agc_val}, Denoise={denoise_val}, Beam={beam_val}, Prompt={prompt_val}, Aliases={aliases_val}, Review={review_val}\n"
+        f"Last Estimated SNR: {snr_str}\n"
+        f"Last Review Reason: {last_reason}\n"
         f"Last Voice Error: {last_voice_err}\n"
         f"Last Transcription Duration: {duration_str}"
+    )
+
+    # 2c. RAG & Embeddings Telemetry
+    rag_embed_on = getattr(settings, "RAG_EMBEDDINGS", False)
+    rag_embed_model = getattr(settings, "RAG_EMBED_MODEL", "embeddinggemma")
+    try:
+        import rag.embeddings as emb_mod
+        from rag.index import DocumentIndex
+        idx = DocumentIndex()
+        v_stats = idx.get_vector_stats(model=rag_embed_model)
+        counts_str = (
+            f"Total Chunks: {v_stats['total_chunks']}, "
+            f"Vectors: {v_stats['total_vectors']}, "
+            f"Stale: {v_stats['stale_vectors']}, "
+            f"Missing: {v_stats['missing_vectors']}"
+        )
+        fb_reason = getattr(emb_mod, "LAST_EMBED_FALLBACK_REASON", "") or "none"
+        cpu_rej = "yes" if getattr(emb_mod, "CPU_OPTIONS_REJECTED", False) else "no"
+    except Exception as exc:
+        counts_str = f"unavailable ({exc})"
+        fb_reason = "none"
+        cpu_rej = "no"
+
+    sections.append(
+        "=== RAG EMBEDDINGS ===\n"
+        f"Embeddings Enabled: {'yes' if rag_embed_on else 'no'}\n"
+        f"Embedding Model: {rag_embed_model}\n"
+        f"Vector Counts: {counts_str}\n"
+        f"Last Fallback Reason: {fb_reason}\n"
+        f"CPU Options Rejected: {cpu_rej}"
+    )
+
+    # HUD section
+    ui_style = getattr(settings, "UI_STYLE", "hud")
+    ui_theme = getattr(settings, "UI_THEME", "cyan")
+    ui_motion = getattr(settings, "UI_MOTION", "full")
+    hud_fps = getattr(settings, "HUD_FPS", 30)
+
+    current_tier = "n/a"
+    avg_frame_time = "n/a"
+    downgrades = 0
+
+    hud_obj = getattr(app, "hud_canvas", None) if app is not None else None
+    hud_model = getattr(hud_obj, "model", None) if hud_obj is not None else getattr(app, "hud_model", None)
+    if hud_model is not None:
+        current_tier = str(getattr(hud_model, "tier", "n/a"))
+        avg_ft = getattr(hud_model, "average_frame_time", None)
+        if avg_ft is not None:
+            avg_frame_time = f"{avg_ft * 1000.0:.2f} ms"
+        downgrades = int(getattr(hud_model, "downgrades_count", 0))
+
+    sections.append(
+        "=== HUD ===\n"
+        f"UI Style: {ui_style}\n"
+        f"UI Theme: {ui_theme}\n"
+        f"UI Motion: {ui_motion}\n"
+        f"HUD FPS: {hud_fps}\n"
+        f"Current Tier: {current_tier}\n"
+        f"Average Frame Time: {avg_frame_time}\n"
+        f"Governor Downgrades: {downgrades}"
     )
 
     # 3. Settings That Matter
@@ -208,7 +289,6 @@ def build_diagnostics_text(
         if key.startswith("BROWSER_"):
             val = getattr(settings, key)
             settings_lines.append(f"{key}: {val}")
-
     # Specific requested settings
     for key in (
         "RAG_AUTO",
@@ -225,9 +305,21 @@ def build_diagnostics_text(
         "TOOL_ROUTING",
         "ROUTINES_ENABLED",
         "ROUTINE_PREVIEW",
+        "RAG_EMBEDDINGS",
+        "RAG_AUTO_SCORING",
+        "RAG_EMBED_MODEL",
+        "RAG_EMBED_THRESHOLD",
+        "RAG_EMBED_MARGIN",
+        "RAG_EMBED_TOOL",
+        "UI_STYLE",
+        "UI_THEME",
+        "UI_MOTION",
+        "HUD_FPS",
     ):
         val = getattr(settings, key, "not_configured")
         settings_lines.append(f"{key}: {val}")
+    settings_lines.append(f"ORBIT_HOME: {orbit_home_name}")
+    settings_lines.append(f"DEMO_MODE: {demo_status}")
 
     # Settings store items whose source is environment or value differs from default
     try:
@@ -632,7 +724,7 @@ def generate_diagnostics(
     recent_chat_lines: Optional[list[str]] = None,
     activity_events: Optional[list[dict]] = None,
     audit_logger: Optional[AuditLogger] = None,
-    output_dir: str = "logs",
+    output_dir: Optional[Union[str, Path]] = None,
     git_commit_override: Optional[str] = None,
     last_plan: Optional[Any] = None,
     reminder_store: Optional[Any] = None,
@@ -662,7 +754,7 @@ def generate_diagnostics(
         routine_store=routine_store,
     )
 
-    out_dir = Path(output_dir)
+    out_dir = Path(output_dir if output_dir is not None else get_diag_dir())
     out_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")

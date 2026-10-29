@@ -146,6 +146,9 @@ def auto_retrieve(
     max_chars: Optional[int] = None,
     enabled: Optional[bool] = None,
     scoring: Optional[str] = None,
+    embedder: Optional[Any] = None,
+    embed_threshold: Optional[float] = None,
+    embed_margin: Optional[float] = None,
 ) -> AutoRetrieval:
     """Automatically search indexed documents and construct a bounded context block.
 
@@ -239,9 +242,272 @@ def auto_retrieve(
             if scoring is not None
             else getattr(settings, "RAG_AUTO_SCORING", "fraction")
         )
-        if eff_scoring not in ("fraction", "rarest3", "idf"):
+        if eff_scoring not in ("fraction", "embed", "hybrid", "rarest3", "idf"):
             eff_scoring = "fraction"
 
+        # --- Embedding and Hybrid Scoring Path ---
+        if eff_scoring in ("embed", "hybrid"):
+            import rag.embeddings as emb_mod
+            from rag.embeddings import EmbeddingError, dot_product, get_cached_query_embedding
+
+            embeddings_enabled = getattr(settings, "RAG_EMBEDDINGS", False) or (embedder is not None)
+            if not embeddings_enabled:
+                emb_mod.LAST_EMBED_FALLBACK_REASON = "disabled"
+                fallback_ar = auto_retrieve(
+                    index, text,
+                    min_terms=min_terms,
+                    min_coverage=min_coverage,
+                    top_k=top_k,
+                    max_chars=max_chars,
+                    enabled=enabled,
+                    scoring="fraction",
+                )
+                fallback_ar.reason = "embedding_unavailable:disabled"
+                return fallback_ar
+
+            eff_embed = embedder
+            if eff_embed is None:
+                if getattr(settings, "ORBIT_MOCK", False):
+                    eff_embed = emb_mod.FakeEmbedder()
+                else:
+                    eff_embed = emb_mod.OllamaEmbedder(
+                        model=getattr(settings, "RAG_EMBED_MODEL", "embeddinggemma"),
+                        timeout=5.0,
+                        batch_size=getattr(settings, "RAG_EMBED_BATCH", 16),
+                    )
+
+            if not hasattr(index, "get_all_chunk_vectors"):
+                emb_mod.LAST_EMBED_FALLBACK_REASON = "no_vector_support"
+                fallback_ar = auto_retrieve(index, text, scoring="fraction", enabled=enabled)
+                fallback_ar.reason = "embedding_unavailable:no_vector_support"
+                return fallback_ar
+
+            all_chunks = index.get_all_chunk_vectors()
+            valid_chunks_with_vec = [c for c in all_chunks if c.get("vec") is not None]
+            if not valid_chunks_with_vec:
+                emb_mod.LAST_EMBED_FALLBACK_REASON = "empty_vectors"
+                fallback_ar = auto_retrieve(index, text, scoring="fraction", enabled=enabled)
+                fallback_ar.reason = "embedding_unavailable:empty_vectors"
+                return fallback_ar
+
+            try:
+                q_vec = get_cached_query_embedding(eff_embed, text, timeout=5.0)
+            except EmbeddingError as e_err:
+                err_msg = str(e_err).lower()
+                if "not found in ollama" in err_msg or "pull" in err_msg:
+                    short_reason = "model_not_found"
+                elif "timed out" in err_msg:
+                    short_reason = "timeout"
+                elif "cannot connect" in err_msg:
+                    short_reason = "connection_failed"
+                else:
+                    short_reason = "embedding_error"
+                emb_mod.LAST_EMBED_FALLBACK_REASON = short_reason
+                fallback_ar = auto_retrieve(index, text, scoring="fraction", enabled=enabled)
+                fallback_ar.reason = f"embedding_unavailable:{short_reason}"
+                return fallback_ar
+            except Exception as exc:
+                short_reason = f"error_{type(exc).__name__}"
+                emb_mod.LAST_EMBED_FALLBACK_REASON = short_reason
+                fallback_ar = auto_retrieve(index, text, scoring="fraction", enabled=enabled)
+                fallback_ar.reason = f"embedding_unavailable:{short_reason}"
+                return fallback_ar
+
+            q_dim = len(q_vec)
+            if any(c.get("dim", len(c["vec"])) != q_dim for c in valid_chunks_with_vec):
+                emb_mod.LAST_EMBED_FALLBACK_REASON = "dimension_mismatch"
+                fallback_ar = auto_retrieve(index, text, scoring="fraction", enabled=enabled)
+                fallback_ar.reason = "embedding_unavailable:dimension_mismatch"
+                return fallback_ar
+
+            eff_thresh = (
+                embed_threshold
+                if embed_threshold is not None
+                else getattr(settings, "RAG_EMBED_THRESHOLD", 0.65)
+            )
+            eff_marg = (
+                embed_margin
+                if embed_margin is not None
+                else getattr(settings, "RAG_EMBED_MARGIN", 0.08)
+            )
+
+            distinct_terms = set(terms)
+            num_distinct = len(distinct_terms)
+            min_req_terms = min(eff_min_terms, num_distinct)
+
+            candidates: list[dict[str, Any]] = []
+            withheld_embed_count = 0
+
+            for c in all_chunks:
+                vec = c.get("vec")
+                cosine = dot_product(q_vec, vec) if vec is not None else 0.0
+                cid = c["chunk_id"]
+                matched_terms = index.term_hits(cid, distinct_terms) if hasattr(index, "term_hits") else set()
+                matched_count = len(matched_terms)
+                coverage = matched_count / num_distinct if num_distinct > 0 else 0.0
+                frac_passes = bool(matched_count >= min_req_terms and coverage >= eff_min_coverage)
+                is_flagged = c.get("flagged", False)
+
+                if is_flagged:
+                    if eff_scoring == "embed":
+                        if cosine >= eff_thresh:
+                            withheld_embed_count += 1
+                    elif eff_scoring == "hybrid":
+                        if frac_passes or (cosine >= eff_thresh and matched_count >= 1):
+                            withheld_embed_count += 1
+                    continue
+
+                candidates.append({
+                    "chunk": c,
+                    "cosine": cosine,
+                    "matched_terms": matched_terms,
+                    "coverage": coverage,
+                    "fraction_passes": frac_passes,
+                })
+
+            kept_hits = []
+            recorded_hits = []
+
+            if eff_scoring == "embed":
+                eligible = [sc for sc in candidates if sc["cosine"] >= eff_thresh]
+                if eligible:
+                    best_cos = max(sc["cosine"] for sc in eligible)
+                    cutoff = best_cos - eff_marg
+                    kept_scs = [sc for sc in eligible if sc["cosine"] >= cutoff]
+                    kept_scs.sort(key=lambda sc: sc["cosine"], reverse=True)
+                    top_kept = kept_scs[:eff_top_k]
+                    top_kept_ids = set(id(sc) for sc in top_kept)
+                else:
+                    top_kept_ids = set()
+
+                for sc in candidates:
+                    is_kept = id(sc) in top_kept_ids
+                    c = sc["chunk"]
+                    hit_obj = Hit(
+                        path=c["path"],
+                        chunk_no=c["chunk_no"],
+                        text=c["text"],
+                        score=sc["cosine"],
+                        flagged=False,
+                        chunk_id=c["chunk_id"],
+                        outdated=c.get("outdated", False),
+                    )
+                    if is_kept:
+                        kept_hits.append(hit_obj)
+                    recorded_hits.append(
+                        AutoHit(
+                            file=c["path"],
+                            chunk=c["chunk_no"],
+                            matched_terms=sorted(sc["matched_terms"]),
+                            matched_fraction=sc["cosine"],
+                            kept=is_kept,
+                            outdated=c.get("outdated", False),
+                        )
+                    )
+
+            elif eff_scoring == "hybrid":
+                embed_cands = [
+                    sc for sc in candidates
+                    if sc["cosine"] >= eff_thresh and len(sc["matched_terms"]) >= 1
+                ]
+                if embed_cands:
+                    best_embed_cos = max(sc["cosine"] for sc in embed_cands)
+                    cutoff = best_embed_cos - eff_marg
+                    filtered_embed = [sc for sc in embed_cands if sc["cosine"] >= cutoff]
+                else:
+                    filtered_embed = []
+
+                filtered_embed_ids = set(id(sc) for sc in filtered_embed)
+
+                qualifying = [
+                    sc for sc in candidates
+                    if sc["fraction_passes"] or (id(sc) in filtered_embed_ids)
+                ]
+                qualifying.sort(key=lambda sc: sc["cosine"], reverse=True)
+                top_kept = qualifying[:eff_top_k]
+                top_kept_ids = set(id(sc) for sc in top_kept)
+
+                for sc in candidates:
+                    is_kept = id(sc) in top_kept_ids
+                    c = sc["chunk"]
+                    hit_obj = Hit(
+                        path=c["path"],
+                        chunk_no=c["chunk_no"],
+                        text=c["text"],
+                        score=sc["cosine"],
+                        flagged=False,
+                        chunk_id=c["chunk_id"],
+                        outdated=c.get("outdated", False),
+                    )
+                    if is_kept:
+                        kept_hits.append(hit_obj)
+                    recorded_hits.append(
+                        AutoHit(
+                            file=c["path"],
+                            chunk=c["chunk_no"],
+                            matched_terms=sorted(sc["matched_terms"]),
+                            matched_fraction=sc["cosine"] if id(sc) in filtered_embed_ids else sc["coverage"],
+                            kept=is_kept,
+                            outdated=c.get("outdated", False),
+                        )
+                    )
+
+            if not kept_hits:
+                ar = AutoRetrieval(
+                    searched=True,
+                    block="",
+                    injected=0,
+                    withheld=withheld_embed_count,
+                    terms=terms,
+                    reason="no_hits_passed_thresholds" if candidates else "no_hits_found",
+                    hits=recorded_hits,
+                )
+                ar.note = not_found_note(text, index, retrieval=ar)
+                return ar
+
+            kept_hits = sorted(
+                kept_hits,
+                key=lambda h: 1 if getattr(h, "outdated", False) else 0,
+            )
+
+            header_line = "ORBIT searched the user's documents automatically for this message."
+            reserved_chars = len(header_line) + 1
+            inner_budget = max(100, eff_max_chars - reserved_chars)
+
+            raw_block = build_docs_block(
+                kept_hits,
+                withheld_count=withheld_embed_count,
+                max_chars=inner_budget,
+            )
+
+            if not raw_block:
+                ar = AutoRetrieval(
+                    searched=True,
+                    block="",
+                    injected=0,
+                    withheld=withheld_embed_count,
+                    terms=terms,
+                    reason="block_empty",
+                    hits=recorded_hits,
+                )
+                ar.note = not_found_note(text, index, retrieval=ar)
+                return ar
+
+            block = f"{header_line}\n{raw_block}"
+            if len(block) > eff_max_chars:
+                block = block[:eff_max_chars]
+
+            return AutoRetrieval(
+                searched=True,
+                block=block,
+                injected=len(kept_hits),
+                withheld=withheld_embed_count,
+                terms=terms,
+                reason="retrieved",
+                hits=recorded_hits,
+            )
+
+        # --- Standard Lexical Search Path ---
         hits, withheld = index.search(
             query=text,
             top_k=eff_top_k,

@@ -6,10 +6,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 import re
 import sqlite3
-from typing import Generator, Iterable, Optional, Union
+import struct
+from typing import Any, Generator, Iterable, Optional, Union
+
+from config.paths import get_rag_db_path
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Conservative patterns detecting obsolete/superseded documents
 _OUTDATED_PATTERNS = [
@@ -94,13 +97,13 @@ def has_fts5() -> bool:
 class DocumentIndex:
     """Persistent SQLite and FTS5-backed index for document chunks."""
 
-    def __init__(self, path: Union[str, Path] = "data/rag.db"):
+    def __init__(self, path: Optional[Union[str, Path]] = None):
         if not has_fts5():
             raise IndexUnavailable(
                 "SQLite FTS5 extension is required for DocumentIndex but is not available in this environment."
             )
 
-        self.path = Path(path).resolve()
+        self.path = Path(path if path is not None else get_rag_db_path()).resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.migrated: bool = False
 
@@ -127,6 +130,7 @@ class DocumentIndex:
 
             # If existing database has an older schema version (or unversioned chunks/docs)
             if (has_chunks or has_docs or has_meta) and existing_version < SCHEMA_VERSION:
+                cursor.execute("DROP TABLE IF EXISTS chunk_vectors")
                 cursor.execute("DROP TABLE IF EXISTS chunks")
                 cursor.execute("DROP TABLE IF EXISTS documents")
                 self.migrated = True
@@ -164,6 +168,16 @@ class DocumentIndex:
                 """
             )
             cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chunk_vectors (
+                    chunk_id INTEGER PRIMARY KEY,
+                    model TEXT NOT NULL,
+                    dim INTEGER NOT NULL,
+                    vec BLOB NOT NULL
+                )
+                """
+            )
+            cursor.execute(
                 "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
             )
@@ -187,6 +201,8 @@ class DocumentIndex:
         sha256: str,
         chunks: list[tuple[str, bool]],
         outdated: Optional[bool] = None,
+        vectors: Optional[list[Optional[list[float]]]] = None,
+        embed_model: str = "",
     ) -> str:
         """Add or update a document and its chunks in one transaction.
 
@@ -219,9 +235,36 @@ class DocumentIndex:
             if row:
                 doc_id, existing_hash, existing_outdated = row
                 if existing_hash == sha256 and existing_outdated == outdated_val:
+                    # If vectors are provided, check if existing chunks need vector updates
+                    if vectors is not None:
+                        cursor.execute(
+                            "SELECT rowid, chunk_no FROM chunks WHERE doc_id = ? ORDER BY chunk_no ASC",
+                            (doc_id,),
+                        )
+                        chunk_rows = cursor.fetchall()
+                        updated_vecs = False
+                        for chunk_id, c_no in chunk_rows:
+                            if c_no < len(vectors) and vectors[c_no] is not None:
+                                vec_floats = vectors[c_no]
+                                v_dim = len(vec_floats)
+                                blob = struct.pack(f"{v_dim}f", *vec_floats)
+                                cursor.execute(
+                                    """
+                                    INSERT OR REPLACE INTO chunk_vectors (chunk_id, model, dim, vec)
+                                    VALUES (?, ?, ?, ?)
+                                    """,
+                                    (chunk_id, embed_model, v_dim, blob),
+                                )
+                                updated_vecs = True
+                        if updated_vecs:
+                            return "updated"
                     return "unchanged"
 
-                # Update existing document: delete old chunks first
+                # Update existing document: delete old vectors and chunks in same transaction
+                cursor.execute(
+                    "DELETE FROM chunk_vectors WHERE chunk_id IN (SELECT rowid FROM chunks WHERE doc_id = ?)",
+                    (doc_id,),
+                )
                 cursor.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
                 cursor.execute(
                     """
@@ -243,16 +286,25 @@ class DocumentIndex:
                 doc_id = cursor.lastrowid
                 status = "added"
 
-            # Insert new chunks
+            # Insert new chunks and vectors in same transaction
             if chunks:
-                chunk_rows = [
-                    (text, doc_id, i, 1 if flagged else 0)
-                    for i, (text, flagged) in enumerate(chunks)
-                ]
-                cursor.executemany(
-                    "INSERT INTO chunks (content, doc_id, chunk_no, flagged) VALUES (?, ?, ?, ?)",
-                    chunk_rows,
-                )
+                for i, (text, flagged) in enumerate(chunks):
+                    cursor.execute(
+                        "INSERT INTO chunks (content, doc_id, chunk_no, flagged) VALUES (?, ?, ?, ?)",
+                        (text, doc_id, i, 1 if flagged else 0),
+                    )
+                    chunk_id = cursor.lastrowid
+                    if vectors is not None and i < len(vectors) and vectors[i] is not None:
+                        vec_floats = vectors[i]
+                        v_dim = len(vec_floats)
+                        blob = struct.pack(f"{v_dim}f", *vec_floats)
+                        cursor.execute(
+                            """
+                            INSERT OR REPLACE INTO chunk_vectors (chunk_id, model, dim, vec)
+                            VALUES (?, ?, ?, ?)
+                            """,
+                            (chunk_id, embed_model, v_dim, blob),
+                        )
 
             return status
 
@@ -384,6 +436,10 @@ class DocumentIndex:
                 return False
 
             doc_id = row[0]
+            cursor.execute(
+                "DELETE FROM chunk_vectors WHERE chunk_id IN (SELECT rowid FROM chunks WHERE doc_id = ?)",
+                (doc_id,),
+            )
             cursor.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
             cursor.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
             return True
@@ -433,3 +489,66 @@ class DocumentIndex:
                     result[term] = 0
         return result
 
+
+    def get_vector_stats(self, model: Optional[str] = None, dim: Optional[int] = None) -> dict[str, int]:
+        """Return vector inventory statistics: total chunks, total vectors, valid, stale, and missing."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT count(*) FROM chunks")
+            total_chunks = int(cursor.fetchone()[0])
+
+            cursor.execute("SELECT count(*) FROM chunk_vectors")
+            total_vectors = int(cursor.fetchone()[0])
+
+            if model:
+                if dim is not None:
+                    cursor.execute("SELECT count(*) FROM chunk_vectors WHERE model = ? AND dim = ?", (model, dim))
+                else:
+                    cursor.execute("SELECT count(*) FROM chunk_vectors WHERE model = ?", (model,))
+                valid_vectors = int(cursor.fetchone()[0])
+                stale_vectors = max(0, total_vectors - valid_vectors)
+            else:
+                valid_vectors = total_vectors
+                stale_vectors = 0
+
+            missing_vectors = max(0, total_chunks - total_vectors)
+            return {
+                "total_chunks": total_chunks,
+                "total_vectors": total_vectors,
+                "valid_vectors": valid_vectors,
+                "stale_vectors": stale_vectors,
+                "missing_vectors": missing_vectors,
+            }
+
+    def get_all_chunk_vectors(self) -> list[dict[str, Any]]:
+        """Retrieve all indexed chunks with decoded float vectors if present. Never logs or leaks vectors."""
+        results: list[dict[str, Any]] = []
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT c.rowid, d.path, c.chunk_no, c.content, c.flagged, d.outdated, v.vec, v.dim, v.model
+                FROM chunks c
+                JOIN documents d ON c.doc_id = d.id
+                LEFT JOIN chunk_vectors v ON c.rowid = v.chunk_id
+                """
+            )
+            for rowid, doc_path, chunk_no, content, flagged, outdated, blob, dim, model in cursor.fetchall():
+                vec = None
+                if blob is not None and dim:
+                    try:
+                        vec = list(struct.unpack(f"{dim}f", blob))
+                    except Exception:
+                        vec = None
+                results.append({
+                    "chunk_id": int(rowid),
+                    "path": doc_path,
+                    "chunk_no": int(chunk_no),
+                    "text": content,
+                    "flagged": bool(int(flagged) if flagged is not None else 0),
+                    "outdated": bool(int(outdated) if outdated is not None else 0),
+                    "vec": vec,
+                    "dim": int(dim) if dim else 0,
+                    "model": model or "",
+                })
+        return results

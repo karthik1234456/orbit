@@ -1,0 +1,198 @@
+{
+  "dev": [
+    {
+      "id": "voice-dev-001",
+      "phrase": "open notepad"
+    },
+    {
+      "id": "voice-dev-002",
+      "phrase": "launch calculator"
+    },
+    {
+      "id": "voice-dev-003",
+      "phrase": "close notepad"
+    },
+    {
+      "id": "voice-dev-004",
+      "phrase": "open explorer"
+    },
+    {
+      "id": "voice-dev-005",
+      "phrase": "open youtube"
+    },
+    {
+      "id": "voice-dev-006",
+      "phrase": "open google"
+    },
+    {
+      "id": "voice-dev-007",
+      "phrase": "search youtube for lo-fi beats"
+    },
+    {
+      "id": "voice-dev-008",
+      "phrase": "search google for weather forecast"
+    },
+    {
+      "id": "voice-dev-009",
+      "phrase": "search youtube for acoustic guitar"
+    },
+    {
+      "id": "voice-dev-010",
+      "phrase": "click first result"
+    },
+    {
+      "id": "voice-dev-011",
+      "phrase": "click top result"
+    },
+    {
+      "id": "voice-dev-012",
+      "phrase": "play"
+    },
+    {
+      "id": "voice-dev-013",
+      "phrase": "pause"
+    },
+    {
+      "id": "voice-dev-014",
+      "phrase": "scroll down"
+    },
+    {
+      "id": "voice-dev-015",
+      "phrase": "go back"
+    },
+    {
+      "id": "voice-dev-016",
+      "phrase": "set a timer for 5 minutes"
+    },
+    {
+      "id": "voice-dev-017",
+      "phrase": "timer for 10 minutes"
+    },
+    {
+      "id": "voice-dev-018",
+      "phrase": "remind me to check oven in 15 minutes"
+    },
+    {
+      "id": "voice-dev-019",
+      "phrase": "remind me to drink water in 30 minutes"
+    },
+    {
+      "id": "voice-dev-020",
+      "phrase": "open youtube then search youtube for lofi"
+    },
+    {
+      "id": "voice-dev-021",
+      "phrase": "open notepad, launch calculator"
+    },
+    {
+      "id": "voice-dev-022",
+      "phrase": "open google then search google for news"
+    },
+    {
+      "id": "voice-dev-023",
+      "phrase": "scroll down, click first result"
+    },
+    {
+      "id": "voice-dev-024",
+      "phrase": "pause then go back"
+    }
+  ],
+  "test": [
+    {
+      "id": "voice-test-001",
+      "phrase": "open vscode"
+    },
+    {
+      "id": "voice-test-002",
+      "phrase": "launch chrome"
+    },
+    {
+      "id": "voice-test-003",
+      "phrase": "open whatsapp"
+    },
+    {
+      "id": "voice-test-004",
+      "phrase": "close vscode"
+    },
+    {
+      "id": "voice-test-005",
+      "phrase": "open github"
+    },
+    {
+      "id": "voice-test-006",
+      "phrase": "open wikipedia"
+    },
+    {
+      "id": "voice-test-007",
+      "phrase": "open gmail"
+    },
+    {
+      "id": "voice-test-008",
+      "phrase": "open maps"
+    },
+    {
+      "id": "voice-test-009",
+      "phrase": "search github for rust compiler"
+    },
+    {
+      "id": "voice-test-010",
+      "phrase": "search wikipedia for james webb telescope"
+    },
+    {
+      "id": "voice-test-011",
+      "phrase": "search maps for central park library"
+    },
+    {
+      "id": "voice-test-012",
+      "phrase": "click second result"
+    },
+    {
+      "id": "voice-test-013",
+      "phrase": "click third result"
+    },
+    {
+      "id": "voice-test-014",
+      "phrase": "mute"
+    },
+    {
+      "id": "voice-test-015",
+      "phrase": "unmute"
+    },
+    {
+      "id": "voice-test-016",
+      "phrase": "scroll up"
+    },
+    {
+      "id": "voice-test-017",
+      "phrase": "reload"
+    },
+    {
+      "id": "voice-test-018",
+      "phrase": "set a timer for 3 minutes"
+    },
+    {
+      "id": "voice-test-019",
+      "phrase": "timer for 45 minutes"
+    },
+    {
+      "id": "voice-test-020",
+      "phrase": "remind me to call dentist in 20 minutes"
+    },
+    {
+      "id": "voice-test-021",
+      "phrase": "remind me to review pull request in 40 minutes"
+    },
+    {
+      "id": "voice-test-022",
+      "phrase": "open github then search github for rust"
+    },
+    {
+      "id": "voice-test-023",
+      "phrase": "open vscode, launch chrome"
+    },
+    {
+      "id": "voice-test-024",
+      "phrase": "scroll up, click second result"
+    }
+  ]
+}

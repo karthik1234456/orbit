@@ -18,6 +18,8 @@ from pathlib import Path
 import sqlite3
 from typing import Any, Generator, Optional, Union
 
+from config.paths import get_routines_db_path
+
 from routines.validate import (
     RoutineError,
     RoutineExistsError,
@@ -81,10 +83,10 @@ class RoutineStore:
 
     def __init__(
         self,
-        path: Union[str, Path] = "data/routines.db",
+        path: Optional[Union[str, Path]] = None,
         clock: Optional[Any] = None,
     ) -> None:
-        self.path = Path(path).resolve()
+        self.path = Path(path if path is not None else get_routines_db_path()).resolve()
         self.clock = clock or (lambda: datetime.now(timezone.utc))
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
