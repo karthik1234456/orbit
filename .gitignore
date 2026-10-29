@@ -10,3 +10,4 @@ data/
 data/voice_eval/
 evals/results/
 demo_home/
+.planning/
