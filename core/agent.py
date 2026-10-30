@@ -3,6 +3,7 @@
 from datetime import datetime
 import os
 import re
+import sys
 import secrets
 import time
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Union
@@ -69,6 +70,7 @@ class Agent:
         tool_routing: Optional[bool] = None,
         routine_store: Optional[Any] = None,
         routines_enabled: Optional[bool] = None,
+        system_controls_enabled: Optional[bool] = None,
     ):
         """Initialize agent with LLM provider, tool registry, permission policy, guards, and audit logger."""
         self.provider = provider
@@ -94,6 +96,7 @@ class Agent:
         self.tool_routing = tool_routing
         self.routine_store = routine_store
         self.routines_enabled = routines_enabled
+        self.system_controls_enabled = system_controls_enabled
         self.last_plan_steps: Optional[list[dict[str, Any]]] = None
         self._routine_running: bool = False
 
@@ -142,6 +145,19 @@ class Agent:
             if v in ("1", "true", "yes", "on"):
                 return True
         return bool(getattr(settings, "ROUTINES_ENABLED", True))
+
+    def system_controls_enabled_check(self) -> bool:
+        """Check whether native Windows system controls are active."""
+        if self.system_controls_enabled is not None:
+            return bool(self.system_controls_enabled)
+        env_val = os.getenv("SYSTEM_CONTROLS_ENABLED")
+        if env_val is not None:
+            v = env_val.strip().lower()
+            if v in ("0", "false", "no", "off"):
+                return False
+            if v in ("1", "true", "yes", "on"):
+                return True
+        return bool(getattr(settings, "SYSTEM_CONTROLS_ENABLED", sys.platform == "win32"))
 
     def shortcuts_enabled(self) -> bool:
         """Check whether deterministic command shortcuts are active."""
@@ -258,11 +274,18 @@ class Agent:
             log_decision = "rejected_retry"
             hint = _RECOVERY_HINTS["blocked"]
         else:
+            escalated_tainted = bool(
+                tainted and tool and getattr(tool, "escalate_when_tainted", False)
+            )
+
             # Determine security decision if policy is configured
             if self.policy is not None:
                 decision = self.policy.decide(name, tool_level)
             else:
                 decision = Decision.ALLOW
+
+            if escalated_tainted:
+                decision = Decision.ASK
 
             # Execute or prompt based on policy decision
             if decision == Decision.ALLOW:
@@ -322,7 +345,7 @@ class Agent:
                             result = self.registry.execute(name, args)
                         else:
                             result = f"ERROR: No tool registry configured to execute '{name}'"
-                        log_decision = "user_approved"
+                        log_decision = "escalated_tainted" if escalated_tainted else "user_approved"
 
                         if result.startswith("ERROR: REJECTED:"):
                             status = "rejected"
@@ -414,7 +437,7 @@ class Agent:
         step_decision = (
             "user_denied"
             if (is_shortcut and log_decision == "user_denied")
-            else ("shortcut" if is_shortcut else None)
+            else ("escalated_tainted" if log_decision == "escalated_tainted" else ("shortcut" if is_shortcut else None))
         )
         run.add_step(
             tool=name,
@@ -1687,6 +1710,7 @@ class Agent:
                         state=self.session_state,
                         browser_enabled=browser_enabled,
                         reminders_enabled=self.reminders_enabled_check(),
+                        system_controls_enabled=self.system_controls_enabled_check(),
                         clock=self.clock,
                     )
             else:
@@ -1697,6 +1721,7 @@ class Agent:
                     state=self.session_state,
                     browser_enabled=browser_enabled,
                     reminders_enabled=self.reminders_enabled_check(),
+                    system_controls_enabled=self.system_controls_enabled_check(),
                     clock=self.clock,
                 )
                 if shortcut_spec is None and self.chains_enabled():
@@ -1767,6 +1792,14 @@ class Agent:
                             history_msg = f"Set a reminder for {time_str}."
                             self.history[-1] = {"role": "user", "content": history_msg}
                             history_reply = history_msg
+                    elif shortcut_spec.name in (
+                        "volume_change",
+                        "volume_mute_toggle",
+                        "media_key",
+                        "lock_screen",
+                        "open_settings_page",
+                    ):
+                        reply = result
                     elif shortcut_spec.name.startswith("browser_"):
                         reply = result
                     else:

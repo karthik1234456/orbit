@@ -198,11 +198,20 @@ def test_all_expected_tools_registered_with_no_duplicates(tmp_path: Path):
         "cancel_reminder",
         "cancel_all_reminders",
     }
+    system_tools = {
+        "volume_change",
+        "volume_mute_toggle",
+        "media_key",
+        "lock_screen",
+        "open_settings_page",
+    }
     expected = core_tool_names
     if settings.reminders_enabled():
         expected = expected | reminder_tools
     if settings.browser_enabled():
         expected = expected | browser_tools
+    if settings.system_controls_enabled():
+        expected = expected | system_tools
 
     assert set(tool_names) == expected
 

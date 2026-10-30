@@ -479,6 +479,187 @@ def parse_reminder_shortcut(
     return None
 
 
+
+_WORD_TO_NUM: dict[str, int] = {
+    "1": 1, "2": 2, "3": 3, "4": 4, "5": 5,
+    "6": 6, "7": 7, "8": 8, "9": 9, "10": 10,
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+
+
+def parse_system_control_shortcut(cleaned: str) -> Optional[ToolCallSpec]:
+    """Parse cleaned user text into a system control ToolCallSpec if matching strict patterns."""
+    if not cleaned:
+        return None
+
+    # 1. Volume adjustment:
+    # "volume up|down", "turn (the )?volume up|down", optionally followed by
+    # "a bit" (2), "a lot" (5), "by N" (1-10, also words one to ten); default 3.
+    m_vol = re.match(
+        r"^(?:turn\s+(?:the\s+)?)?volume\s+(up|down)(?:\s+(.+))?$",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if m_vol:
+        direction = m_vol.group(1).lower()
+        suffix = (m_vol.group(2) or "").strip().lower()
+        steps = 3
+        if suffix:
+            if suffix == "a bit":
+                steps = 2
+            elif suffix == "a lot":
+                steps = 5
+            elif suffix.startswith("by "):
+                by_val = suffix[3:].strip()
+                if by_val in _WORD_TO_NUM:
+                    steps = _WORD_TO_NUM[by_val]
+                else:
+                    return None
+            else:
+                return None
+        return ToolCallSpec(
+            name="volume_change",
+            args={"direction": direction, "steps": steps},
+            target_name=f"volume {direction}",
+        )
+
+    # "louder" (up 3), "quieter" / "softer" (down 3)
+    if cleaned.lower() == "louder":
+        return ToolCallSpec(
+            name="volume_change",
+            args={"direction": "up", "steps": 3},
+            target_name="volume up",
+        )
+    if cleaned.lower() in ("quieter", "softer"):
+        return ToolCallSpec(
+            name="volume_change",
+            args={"direction": "down", "steps": 3},
+            target_name="volume down",
+        )
+
+    # 2. Volume mute toggle:
+    # "mute|unmute (the )?(volume|sound|computer|system|speakers)" and "toggle mute"
+    if (
+        re.match(
+            r"^(?:mute|unmute)\s+(?:the\s+)?(?:volume|sound|computer|system|speakers)$",
+            cleaned,
+            re.IGNORECASE,
+        )
+        or cleaned.lower() == "toggle mute"
+    ):
+        return ToolCallSpec(
+            name="volume_mute_toggle",
+            args={},
+            target_name="mute",
+        )
+
+    # 3. Media keys:
+    # "(pause|play|resume) (the )?(music|song|track|audio)" -> media_key play_pause
+    if re.match(
+        r"^(?:pause|play|resume)\s+(?:the\s+)?(?:music|song|track|audio)$",
+        cleaned,
+        re.IGNORECASE,
+    ):
+        return ToolCallSpec(
+            name="media_key",
+            args={"action": "play_pause"},
+            target_name="play_pause",
+        )
+
+    # "stop (the )?(music|song|track|audio)" -> media_key stop
+    if re.match(
+        r"^stop\s+(?:the\s+)?(?:music|song|track|audio)$",
+        cleaned,
+        re.IGNORECASE,
+    ):
+        return ToolCallSpec(
+            name="media_key",
+            args={"action": "stop"},
+            target_name="stop",
+        )
+
+    # "next (song|track)" and "skip (this |the )?(song|track)" -> media_key next
+    if (
+        re.match(r"^next\s+(?:song|track)$", cleaned, re.IGNORECASE)
+        or re.match(r"^skip\s+(?:(?:this|the)\s+)?(?:song|track)$", cleaned, re.IGNORECASE)
+    ):
+        return ToolCallSpec(
+            name="media_key",
+            args={"action": "next"},
+            target_name="next",
+        )
+
+    # "(previous|last) (song|track)" and "go back a song" -> media_key previous
+    if (
+        re.match(r"^(?:previous|last)\s+(?:song|track)$", cleaned, re.IGNORECASE)
+        or cleaned.lower() == "go back a song"
+    ):
+        return ToolCallSpec(
+            name="media_key",
+            args={"action": "previous"},
+            target_name="previous",
+        )
+
+    # 4. Lock screen:
+    # "lock (the |my )?(screen|computer|pc|laptop)" -> lock_screen
+    if re.match(
+        r"^lock\s+(?:(?:the|my)\s+)?(?:screen|computer|pc|laptop)$",
+        cleaned,
+        re.IGNORECASE,
+    ):
+        return ToolCallSpec(
+            name="lock_screen",
+            args={},
+            target_name="lock",
+        )
+
+    # 5. Open settings page:
+    # "open (the )?(bluetooth|wifi|wi-fi|network|display|sound|apps|update|updates|privacy|battery|storage|accounts?) settings"
+    m_set = re.match(
+        r"^open\s+(?:the\s+)?(bluetooth|wifi|wi-fi|network|display|sound|apps|update|updates|privacy|battery|storage|accounts?)\s+settings$",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if m_set:
+        page_raw = m_set.group(1).lower()
+        page_map = {
+            "wifi": "wifi",
+            "wi-fi": "wifi",
+            "update": "updates",
+            "updates": "updates",
+            "account": "accounts",
+            "accounts": "accounts",
+        }
+        canon_page = page_map.get(page_raw, page_raw)
+        return ToolCallSpec(
+            name="open_settings_page",
+            args={"page": canon_page},
+            target_name=f"{canon_page} settings",
+        )
+
+    return None
+
+
+def is_system_control_pattern(text: str) -> bool:
+    """Return True if text matches any system control pattern."""
+    if not text or not isinstance(text, str):
+        return False
+    cleaned = text.strip()
+    while True:
+        prev = cleaned
+        cleaned = re.sub(
+            r"^(?:hey|hi|ok|okay|now|just|please|can\s+you|could\s+you|can\s+u|would\s+you)[,:\s]*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
+        if cleaned == prev:
+            break
+    cleaned = re.sub(r"[.!?,:\s]+$", "", cleaned).strip()
+    return parse_system_control_shortcut(cleaned) is not None
+
+
 def parse_shortcut(
     text: str,
     allowed_apps: Optional[Mapping[str, Any]] = None,
@@ -486,6 +667,7 @@ def parse_shortcut(
     state: Optional[Any] = None,
     browser_enabled: bool = False,
     reminders_enabled: Optional[bool] = None,
+    system_controls_enabled: Optional[bool] = None,
     clock: Optional[Callable[[], datetime]] = None,
 ) -> Optional[Union[ToolCallSpec, ShortcutPlan]]:
     """Parse user text into a ToolCallSpec or ShortcutPlan if it matches a strict shortcut pattern.
@@ -576,6 +758,21 @@ def parse_shortcut(
         if reminders_enabled:
             return parse_reminder_shortcut(cleaned, clock=clock)
         return None
+
+    # System controls checked BEFORE browser patterns
+    if system_controls_enabled is None:
+        env_s = os.getenv("SYSTEM_CONTROLS_ENABLED")
+        if env_s is not None:
+            system_controls_enabled = env_s.strip().lower() not in ("0", "false", "no", "off")
+        else:
+            import sys as _sys
+            from config import settings
+            system_controls_enabled = getattr(settings, "SYSTEM_CONTROLS_ENABLED", _sys.platform == "win32")
+
+    if system_controls_enabled:
+        sys_spec = parse_system_control_shortcut(cleaned)
+        if sys_spec is not None:
+            return sys_spec
 
     if browser_enabled:
         if sites is None:

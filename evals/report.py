@@ -156,6 +156,15 @@ def render_markdown(
     else:
         routines_enabled_str = "off"
     lines.append(f"- **ROUTINES_ENABLED**: {routines_enabled_str}")
+    sys_controls_val = meta.get("SYSTEM_CONTROLS_ENABLED")
+    if sys_controls_val is not None:
+        if isinstance(sys_controls_val, str):
+            sys_controls_str = "on" if sys_controls_val.strip().lower() in ("1", "true", "yes", "on") else "off"
+        else:
+            sys_controls_str = "on" if bool(sys_controls_val) else "off"
+    else:
+        sys_controls_str = "off"
+    lines.append(f"- **SYSTEM_CONTROLS_ENABLED**: {sys_controls_str}")
     if is_holdout:
         lines.append("- **Dataset**: Holdout")
     if provider == "ollama":

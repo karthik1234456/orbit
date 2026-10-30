@@ -21,6 +21,13 @@ FAMILIES: dict[str, set[str]] = {
         "open_workspace_folder",
         "open_in_vscode",
     },
+    "system": {
+        "volume_change",
+        "volume_mute_toggle",
+        "media_key",
+        "lock_screen",
+        "open_settings_page",
+    },
 }
 
 NEGATION_WORDS: tuple[str, ...] = (
@@ -50,6 +57,19 @@ _MEMORY_VERBS = r"(?:remember|save|saved|store|stored|note|noted|keep|kept)"
 _FILE_VERBS = r"(?:created|wrote|written|saved|moved|deleted|renamed)"
 _APP_VERBS = r"(?:opened|launched|closed)"
 
+_SYSTEM_ACTION_RE = re.compile(
+    r"\b(i(?:'ve|\s+have|'ll|\s+will|\s+already)?|\bi)\s+(?:[a-z]+\s+)*?"
+    r"("
+    r"(?:turned?|set|adjusted|raised?|lowered?)(?:\s+(?:up|down))?\s+(?:the\s+)?volume(?:\s+(?:up|down))?|"
+    r"(?:muted?|unmuted?)(?:\s+(?:the\s+)?(?:sound|volume|audio|speakers?|computer|pc|system))?|"
+    r"(?:paused?|played?|resumed?|stopped?)\s+(?:the\s+)?(?:music|song|track|audio|playback)|"
+    r"(?:skipped?)\s+(?:the\s+|this\s+)?(?:song|track)|"
+    r"(?:locked?)\s+(?:the\s+|your\s+|my\s+)?(?:screen|computer|pc|workstation|laptop)|"
+    r"(?:opened?)\s+(?:the\s+)?(?:[a-z-]+\s+)?settings\b"
+    r")",
+    re.IGNORECASE,
+)
+
 _MEMORY_RE = re.compile(
     rf"\b(i(?:'ll|\s+will|'ve|\s+have))\s+(?:[a-z]+\s+)*({_MEMORY_VERBS})\b",
     re.IGNORECASE,
@@ -69,7 +89,7 @@ _APP_RE = re.compile(
 class Claim:
     """Represents a first-person assertion of an action taken or promised."""
 
-    kind: str  # "memory" | "file" | "app"
+    kind: str  # "memory" | "file" | "app" | "system"
     phrase: str
 
 
@@ -79,6 +99,7 @@ def find_action_claims(text: str) -> list[Claim]:
     Heuristic rules:
     - memory: I'll/I will/I've/I have + remember/save/saved/store/stored/note/noted/keep
     - file: I've/I have + created/wrote/saved/moved/deleted/renamed + file/folder/note
+    - system: volume/mute/media/lock/settings action assertions
     - app: I've/I have + opened/launched/closed
 
     Any sentence with a negation or inability before the verb (e.g. can't, cannot, won't,
@@ -105,7 +126,16 @@ def find_action_claims(text: str) -> list[Claim]:
                 claims.append(Claim(kind="file", phrase=s_clean))
                 continue
 
-        # 2. Check for app claim
+        # 2. Check for system claim
+        m_sys = _SYSTEM_ACTION_RE.search(s_clean)
+        if m_sys:
+            verb_start = m_sys.start(2)
+            prefix = s_clean[:verb_start]
+            if not _NEGATION_RE.search(prefix):
+                claims.append(Claim(kind="system", phrase=s_clean))
+                continue
+
+        # 3. Check for app claim
         m_app = _APP_RE.search(s_clean)
         if m_app:
             verb_start = m_app.start(2)

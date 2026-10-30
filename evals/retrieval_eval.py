@@ -1358,7 +1358,7 @@ def run_retrieval_verdict(candidate_scoring: str, out_dir: str = "evals/results"
     
     def find_latest_test_json(split: str, scoring_name: str) -> Optional[dict]:
         clean_name = scoring_name.replace("/", "_")
-        matches = sorted(out_path.glob(f"retrieval-{split}-*-{clean_name}-*.json"))
+        matches = sorted(out_path.glob(f"retrieval-{split}*{clean_name}*.json"))
         if not matches:
             # Also check without scoring in name if fraction
             if scoring_name == "fraction":

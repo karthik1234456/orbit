@@ -1013,6 +1013,76 @@ def check_whisper_cache(probes: Probes) -> Check:
     )
 
 
+def check_tts_engine(probes: Probes) -> Check:
+    """Check text-to-speech engine, piper/onnxruntime availability, and valid voice models."""
+    from voice.voices import list_voices
+
+    raw_engine = _probe_env(probes, "TTS_ENGINE", "sapi")
+    engine = (raw_engine or "sapi").strip().lower()
+    raw_voice = _probe_env(probes, "PIPER_VOICE", "")
+    selected_voice = (raw_voice or "").strip()
+
+    has_piper = (probes.find_spec("piper") is not None) or (probes.find_spec("piper_voice") is not None)
+    has_onnx = probes.find_spec("onnxruntime") is not None
+
+    raw_vdir = _probe_env(probes, "VOICES_DIR")
+    if raw_vdir and raw_vdir.strip():
+        vdir = Path(raw_vdir.strip())
+    else:
+        raw_home = _probe_env(probes, "ORBIT_HOME")
+        if raw_home and raw_home.strip():
+            vdir = Path(raw_home.strip()) / "data" / "voices"
+        else:
+            vdir = Path("data") / "voices"
+
+    valid_voices: list[str] = []
+    if probes.path_exists(vdir):
+        try:
+            valid_voices = list_voices(vdir)
+        except Exception:
+            valid_voices = []
+
+    voices_desc = f"{len(valid_voices)} valid ({', '.join(valid_voices)})" if valid_voices else "none"
+    detail = (
+        f"Engine: {engine}; piper: {'yes' if has_piper else 'no'}; "
+        f"onnxruntime: {'yes' if has_onnx else 'no'}; voices: {voices_desc}"
+    )
+
+    hint = "For neural voice, install piper-tts and place .onnx + .onnx.json in data/voices/"
+
+    if engine == "piper":
+        missing_parts: list[str] = []
+        if not has_piper:
+            missing_parts.append("piper-tts not installed ('pip install piper-tts')")
+        if not has_onnx:
+            missing_parts.append("onnxruntime not installed ('pip install onnxruntime')")
+        if not valid_voices:
+            missing_parts.append(f"no valid .onnx voice pair found in {vdir}")
+        elif selected_voice and selected_voice not in valid_voices:
+            missing_parts.append(f"selected PIPER_VOICE '{selected_voice}' not found in {vdir}")
+
+        if missing_parts:
+            return Check(
+                name="TTS engine",
+                status="WARN",
+                detail=detail,
+                fix="; ".join(missing_parts) + ". SAPI fallback is active.",
+            )
+        return Check(
+            name="TTS engine",
+            status="OK",
+            detail=detail,
+            fix=None,
+        )
+
+    return Check(
+        name="TTS engine",
+        status="OK",
+        detail=detail,
+        fix=hint if (not has_piper or not valid_voices) else None,
+    )
+
+
 def check_folders(probes: Probes) -> Check:
     """(j) Check workspace, data, logs exist, are writable, and free disk space >= 2 GB."""
     raw_home = _probe_env(probes, "ORBIT_HOME")
@@ -1349,6 +1419,41 @@ def check_demo_mode(probes: Probes) -> Check:
 
 
 
+def check_system_controls(probes: Probes) -> Check:
+    """Check platform availability and configuration for native Windows system controls."""
+    raw_enabled = _probe_env(probes, "SYSTEM_CONTROLS_ENABLED")
+    is_windows = sys.platform == "win32"
+    if raw_enabled is not None:
+        enabled = str(raw_enabled).strip().lower() not in ("0", "false", "no", "off")
+    else:
+        from config import settings
+        enabled = getattr(settings, "SYSTEM_CONTROLS_ENABLED", is_windows)
+
+    if not is_windows:
+        detail = f"Platform is {sys.platform} (Windows required; system controls inactive; no key sent)"
+        return Check(
+            name="System controls",
+            status="OK" if not enabled else "WARN",
+            detail=detail,
+            fix="System controls are only supported on Windows" if enabled else None,
+        )
+
+    if not enabled:
+        return Check(
+            name="System controls",
+            status="OK",
+            detail=f"Platform is {sys.platform} (disabled via SYSTEM_CONTROLS_ENABLED=0; no key sent)",
+            fix=None,
+        )
+
+    return Check(
+        name="System controls",
+        status="OK",
+        detail=f"Platform is {sys.platform} (enabled on Windows: volume, media keys, screen lock, settings pages; no key sent)",
+        fix=None,
+    )
+
+
 def check_rag_embeddings(probes: Probes, fast: bool = False) -> Check:
     """Check RAG embedding model installation, vector counts, and test embedding reachability."""
     raw_enabled = _probe_env(probes, "RAG_EMBEDDINGS", "false")
@@ -1519,6 +1624,7 @@ def run_checks(probes: Optional[Probes] = None, fast: bool = False) -> list[Chec
     _execute("Microphone", lambda: check_microphone(p))
     _execute("Whisper model cache", lambda: check_whisper_cache(p))
     _execute("Voice enhancement & eval", lambda: check_voice_enhancement(p))
+    _execute("TTS engine", lambda: check_tts_engine(p))
     _execute("Storage folders", lambda: check_folders(p))
     _execute("Git hygiene", lambda: check_git_hygiene(p))
     _execute("Allowed apps", lambda: check_allowed_apps(p))
@@ -1527,6 +1633,7 @@ def run_checks(probes: Optional[Probes] = None, fast: bool = False) -> list[Chec
     _execute("Diagnostic risks", lambda: check_leftover_risks(p))
     _execute("Demo mode", lambda: check_demo_mode(p))
     _execute("RAG embeddings", lambda: check_rag_embeddings(p, fast=fast))
+    _execute("System controls", lambda: check_system_controls(p))
 
     return checks
 

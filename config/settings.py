@@ -1,3 +1,4 @@
+import sys
 import os
 from dotenv import load_dotenv
 
@@ -16,6 +17,7 @@ from config.paths import (
     get_routines_db_path,
     get_runs_log_path,
     get_workspace_dir,
+    voices_dir,
 )
 
 # Load environment variables from .env file
@@ -38,6 +40,48 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_LLM_PROVIDERS = ("auto", "gemini", "ollama", "mock")
 ALLOWED_VOICE_REVIEWS = ("auto", "always", "never")
+ALLOWED_TTS_ENGINES = ("sapi", "piper")
+
+
+def _parse_tts_engine(val: Optional[str], default: str = "sapi") -> str:
+    if val is None or not val.strip():
+        return default
+    v = val.strip().lower()
+    if v in ALLOWED_TTS_ENGINES:
+        return v
+    msg = f"Unknown TTS_ENGINE '{val}'; falling back to '{default}'."
+    logger.warning(msg)
+    warnings.warn(msg, UserWarning, stacklevel=2)
+    return default
+
+
+def _parse_piper_voice(val: Optional[str], default: str = "") -> str:
+    if val is None or not val.strip():
+        return default
+    v = val.strip()
+    from voice.voices import validate_voice_filename
+    is_valid, err_msg = validate_voice_filename(v)
+    if is_valid:
+        return v
+    msg = f"Invalid PIPER_VOICE '{val}' ({err_msg}); falling back to '{default}'."
+    logger.warning(msg)
+    warnings.warn(msg, UserWarning, stacklevel=2)
+    return default
+
+
+def _parse_float_range(val: Optional[str], default: float, min_val: float, max_val: float) -> float:
+    if val is None or not val.strip():
+        return default
+    try:
+        fv = float(val.strip())
+        if min_val <= fv <= max_val:
+            return fv
+    except (ValueError, AttributeError):
+        pass
+    msg = f"Invalid float value '{val}' (must be between {min_val} and {max_val}); falling back to {default}."
+    logger.warning(msg)
+    warnings.warn(msg, UserWarning, stacklevel=2)
+    return default
 
 
 def _parse_voice_review(val: Optional[str], default: str = "auto") -> str:
@@ -202,7 +246,11 @@ STT_MODEL: str = _parse_stt_model(os.getenv("STT_MODEL"), "base.en")
 STT_LANGUAGE: str = _parse_str(os.getenv("STT_LANGUAGE"), "en")
 MIC_DEVICE: Optional[Union[int, str]] = _parse_mic_device(os.getenv("MIC_DEVICE"))
 MAX_RECORD_SECONDS: int = _parse_int(os.getenv("MAX_RECORD_SECONDS"), 30)
-TTS_RATE: int = _parse_int(os.getenv("TTS_RATE"), 180)
+TTS_ENGINE: str = _parse_tts_engine(os.getenv("TTS_ENGINE"), "sapi")
+PIPER_VOICE: str = _parse_piper_voice(os.getenv("PIPER_VOICE"), "")
+TTS_SPEED: float = _parse_float_range(os.getenv("TTS_SPEED"), 1.0, 0.8, 1.3)
+TTS_VOLUME: float = _parse_float_range(os.getenv("TTS_VOLUME"), 1.0, 0.3, 1.0)
+TTS_RATE: int = _parse_int(os.getenv("TTS_RATE"), int(180 * TTS_SPEED)) if os.getenv("TTS_RATE") else int(180 * TTS_SPEED)
 SPEAK_MAX_CHARS: int = _parse_int(os.getenv("SPEAK_MAX_CHARS"), 500)
 SPEAK_REPLIES: bool = _parse_bool(os.getenv("SPEAK_REPLIES"), False)
 VOICE_IN_UI: bool = _parse_bool(os.getenv("VOICE_IN_UI"), True)
@@ -226,6 +274,7 @@ CHAINS_ENABLED: bool = _parse_bool(os.getenv("CHAINS_ENABLED"), True)
 SESSION_CONTEXT: bool = _parse_bool(os.getenv("SESSION_CONTEXT"), True)
 SESSION_TTL_SECONDS: float = _parse_float(os.getenv("SESSION_TTL_SECONDS"), 1800.0)
 REMINDERS_ENABLED: bool = _parse_bool(os.getenv("REMINDERS_ENABLED"), True)
+SYSTEM_CONTROLS_ENABLED: bool = _parse_bool(os.getenv("SYSTEM_CONTROLS_ENABLED"), sys.platform == "win32")
 
 TOOL_ROUTING: bool = _parse_bool(os.getenv("TOOL_ROUTING"), False)
 DOCTOR_ON_START: bool = _parse_bool(os.getenv("DOCTOR_ON_START"), True)
@@ -253,6 +302,11 @@ def browser_enabled() -> bool:
 def reminders_enabled() -> bool:
     """Read the environment at call time to determine whether reminders are enabled."""
     return _parse_bool(os.getenv("REMINDERS_ENABLED"), True)
+
+
+def system_controls_enabled() -> bool:
+    """Read the environment at call time to determine whether Windows system controls are enabled."""
+    return _parse_bool(os.getenv("SYSTEM_CONTROLS_ENABLED"), sys.platform == "win32")
 
 
 def tool_routing_enabled() -> bool:
@@ -441,6 +495,18 @@ def __getattr__(name: str) -> Any:
         return get_logs_dir()
     if name == "DATA_DIR":
         return get_data_dir()
+    if name == "VOICES_DIR":
+        return voices_dir()
+    if name == "TTS_ENGINE":
+        return _parse_tts_engine(os.getenv("TTS_ENGINE"), "sapi")
+    if name == "PIPER_VOICE":
+        return _parse_piper_voice(os.getenv("PIPER_VOICE"), "")
+    if name == "TTS_SPEED":
+        return _parse_float_range(os.getenv("TTS_SPEED"), 1.0, 0.8, 1.3)
+    if name == "TTS_VOLUME":
+        return _parse_float_range(os.getenv("TTS_VOLUME"), 1.0, 0.3, 1.0)
+    if name == "SYSTEM_CONTROLS_ENABLED":
+        return _parse_bool(os.getenv("SYSTEM_CONTROLS_ENABLED"), sys.platform == "win32")
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 
@@ -487,6 +553,12 @@ def __dir__() -> list[str]:
             "UI_THEME",
             "UI_MOTION",
             "HUD_FPS",
+            "VOICES_DIR",
+            "TTS_ENGINE",
+            "PIPER_VOICE",
+            "TTS_SPEED",
+            "TTS_VOLUME",
+            "SYSTEM_CONTROLS_ENABLED",
         }
     )
 

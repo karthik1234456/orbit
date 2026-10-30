@@ -127,6 +127,15 @@ Key design tenets:
 - Outdated-document labelling (`[OUTDATED: this document says it is superseded]`) prioritizing current policies and instructing the model to cite superseded text with caution.
 - Prompt injection filtering withholding flagged chunks and tracking safety metrics.
 
+### Embedding retrieval (optional)
+- Opt-in semantic search powered by local Ollama embeddings (`embeddinggemma` by default).
+- Off by default (`RAG_EMBEDDINGS=0`, `RAG_AUTO_SCORING="fraction"`), preserving pure offline lexical BM25 retrieval without network calls or GPU memory footprint.
+- CPU-only execution by default (`RAG_EMBED_CPU_ONLY=1`) to avoid competing with LLM VRAM on constrained (e.g. 6 GB) GPUs.
+- Setup: pull the model with `ollama pull embeddinggemma`, then enable in `.env` or the Settings Panel (`RAG_EMBEDDINGS=1`, `RAG_AUTO_SCORING="hybrid"` or `"embed"`).
+- Atomic vector indexing: document chunks and float vectors are stored in SQLite (`chunk_vectors` table in `data/rag.db`) in the same transaction.
+- Non-blocking indexing and graceful fallback: if Ollama is not running, the model is missing, or a timeout occurs, retrieval seamlessly falls back to lexical BM25 (`fraction`) with telemetry recorded (`LAST_EMBED_FALLBACK_REASON`).
+- Memory and network safety: enforces loopback host restriction (localhost only), bounds query embedding cache to 64 entries, and withholds flagged prompt injection chunks from prompt context.
+
 ### Voice in the Terminal and Click-to-Talk in the Window
 - **Terminal CLI Voice**:
   - Conversational continuous voice loop available in the terminal CLI interface (`main.py`).
@@ -303,6 +312,51 @@ Every primary text (`text`) and secondary label (`text_dim`) across all three pa
 - Fail-safe fallback: If HUD canvas initialization encounters an exception on resource-constrained platforms, the error is logged to diagnostics (`LAST_HUD_ERROR`), a single-line notification is printed to chat, and the UI cleanly falls back to the classic layout.
 
 ---
+
+### Neural Voice (Optional)
+
+ORBIT supports optional neural text-to-speech synthesis powered by [Piper](https://github.com/rhasspy/piper) ONNX voice models, with automatic and graceful fallback to the built-in Windows SAPI voice.
+
+#### Key Features & Architecture
+- **Local & Private**: All speech is synthesized entirely on your local machine using fast ONNX runtime models. ORBIT never sends audio or text over the internet and never downloads voices automatically.
+- **Worker Process Isolation**: Synthesis runs in a separate subprocess (`voice.piper_worker`), keeping memory usage isolated. Sentences are synthesized into temporary 16-bit PCM WAV chunks and streamed via a bounded producer-consumer queue (`maxsize=2`), ensuring minimal latency to first audio.
+- **Python 3.13 Compatible**: Volume scaling is performed using pure integer arithmetic via `array('h')` with sample clamping, eliminating any dependency on `audioop` (removed in Python 3.13).
+- **Safe Fallback**: If Piper is not installed, no voice model is configured, or worker synthesis fails/times out (> 15s), ORBIT speaks using the default Windows SAPI engine and issues a single informative notice (`Neural voice unavailable (<reason>); using the Windows voice`).
+- **Instant Silence**: Pressing the GUI **Stop** button or issuing `/speak off` immediately terminates the worker process and unlinks temporary audio files.
+
+#### Setup & Configuration
+1. Install optional neural voice dependencies:
+   ```powershell
+   pip install piper-tts onnxruntime
+   ```
+2. Download a Piper ONNX model pair (e.g., `en_US-lessac-medium.onnx` and `en_US-lessac-medium.onnx.json`) and place both files in the local voices folder:
+   ```
+   data/voices/
+   ```
+3. Enable Piper in `.env` or via `/set` in the terminal:
+   ```dotenv
+   TTS_ENGINE=piper
+   PIPER_VOICE=en_US-lessac-medium.onnx
+   TTS_SPEED=1.0
+   TTS_VOLUME=1.0
+   ```
+4. Verify voices and test speech:
+   - In terminal CLI: `/voices` (lists active engine and available voice files), `/speak test` (speaks `"This is ORBIT. Voice check complete."`).
+   - In GUI: Open **Settings** to view the read-only **Voice & Neural TTS** panel and click **Test Voice**.
+   - Side-by-side benchmark: run `python scripts/tts_compare.py` to compare latency and real-time factor (RTF) between SAPI and Piper.
+
+### Windows System Controls
+
+ORBIT provides native Windows system controls for adjusting volume, toggling mute, sending media playback keys, locking the screen, and opening specific Windows settings pages without invoking child shells or command lines.
+
+#### Key Features & Architecture
+- **Direct Windows API Integration**: Uses `ctypes.windll.user32` (`keybd_event` and `LockWorkStation`) for keyboard and lock operations, and `os.startfile` with fixed `ms-settings:` URIs. Never calls `subprocess`, `shell=True`, or `os.system`. On non-Windows platforms, system controls are disabled.
+- **Strict Settings Page Allowlist**: Supported settings pages are strictly mapped via an immutable internal dictionary (`SETTINGS_PAGES`): `bluetooth`, `wifi`, `network`, `display`, `sound`, `apps`, `updates`, `privacy`, `battery`, `storage`, and `accounts`. The model's input string is never concatenated into or formatted into URIs.
+- **Taint-Escalation Security Policy**: System controls (`volume_change`, `volume_mute_toggle`, `media_key`) are tagged `escalate_when_tainted=True`. In untainted turns they execute as `SAFE`; however, in tainted turns (after reading untrusted files or documents), they automatically escalate to `CONFIRM` with standard `TAINT_WARNING`, requiring explicit user confirmation.
+- **Rate Limiting & Flooding Protection**: Sliding-window rate limiters prevent runaway key generation (max 30 volume keystrokes/min, max 10 media keystrokes/min); excess attempts return an honest error string (`ERROR: too many key presses, try again in a minute.`).
+- **Chain & Routine Isolation**: System controls cannot be part of command chains (`parse_chain` returns `None`) or stored routines (`routines/validate.py` strictly refuses them).
+- **Honesty Guards & Claims Verification**: Claims family `"system"` flags unverified assertions (e.g., claiming to have muted audio or locked the screen without executing the tool), while respecting negative statements.
+- **Global Toggle**: Governed by `SYSTEM_CONTROLS_ENABLED` (default `True` on Windows, `False` elsewhere; configurable via `.env` or `/set`).
 
 ## Architecture
 
@@ -599,6 +653,16 @@ ORBIT operates under a strict, defense-in-depth security model:
 - `remember that i prefer dark mode`
 - `system diagnostics`
 
+### Windows System Controls
+
+- `volume up`, `volume down`, `turn the volume up a bit`, `turn volume down a lot`, `volume up by 4`
+- `louder`, `quieter`, `softer`
+- `mute the sound`, `unmute the speakers`, `toggle mute`
+- `pause the music`, `play the song`, `resume the track`, `stop the audio`
+- `next track`, `skip this song`, `previous song`, `go back a song`
+- `lock the screen`, `lock my pc`, `lock computer`
+- `open bluetooth settings`, `open wifi settings`, `open update settings`, `open sound settings`
+
 ### Interactive Terminal Commands
 - `/help` - Show command shortcuts and syntax guide
 - `/doctor` - Run read-only environment doctor checks
@@ -790,8 +854,11 @@ Verification status for features introduced from v2.5 onward, strictly distingui
 | Settings Panel | v2.9 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items S1–S5) |
 | Routines & Automation | v2.10 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items RT1–RT7) |
 | Demo Mode & Isolation | v2.11 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items DM1–DM4) |
+| Embedding Retrieval | v2.12 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items E1–E6) |
 | Sci-Fi HUD & Dock | v2.13 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items HUD1–HUD8) |
 | Voice in Noisy Rooms | v2.14 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items VE1–VE6) |
+| Neural Text-to-Speech | v2.15 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items NT1–NT6) |
+| Windows System Controls | v2.16 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items SC1–SC7) |
 
 ---
 
@@ -864,7 +931,7 @@ pytest
 ```
 
 **Current Test Count**:
-- **1274 passed, 2 skipped** (1276 collected tests)
+- **1343 passed, 2 skipped** (1345 collected tests)
 
 ---
 
@@ -952,13 +1019,16 @@ orbit/
 │   ├── audio.py             # Audio recording and microphone device listing
 │   ├── enhance.py           # Digital signal processing filters (highpass, agc, gate)
 │   ├── interrupt.py         # Keyboard interrupt monitor for CLI voice loops
+│   ├── piper_worker.py      # Subprocess Piper worker with producer-consumer queue
 │   ├── review.py            # Safety review decision and noise status classification
 │   ├── session.py           # Turn-by-turn voice interaction loop
 │   ├── stt.py               # Local Whisper speech-to-text wrapper with decoding telemetry
 │   ├── text.py              # Spoken reply text cleaner and simplifier
 │   ├── tts.py               # Subprocess-isolated pyttsx3 text-to-speech worker
+│   ├── tts_engines.py       # Engine selector, PiperSpeaker, and safe SAPI fallback
 │   ├── vad.py               # Voice Activity Detector state machine
 │   ├── vocab.py             # Bounded decoding vocabulary prompt construction
+│   ├── voices.py            # Voice model safety, traversal check, and enumeration
 │   └── wake.py              # "Hey ORBIT" wake phrase detector with pre-roll
 ├── audio.py             # PyAudio input recorder
 │   ├── interrupt.py         # Keyboard interrupt monitor

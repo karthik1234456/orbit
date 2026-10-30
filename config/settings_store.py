@@ -124,6 +124,13 @@ SPECS: dict[str, SettingSpec] = {
         description="Background reminder and timer scheduler",
         restart_required=True,
     ),
+    "SYSTEM_CONTROLS_ENABLED": SettingSpec(
+        key="SYSTEM_CONTROLS_ENABLED",
+        type="bool",
+        default="1" if getattr(settings, "SYSTEM_CONTROLS_ENABLED", sys.platform == "win32") else "0",
+        description="Enable native Windows system controls for volume, media keys, screen lock, and settings",
+        restart_required=True,
+    ),
     "ROUTINES_ENABLED": SettingSpec(
         key="ROUTINES_ENABLED",
         type="bool",
@@ -182,6 +189,31 @@ SPECS: dict[str, SettingSpec] = {
         max_float=0.90,
         default=str(getattr(settings, "RAG_EMBED_THRESHOLD", 0.65)),
         description="Minimum cosine similarity threshold for embedding retrieval (0.40-0.90)",
+        restart_required=True,
+    ),
+    "RAG_EMBED_MARGIN": SettingSpec(
+        key="RAG_EMBED_MARGIN",
+        type="float",
+        min_float=0.00,
+        max_float=0.50,
+        default=str(getattr(settings, "RAG_EMBED_MARGIN", 0.08)),
+        description="Score margin below top hit for embedding candidate retention (0.00-0.50)",
+        restart_required=True,
+    ),
+    "RAG_EMBED_CPU_ONLY": SettingSpec(
+        key="RAG_EMBED_CPU_ONLY",
+        type="bool",
+        default="1" if getattr(settings, "RAG_EMBED_CPU_ONLY", True) else "0",
+        description="Run Ollama embeddings on CPU only with num_gpu=0",
+        restart_required=True,
+    ),
+    "RAG_EMBED_BATCH": SettingSpec(
+        key="RAG_EMBED_BATCH",
+        type="int",
+        min_val=1,
+        max_val=128,
+        default=str(getattr(settings, "RAG_EMBED_BATCH", 16)),
+        description="Batch size for generating chunk embeddings (1-128)",
         restart_required=True,
     ),
     "UI_STYLE": SettingSpec(
@@ -291,6 +323,39 @@ SPECS: dict[str, SettingSpec] = {
         description="Spoken language code for speech recognition",
         restart_required=True,
     ),
+    "TTS_ENGINE": SettingSpec(
+        key="TTS_ENGINE",
+        type="enum",
+        allowed=("sapi", "piper"),
+        default=str(getattr(settings, "TTS_ENGINE", "sapi")),
+        description="Text-to-speech engine backend (sapi: Windows SAPI5, piper: local neural ONNX)",
+        restart_required=True,
+    ),
+    "PIPER_VOICE": SettingSpec(
+        key="PIPER_VOICE",
+        type="text",
+        default=str(getattr(settings, "PIPER_VOICE", "")),
+        description="Voice model file name in data/voices (e.g. en_US-lessac-medium.onnx)",
+        restart_required=True,
+    ),
+    "TTS_SPEED": SettingSpec(
+        key="TTS_SPEED",
+        type="float",
+        min_float=0.8,
+        max_float=1.3,
+        default=str(getattr(settings, "TTS_SPEED", 1.0)),
+        description="Speech synthesis playback speed factor (0.8 - 1.3)",
+        restart_required=False,
+    ),
+    "TTS_VOLUME": SettingSpec(
+        key="TTS_VOLUME",
+        type="float",
+        min_float=0.3,
+        max_float=1.0,
+        default=str(getattr(settings, "TTS_VOLUME", 1.0)),
+        description="Speech synthesis volume level (0.3 - 1.0)",
+        restart_required=False,
+    ),
     "ORBIT_MOCK": SettingSpec(
         key="ORBIT_MOCK",
         type="bool",
@@ -389,9 +454,22 @@ def validate(key: str, raw: Any) -> str:
             raise SettingsError(f"Value for '{key}' must be at least {spec.min_float:.2f}.")
         if spec.max_float is not None and f_num > spec.max_float:
             raise SettingsError(f"Value for '{key}' must be at most {spec.max_float:.2f}.")
-        return f"{f_num:.2f}"
+        norm = f"{f_num:.2f}"
+        if norm.endswith(".00"):
+            return f"{f_num:.1f}"
+        if norm.endswith("0") and not norm.endswith(".0"):
+            return norm.rstrip("0")
+        return norm
 
     if spec.type == "text":
+        if key == "PIPER_VOICE":
+            if not stripped:
+                return ""
+            from voice.voices import validate_voice_filename
+            is_ok, err_msg = validate_voice_filename(stripped)
+            if not is_ok:
+                raise SettingsError(f"Invalid value for '{key}': {err_msg}")
+            return stripped
         if key in ("OLLAMA_MODEL", "RAG_EMBED_MODEL"):
             if not stripped:
                 raise SettingsError(f"{key} cannot be empty.")

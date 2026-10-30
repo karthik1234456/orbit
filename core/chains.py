@@ -21,6 +21,7 @@ from core.shortcuts import (
     ShortcutPlan,
     _levenshtein_distance,
     is_reminder_or_timer_pattern,
+    is_system_control_pattern,
     parse_shortcut,
 )
 
@@ -219,6 +220,25 @@ def describe_step(tool: str, args: Optional[dict[str, Any]] = None) -> str:
     if t == "cancel_all_reminders":
         return "Cancel all reminders"
 
+    if t == "volume_change":
+        d = args.get("direction", "up")
+        steps = args.get("steps", 3)
+        return f"Volume {d} by {steps}"
+
+    if t == "volume_mute_toggle":
+        return "Toggle mute"
+
+    if t == "media_key":
+        act = args.get("action", "play_pause")
+        return f"Media {act}"
+
+    if t == "lock_screen":
+        return "Lock screen"
+
+    if t == "open_settings_page":
+        p = args.get("page", "settings")
+        return f"Open {p} settings"
+
     return t.replace("_", " ").capitalize()
 
 
@@ -363,8 +383,8 @@ def _try_segmentation(
         if cleaned_seg.lower() == "wait":
             return None
 
-        # A segment matching a reminder pattern makes the whole chain return None
-        if is_reminder_or_timer_pattern(cleaned_seg):
+        # A segment matching a reminder or system control pattern makes the whole chain return None
+        if is_reminder_or_timer_pattern(cleaned_seg) or is_system_control_pattern(cleaned_seg):
             return None
 
         # Parse with parse_shortcut using simulated state
@@ -378,9 +398,10 @@ def _try_segmentation(
         if res is None:
             return None
 
-        # Reminder tool calls are never allowed in chains
+        # Reminder and system control tool calls are never allowed in chains
         if hasattr(res, "name") and res.name in (
-            "set_reminder", "set_timer", "list_reminders", "cancel_reminder", "cancel_all_reminders"
+            "set_reminder", "set_timer", "list_reminders", "cancel_reminder", "cancel_all_reminders",
+            "volume_change", "volume_mute_toggle", "media_key", "lock_screen", "open_settings_page",
         ):
             return None
 
@@ -612,6 +633,25 @@ def format_step_text(tool: str, args: dict, result: Any = "", redact: bool = Fal
 
     elif t == "cancel_all_reminders":
         return "Cancelled all reminders."
+
+    elif t == "volume_change":
+        d = args.get("direction", "up")
+        steps = args.get("steps", 3)
+        return f"Adjusted volume {d} by {steps} steps."
+
+    elif t == "volume_mute_toggle":
+        return "Toggled volume mute."
+
+    elif t == "media_key":
+        act = args.get("action", "play_pause")
+        return f"Sent media key '{act}'."
+
+    elif t == "lock_screen":
+        return "Locked the screen."
+
+    elif t == "open_settings_page":
+        p = args.get("page", "settings")
+        return f"Opened {p} settings."
 
     desc = describe_step(tool, args)
     if desc.endswith("."):

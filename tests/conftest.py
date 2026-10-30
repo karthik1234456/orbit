@@ -90,9 +90,12 @@ def default_test_settings(monkeypatch):
     monkeypatch.delenv("REMINDERS_ENABLED", raising=False)
     monkeypatch.delenv("COMMAND_SHORTCUTS", raising=False)
     monkeypatch.delenv("TOOL_ROUTING", raising=False)
+    monkeypatch.delenv("ROUTINES_ENABLED", raising=False)
+    monkeypatch.delenv("SYSTEM_CONTROLS_ENABLED", raising=False)
     monkeypatch.setattr(settings, "REMINDERS_ENABLED", True)
     monkeypatch.setattr(settings, "COMMAND_SHORTCUTS", True)
     monkeypatch.setattr(settings, "TOOL_ROUTING", False)
+    monkeypatch.setattr(settings, "SYSTEM_CONTROLS_ENABLED", sys.platform == "win32")
     monkeypatch.setenv("DOCTOR_ON_START", "0")
     monkeypatch.setattr(settings, "DOCTOR_ON_START", False)
 

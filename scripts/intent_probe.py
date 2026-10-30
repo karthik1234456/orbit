@@ -167,6 +167,7 @@ class ProbeReport:
     reminders_enabled: bool = False
     routing_enabled: bool = False
     routines_enabled: bool = False
+    system_controls_enabled: bool = False
     median_tools_offered: float = 0.0
     p95_tools_offered: float = 0.0
     median_prompt_size: Optional[float] = None
@@ -496,6 +497,7 @@ def format_markdown_report(report: ProbeReport) -> str:
     lines.append(f"- **REMINDERS_ENABLED**: `{'on' if report.reminders_enabled else 'off'}`")
     lines.append(f"- **TOOL_ROUTING**: `{'on' if report.routing_enabled else 'off'}`")
     lines.append(f"- **ROUTINES_ENABLED**: `{'on' if report.routines_enabled else 'off'}`")
+    lines.append(f"- **SYSTEM_CONTROLS_ENABLED**: `{'on' if report.system_controls_enabled else 'off'}`")
     lines.append(f"- **Seeds Evaluated**: `{report.seeds}`")
     lines.append(f"- **System Prompt Source**: `{report.system_prompt_source}`\n")
 
@@ -615,6 +617,7 @@ def run_intent_probe(
     reminders_enabled: bool = False,
     routing_enabled: bool = False,
     routines_enabled: bool = False,
+    system_controls_enabled: bool = False,
     rerun_warning: Optional[str] = None,
 ) -> ProbeReport:
     """Execute intent probe across phrases and seeds, recording dry-run tool calls and summary metrics."""
@@ -715,6 +718,7 @@ def run_intent_probe(
         reminders_enabled=reminders_enabled,
         routing_enabled=routing_enabled,
         routines_enabled=routines_enabled,
+        system_controls_enabled=system_controls_enabled,
         median_tools_offered=median_tools_offered,
         p95_tools_offered=p95_tools_offered,
         median_prompt_size=median_prompt_size,
@@ -773,6 +777,12 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="Enable browser automation tools using FakeBackend (dry run).",
     )
     parser.add_argument(
+        "--system-controls",
+        action="store_true",
+        default=False,
+        help="Enable Windows system controls tools in the probe (default: disabled).",
+    )
+    parser.add_argument(
         "--reminders",
         action="store_true",
         default=False,
@@ -806,7 +816,21 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    """Run intent probe CLI."""
+    """Run intent probe CLI with environment isolation."""
+    env_keys = ["BROWSER_ENABLED", "REMINDERS_ENABLED", "ROUTINES_ENABLED", "SYSTEM_CONTROLS_ENABLED"]
+    prev_env = {k: os.environ.get(k) for k in env_keys}
+    try:
+        return _main_impl(argv)
+    finally:
+        for k, v in prev_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def _main_impl(argv: Optional[list[str]] = None) -> int:
+    """Inner implementation of intent probe CLI."""
     args = parse_args(argv)
 
     routing_enabled = bool(args.routing or os.getenv("TOOL_ROUTING", "0").lower() in ("1", "true", "yes", "on"))
@@ -862,6 +886,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     os.environ["ROUTINES_ENABLED"] = "0"
     routines_enabled = False
 
+    if args.system_controls:
+        os.environ["SYSTEM_CONTROLS_ENABLED"] = "1"
+        system_controls_enabled = True
+    else:
+        os.environ["SYSTEM_CONTROLS_ENABLED"] = "0"
+        system_controls_enabled = False
+
     try:
         active_phrases = load_probe_phrases(args.phrases, browser_enabled=browser_enabled)
     except Exception as exc:
@@ -886,6 +917,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"System prompt: {prompt_source}")
         print(f"Browser tools: {'ENABLED (FakeBackend)' if browser_enabled else 'DISABLED'}")
         print(f"Reminders tools: {'ENABLED' if reminders_enabled else 'DISABLED'}")
+        print(f"System controls: {'ENABLED' if system_controls_enabled else 'DISABLED'}")
         print(f"Tool routing: {'ENABLED' if routing_enabled else 'DISABLED'}")
         if rerun_warning:
             print(f"Warning: {rerun_warning}")
@@ -921,6 +953,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             reminders_enabled=reminders_enabled,
             routing_enabled=routing_enabled,
             routines_enabled=routines_enabled,
+            system_controls_enabled=system_controls_enabled,
             rerun_warning=rerun_warning,
         )
 

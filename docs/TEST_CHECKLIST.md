@@ -101,6 +101,14 @@ Each test case specifies the feature area, exact command or user action, expecte
 
 ---
 
+| SC1 | Volume adjustment up/down with default and custom steps | Verify volume up/down steps 1–10 (default 3); ~2% per step | PASS |
+| SC2 | Volume mute toggle | Verify toggle sends mute key and reports unobservable state notice | PASS |
+| SC3 | Media key playback controls | Verify play_pause, next, previous, stop send media keys | PASS |
+| SC4 | Screen lock confirmation | Verify lock_screen asks user confirmation before locking | PASS |
+| SC5 | Settings pages opening | Verify allowlisted pages open corresponding ms-settings: URIs with confirmation | PASS |
+| SC6 | Rate limiting protection | Verify excess volume (>30/min) or media (>10/min) returns rate limit error | PASS |
+| SC7 | Taint escalation on untrusted content | Verify safe system tools escalate to confirmation with TAINT_WARNING in tainted turns | PASS |
+
 ## 3. Execution Instructions
 
 ### A. Running the Intent & Routing Probe
@@ -201,3 +209,95 @@ python -m evals --voice test --config combined --final-test
 ```powershell
 python -m evals --voice-verdict
 ```
+
+### H. Neural Voice & SAPI Fallback Verification
+
+1. Install optional neural voice dependencies:
+```powershell
+pip install piper-tts onnxruntime
+```
+
+2. Place downloaded voice model files into the local voices folder:
+```powershell
+# Place .onnx model and sibling .onnx.json into data/voices/
+# Example: en_US-lessac-medium.onnx and en_US-lessac-medium.onnx.json
+```
+
+3. Verify voice discovery and configuration in terminal:
+```powershell
+python main.py
+/voices
+/speak test
+```
+
+4. Run side-by-side performance and latency comparison:
+```powershell
+python scripts/tts_compare.py
+```
+
+5. Test mid-sentence cancellation:
+   - Issue `/speak on` and submit a multi-sentence prompt.
+   - Click the "Stop" button in the GUI; verify speech cuts off immediately and worker temporary files are removed.
+
+6. Verify graceful fallback to Windows SAPI:
+   - Configure `TTS_ENGINE=piper` with an absent voice name in `.env`.
+   - Submit a spoken reply; verify that a single notice appears: `Neural voice unavailable (<reason>); using the Windows voice`.
+   - Verify speech synthesis falls back smoothly to Windows SAPI without throwing exceptions.
+
+### I. Embedding Retrieval (Optional) Verification
+
+1. Install and verify local Ollama embedding model:
+```powershell
+ollama pull embeddinggemma
+```
+
+2. Run environment doctor to verify embedding checks:
+```powershell
+python scripts/doctor.py
+# Verify 'RAG embeddings' check reports installed model and reachability
+```
+
+3. Enable embedding retrieval in settings:
+```powershell
+# Set in .env or via Settings Panel:
+RAG_EMBEDDINGS=1
+RAG_AUTO_SCORING=hybrid
+```
+
+4. Index documents and generate chunk embeddings:
+```powershell
+python main.py
+/index
+```
+
+5. Verify diagnostics telemetry:
+```powershell
+# In chat or terminal, check diagnostics:
+/diag
+# Verify '=== RAG EMBEDDINGS ===' section shows:
+# Embeddings Enabled: yes
+# Embedding Model: embeddinggemma
+# Vector Counts: Total Chunks: X, Vectors: X, Stale: 0, Missing: 0
+# Last Fallback Reason: none
+```
+
+6. Test fail-safe lexical fallback:
+   - Temporarily stop Ollama or configure a nonexistent model name (`RAG_EMBED_MODEL=nonexistent`).
+   - Query a document topic in chat; verify that answers are still returned via BM25 lexical fallback without errors.
+   - Run `/diag` and confirm `Last Fallback Reason` records `model_not_found` or `connection_failed`.
+
+### J. Windows System Controls Verification
+
+1. **Volume and Media Control Verification**:
+   - Issue command `"volume up"`, `"volume down"`, `"turn volume up by 4"`. Observe volume adjustment notifications.
+   - Issue `"pause the music"`, `"play the song"`, `"next track"`. Observe media focus notices.
+   - Verify that bare browser commands (`"mute"`, `"pause"`, `"play"`, `"next video"`) continue controlling browser media when browser is open.
+
+2. **Workstation Lock and Settings Pages**:
+   - Issue `"lock the screen"`: verify ORBIT prompts for confirmation (`CONFIRM`), and locks the workstation only upon approval.
+   - Issue `"open bluetooth settings"`: verify ORBIT prompts for confirmation (`CONFIRM`), and opens `ms-settings:bluetooth` upon approval.
+
+3. **Rate Limiting and Taint Escalation**:
+   - Verify rate limits prevent more than 30 volume keystrokes/min or 10 media keystrokes/min.
+   - Verify that reading untrusted files taints subsequent system actions with `TAINT_WARNING`.
+

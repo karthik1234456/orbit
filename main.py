@@ -14,7 +14,6 @@ from config.settings import (
     SILENCE_SECONDS,
     STT_LANGUAGE,
     STT_MODEL,
-    TTS_RATE,
     VAD_THRESHOLD,
     WAKE_COOLDOWN_SECONDS,
     WAKE_LISTEN_TIMEOUT,
@@ -37,7 +36,8 @@ from voice.audio import Recorder, list_input_devices
 from voice.interrupt import InterruptMonitor
 from voice.session import VoiceSession
 from voice.stt import FakeTranscriber, WhisperTranscriber, filter_hallucinations
-from voice.tts import NullSpeaker, SubprocessSpeaker
+from voice.tts import NullSpeaker
+from voice.tts_engines import get_speaker
 from voice.vad import UtteranceSegmenter, capture_utterance
 from voice.wake import WakeDetector
 
@@ -344,7 +344,7 @@ def main() -> None:
             speaker = NullSpeaker()
         else:
             transcriber = WhisperTranscriber(model_name=STT_MODEL, language=STT_LANGUAGE)
-            speaker = SubprocessSpeaker(rate=TTS_RATE)
+            speaker = get_speaker(on_fallback_notice=lambda msg: print(f"\n[voice] {msg}"))
 
         voice_session = VoiceSession(
             agent=agent,
@@ -654,6 +654,32 @@ def main() -> None:
                         speaker.speak(reply, blocking=False)
                     continue
 
+                if user_input.strip().lower() == "/voices":
+                    from config.paths import voices_dir
+                    from voice.voices import list_voices
+
+                    engine = getattr(settings, "TTS_ENGINE", "sapi")
+                    cur_voice = getattr(settings, "PIPER_VOICE", "")
+                    v_dir = voices_dir()
+                    print(f"Active TTS engine: {engine}")
+                    if cur_voice:
+                        print(f"Selected Piper voice: {cur_voice}")
+                    voices = list_voices(v_dir)
+                    if voices:
+                        print(f"Available Piper voices in {v_dir}:")
+                        for v in voices:
+                            print(f"  - {v}")
+                    else:
+                        print(f"No valid Piper voices found in {v_dir}")
+                    continue
+
+                if user_input.strip().lower() == "/speak test":
+                    msg = "This is ORBIT. Voice check complete."
+                    print(f"Speaking: {msg}")
+                    if speaker:
+                        speaker.speak(msg, blocking=False)
+                    continue
+
                 if user_input.lower() == "/speak on":
                     voice_session.speak_enabled = True
                     speak_typed = True
@@ -715,7 +741,8 @@ def main() -> None:
                     print("  /forget <id>       - Delete a stored memory by ID")
                     print("  /docs, /ask <q>    - Search and query local indexed documents")
                     print("  /index             - Re-index documents in workspace/docs/")
-                    print("  /speak on|off      - Toggle speech synthesis")
+                    print("  /speak on|off|test - Toggle speech synthesis or test voice output")
+                    print("  /voices            - List active TTS engine and available voices")
                     print("  /listen, /voice    - Voice interaction modes")
                     print("  /reset             - Reset conversation history")
                     print("  quit               - Exit ORBIT")

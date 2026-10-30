@@ -198,6 +198,49 @@ class SettingsWindow(tk.Toplevel):
                 )
                 rst_lbl.pack(side="right", padx=(8, 0))
 
+        # Voice & Neural TTS status panel (read-only)
+        from config.paths import voices_dir
+        from voice.voices import list_voices
+
+        voice_panel = ttk.LabelFrame(main_frame, text="Voice & Neural TTS", padding=(10, 6))
+        voice_panel.pack(fill="x", side="bottom", pady=(8, 0))
+
+        engine = self.effective.get("TTS_ENGINE").value if "TTS_ENGINE" in self.effective else "sapi"
+        selected_voice = self.effective.get("PIPER_VOICE").value if "PIPER_VOICE" in self.effective else ""
+
+        try:
+            v_dir = voices_dir()
+            valid_voices = list_voices(v_dir)
+        except Exception:
+            valid_voices = []
+
+        voices_str = ", ".join(valid_voices) if valid_voices else "(none found in data/voices)"
+
+        info_box = ttk.Frame(voice_panel)
+        info_box.pack(side="left", fill="x", expand=True)
+
+        engine_lbl = ttk.Label(
+            info_box,
+            text=f"Active TTS Engine: {engine}" + (f" | Model: {selected_voice}" if selected_voice else ""),
+            font=("Segoe UI", 9, "bold"),
+        )
+        engine_lbl.pack(anchor="w")
+
+        found_lbl = ttk.Label(
+            info_box,
+            text=f"Installed Voices: {voices_str}",
+            font=("Segoe UI", 8),
+            foreground="#4b5563",
+        )
+        found_lbl.pack(anchor="w", pady=(2, 0))
+
+        self.test_voice_btn = ttk.Button(
+            voice_panel,
+            text="Test Voice",
+            command=self._on_test_voice,
+        )
+        self.test_voice_btn.pack(side="right", padx=(6, 0))
+
         # Bottom Action Bar
         btn_bar = ttk.Frame(main_frame, padding=(0, 12, 0, 0))
         btn_bar.pack(fill="x", side="bottom")
@@ -207,6 +250,18 @@ class SettingsWindow(tk.Toplevel):
 
         save_btn = ttk.Button(btn_bar, text="Save Settings", command=self._on_save)
         save_btn.pack(side="right")
+
+    def _on_test_voice(self) -> None:
+        speaker = None
+        vc = getattr(self.controller, "voice_controller", None)
+        if vc is not None:
+            speaker = getattr(vc, "speaker", None)
+        if speaker is None:
+            from voice.tts_engines import get_speaker
+
+            speaker = get_speaker()
+        if speaker and hasattr(speaker, "speak"):
+            speaker.speak("This is ORBIT. Voice check complete.", blocking=False)
 
     def _on_save(self) -> None:
         from config.paths import is_demo_mode

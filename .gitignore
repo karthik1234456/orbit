@@ -8,6 +8,8 @@ logs/
 workspace/
 data/
 data/voice_eval/
+data/voices/
 evals/results/
 demo_home/
 .planning/
+design_reference/

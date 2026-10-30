@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.16.0] - 2026-10-30
+
+### Added & Enhanced
+- **Native Windows System Controls (`system/winkeys.py`, `tools/system_tools.py`)**:
+  - Thin native Windows keyboard events, workstation lock, and settings integration using `ctypes.windll.user32` (`keybd_event` and `LockWorkStation`) and `os.startfile` for `ms-settings:` URIs.
+  - Zero subprocess, shell, or `os.system` execution; non-Windows platforms gracefully raise `SystemControlUnavailable` and register nothing.
+  - Injectable hardware callables (`set_key_sender`, `set_lock_fn`, `set_uri_opener`, and clock) allowing 100% mocked testing with no real keystrokes, screen locks, or external launches.
+  - System tools registered under safe and confirmation policies:
+    - `volume_change`: SAFE (steps 1–10, default 3; ~2% per step on Windows), `escalate_when_tainted=True`.
+    - `volume_mute_toggle`: SAFE (system mute toggle; state unknown), `escalate_when_tainted=True`.
+    - `media_key`: SAFE (`play_pause`, `next`, `previous`, `stop`), `escalate_when_tainted=True`.
+    - `lock_screen`: CONFIRM (locks workstation via `LockWorkStation`).
+    - `open_settings_page`: CONFIRM (allowlisted `ms-settings:` URIs for `bluetooth`, `wifi`, `network`, `display`, `sound`, `apps`, `updates`, `privacy`, `battery`, `storage`, `accounts`). Model string is strictly validated as a dictionary key and never formatted into URIs.
+  - Sliding-window rate limiters with injectable clock: max 30 volume key presses/min, max 10 media key presses/min; excess returns `"ERROR: too many key presses, try again in a minute."`.
+  - Honest result strings acknowledging Windows focus and lack of state inspection.
+- **Taint-Escalation Security Policy (`tools/registry.py`, `core/agent.py`)**:
+  - Added `escalate_when_tainted: bool = False` to `Tool` dataclass (set `True` for `volume_change`, `volume_mute_toggle`, and `media_key`).
+  - In tainted conversational turns (after reading untrusted documents or files), safe system tools automatically escalate to `Decision.ASK` with standard `TAINT_WARNING`, recording `"escalated_tainted"` in audit logs and run traces.
+- **Honesty Guards & Action Claims (`core/claims.py`)**:
+  - Added family `"system"` containing `{volume_change, volume_mute_toggle, media_key, lock_screen, open_settings_page}`.
+  - Conservative, negation-aware claim detection flags model claims such as `"I've turned the volume down"` or `"I locked the screen"` if no system tool executed; negations like `"I can't turn the volume down"` are never flagged.
+- **Deterministic System Shortcuts & Chain Isolation (`core/shortcuts.py`, `core/chains.py`, `routines/validate.py`)**:
+  - Exact-match shortcuts evaluated before browser patterns:
+    - `volume up|down`, `turn (the )?volume up|down` (optionally with `a bit` [2], `a lot` [5], `by N` [1-10]), `louder` (up 3), `quieter`/`softer` (down 3).
+    - `mute|unmute (the )?(volume|sound|computer|system|speakers)` and `toggle mute` -> `volume_mute_toggle`.
+    - `(pause|play|resume) (the )?(music|song|track|audio)` -> `media_key play_pause`.
+    - `stop (the )?(music|song|track|audio)` -> `media_key stop`.
+    - `next (song|track)` and `skip (this |the )?(song|track)` -> `media_key next`.
+    - `(previous|last) (song|track)` and `go back a song` -> `media_key previous`.
+    - `lock (the |my )?(screen|computer|pc|laptop)` -> `lock_screen`.
+    - `open (the )?(bluetooth|wifi|wi-fi|network|display|sound|apps|update|updates|privacy|battery|storage|accounts?) settings` -> `open_settings_page`.
+  - Existing bare browser shortcuts (`mute`, `unmute`, `pause`, `play`, `next video`) remain unchanged.
+  - Strict isolation: `parse_chain` returns `None` for any chain segment containing system controls; `routines/validate.py` strictly refuses system control tools.
+- **Environment Doctor, Diagnostics, & Telemetry (`core/doctor.py`, `core/diagnostics.py`)**:
+  - `check_system_controls`: verifies platform and enabled state, reporting `"no key sent"`.
+  - `/diag`: adds `=== SYSTEM CONTROLS ===` section reporting `SYSTEM_CONTROLS_ENABLED` flag and rate limit refusal count with no action history.
+  - Setting `SYSTEM_CONTROLS_ENABLED`: added to `config/settings.py` and `config/settings_store.py` (default `True` on Windows, `False` elsewhere; requires restart). Forced to `0` by default in eval runner and `scripts/intent_probe.py` (`--system-controls` flag enables for dry run).
+
+## [2.15.0] - 2026-10-30
+
+### Added & Enhanced
+- **Neural Text-to-Speech Engine (`voice/piper_worker.py`, `voice/tts_engines.py`, `voice/voices.py`)**:
+  - Optional local neural speech synthesis powered by Piper ONNX models with seamless Windows SAPI fallback.
+  - Subprocess Worker (`voice.piper_worker.py`): standalone worker executing with safe argument vectors (never `shell=True`); synthesizes sentences asynchronously via producer-consumer threads into temporary 16-bit PCM WAV chunks.
+  - Streaming sentence pipeline: reads one sentence per line from `sys.stdin`, generates audio in a producer thread, and plays via `winsound.PlaySound` in the main consumer thread with a bounded queue (`maxsize=2`) to prevent unbounded memory growth.
+  - Python 3.13 volume scaling (`apply_volume_to_wav`): scales 16-bit PCM frames using pure `array('h')` integer arithmetic and clamping (-32768 to 32767), completely independent of deprecated/removed `audioop`.
+  - Lazy package imports: importing `voice.piper_worker` or `voice.tts_engines` never loads `piper` or `onnxruntime` until worker execution.
+- **Voice Model Safety & Validation (`voice/voices.py`)**:
+  - Strict filename rules: letters, digits, dot, dash, underscore, maximum 80 characters, ending in `.onnx`.
+  - Path traversal & symlink escape defense: voice paths must resolve strictly within the local `data/voices/` directory.
+  - Configuration verification: sibling `.onnx.json` configuration file is required for every model.
+  - File size safety limits: model files capped at 300 MB; configuration JSON capped at 1 MB.
+  - Local privacy guarantee: ORBIT never downloads voice models from the network.
+- **Robust SAPI Fallback & Diagnostics (`voice/tts_engines.py`, `core/diagnostics.py`, `core/doctor.py`)**:
+  - `FallbackSpeaker`: automatically falls back to Windows SAPI on any error (piper missing, invalid model, worker error, or synthesis timeout > 15s).
+  - Single notice per session: notifies the user once via chat/terminal (`Neural voice unavailable (<reason>); using the Windows voice`) and records `LAST_TTS_FALLBACK_REASON` in telemetry without interrupting the UI or throwing unhandled exceptions.
+  - Process lifecycle management: `PiperSpeaker.stop()` terminates the worker subprocess within 1.0 second, escalating to kill if needed, and immediately cleans temporary directories (`orbit_piper_*`).
+  - Stale directory sweeping: `clean_dead_worker_tempdirs()` automatically sweeps orphaned temporary folders on startup.
+  - Doctor check (`core/doctor.py`): `check_tts_engine` verifies `TTS_ENGINE`, checks `piper` and `onnxruntime` availability using `find_spec` only, counts valid models in `data/voices/`, and issues actionable warnings if neural voice is selected without prerequisites.
+  - Diagnostics report (`core/diagnostics.py`): `=== VOICE ===` section expanded with `TTS Engine`, `Piper Voice`, and `Last TTS Fallback Reason` while strictly protecting user privacy (never logs spoken text).
+- **Configuration, CLI & Desktop UI Integration (`config/settings.py`, `config/settings_store.py`, `main.py`, `ui/settings_window.py`)**:
+  - Added configuration keys: `TTS_ENGINE` (`sapi`|`piper`, default `sapi`), `PIPER_VOICE` (validated filename), `TTS_SPEED` (0.8–1.3, default 1.0), and `TTS_VOLUME` (0.3–1.0, default 1.0).
+  - CLI commands in `main.py`: added `/voices` (lists active engine and installed models) and `/speak test` (speaks `"This is ORBIT. Voice check complete."`).
+  - Desktop Settings panel (`ui/settings_window.py`): added read-only "Voice & Neural TTS" status panel displaying engine, selected model, installed voices, and interactive "Test Voice" button.
+  - Speech comparison tool (`scripts/tts_compare.py`): benchmark script speaking 5 fixed sentences with available engines, measuring latency to first audio and real-time factor (RTF).
+
 ## [2.14.0] - 2026-10-29
 
 ### Added & Enhanced
@@ -82,6 +148,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Updated `README.md` with "Interface" section describing HUD architecture, themes, dock navigation, and motion controls.
   - Updated `docs/THREAT_MODEL.md` with Threat 19 confirming HUD/dock cosmetic-only boundaries.
   - Updated `docs/TEST_CHECKLIST.md` with verification items `HUD1`–`HUD8`.
+
+---
+
+## [2.12.0] - 2026-10-29
+
+### Added & Enhanced
+- **Optional Embedding Retrieval Engine (`rag/embeddings.py`, `rag/index.py`, `rag/retrieval.py`)**:
+  - Dense vector semantic search using local Ollama embeddings (`embeddinggemma` default, 768-dim unit-normalized float vectors).
+  - Pure Python L2 vector normalization and dot-product cosine similarity with optional NumPy acceleration.
+  - Off by default (`RAG_EMBEDDINGS=0`, `RAG_AUTO_SCORING="fraction"`), preserving 100% offline lexical BM25 retrieval without network requests or memory overhead.
+  - Configurable retrieval methods: `fraction` (pure lexical term overlap), `embed` (dense cosine similarity with margin filtering), and `hybrid` (lexical term overlap unioned with cosine similarity).
+  - Margin filtering (`RAG_EMBED_MARGIN`, default 0.08) and top-k candidate pruning (`top_k=3`) to retain only high-confidence semantic matches.
+  - Fail-safe fallback: automatically falls back to lexical BM25 (`fraction`) on any embedder failure (connection failure, missing model, request timeout, dimension mismatch, or option rejection) and records reason in telemetry (`LAST_EMBED_FALLBACK_REASON`).
+  - Loopback enforcement: strictly validates embedding endpoint against loopback addresses (`localhost`, `127.0.0.1`, `[::1]`) unless `OLLAMA_ALLOW_REMOTE=1` is explicitly configured.
+  - CPU-only execution flag (`RAG_EMBED_CPU_ONLY=1`) to prevent VRAM contention with LLM on small GPUs; automatically retries without options if GPU configuration is rejected.
+  - In-memory LRU query embedding cache (`_QUERY_EMBEDDING_CACHE`, max 64 entries) with 5.0-second timeout.
+- **SQLite Vector Storage & Atomic Migration (`rag/index.py`, `tools/doc_tools.py`)**:
+  - `chunk_vectors` table in `data/rag.db` with primary key relationship to `chunks`, tracking embedding model and vector dimension alongside binary float blobs.
+  - Atomic transaction guarantees: document chunks and dense vectors are inserted, updated, and deleted in the exact same transaction as document metadata.
+  - Automatic schema migration (`SCHEMA_VERSION = 4`): cleanly rebuilds table structure when upgrading from older unversioned schemas.
+  - Inventory tracking (`get_vector_stats`): reports total chunks, total vectors, valid vectors, stale vectors (model/dimension mismatch), and missing vectors.
+  - Non-blocking document indexing (`tools/doc_tools.py`): text chunking and indexing always succeed even if local embedding generation fails.
+- **Retrieval Scientific Sweep & Verdict System (`evals/retrieval_eval.py`, `evals/__main__.py`)**:
+  - Pre-registered fixed parameter grid (`FIXED_EMBED_GRID`): evaluates 7 configurations across `hard-dev`, `easy-dev`, and `guard-dev` datasets.
+  - Pre-registered eligibility rule: enforces `total_false_injections <= 1` across 34 general queries and `total_pna_blocks <= 1` across 10 personal-no-answer queries before considering candidate recall.
+  - Deterministic tie-breaking: highest hard-dev recall, lower wrong-document rate, lower outdated-injected rate, and simpler method (`fraction` < `hybrid` < `embed`).
+  - Test split protection: strictly blocks parameter sweeps on test splits; requires `--final-test` for test split execution and generates immutable `.ran-<scoring>` marker files to prevent unseen data contamination.
+  - Rerun watermarking: rerunning a test split requires `--force` and permanently watermarks report with `> **RERUN: NOT UNSEEN**`.
+  - Validation verdict command (`--retrieval-verdict`): automated check of candidate scoring against baseline fraction across all 5 pre-registered acceptance criteria.
+- **Diagnostics, Doctor Checks & Settings Whitelist (`core/diagnostics.py`, `core/doctor.py`, `config/settings_store.py`)**:
+  - Doctor check (`core/doctor.py`): `check_rag_embeddings` verifies model installation, `/api/embed` probe reachability, and vector counts.
+  - Diagnostics telemetry (`core/diagnostics.py`): `=== RAG EMBEDDINGS ===` reports toggle status, model name, vector counts, and fallback reasons while strictly omitting raw vectors and document content.
+  - Settings store whitelist (`config/settings_store.py`): added `RAG_EMBEDDINGS`, `RAG_AUTO_SCORING`, `RAG_EMBED_MODEL`, `RAG_EMBED_THRESHOLD`, `RAG_EMBED_MARGIN`, `RAG_EMBED_CPU_ONLY`, and `RAG_EMBED_BATCH`.
+- **Documentation & Threat Modeling**:
+  - Added "Embedding retrieval (optional)" subsection to `README.md`.
+  - Added Threat Model Section 17 on embedding retrieval security, loopback restrictions, and prompt injection defense.
+  - Added verification section `I` to `docs/TEST_CHECKLIST.md`.
 
 ---
 

@@ -755,7 +755,7 @@ class OrbitWindow:
             else:
                 from voice.audio import Recorder
                 from voice.stt import WhisperTranscriber
-                from voice.tts import SubprocessSpeaker
+                from voice.tts_engines import get_speaker
 
                 rec_fac = lambda level_callback=None: Recorder(
                     device=getattr(settings, "MIC_DEVICE", None),
@@ -766,7 +766,19 @@ class OrbitWindow:
                     model_name=getattr(settings, "STT_MODEL", "base.en"),
                     language=getattr(settings, "STT_LANGUAGE", "en"),
                 )
-                speaker = SubprocessSpeaker(rate=getattr(settings, "TTS_RATE", 180))
+
+                def _on_tts_notice(notice: str) -> None:
+                    def _post():
+                        try:
+                            self._append_chat(f"Voice notice: {notice}\n\n", ("system",))
+                        except Exception:
+                            pass
+                    try:
+                        self.root.after(0, _post)
+                    except Exception:
+                        pass
+
+                speaker = get_speaker(on_fallback_notice=_on_tts_notice)
 
             emit_fn = getattr(self.controller, "_emit", None)
             if emit_fn is None:

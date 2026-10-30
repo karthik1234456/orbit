@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 import os
+import sys
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Union
 
@@ -170,6 +171,11 @@ def build_app(
     reminders_enabled: Optional[bool] = None,
     tool_routing: Optional[bool] = None,
     routines_enabled: Optional[bool] = None,
+    system_controls_enabled: Optional[bool] = None,
+    system_sender: Optional[Callable[[int], None]] = None,
+    system_clock: Optional[Callable[[], datetime]] = None,
+    system_lock_fn: Optional[Callable[[], None]] = None,
+    system_opener: Optional[Callable[[str], None]] = None,
 ) -> App:
     """Build and wire an ORBIT application instance with configured tools, policy, and logging."""
     if paths is None:
@@ -228,6 +234,27 @@ def build_app(
         paths.reminders_db.parent.mkdir(parents=True, exist_ok=True)
         reminder_store = ReminderStore(path=paths.reminders_db, clock=clock)
         for tool in make_reminder_tools(reminder_store, clock=clock):
+            registry.register(tool)
+
+    # Initialize system controls tools if enabled
+    if system_controls_enabled is not None:
+        sys_controls_on = bool(system_controls_enabled)
+    else:
+        env_sys = os.getenv("SYSTEM_CONTROLS_ENABLED")
+        if env_sys is not None:
+            sys_controls_on = env_sys.strip().lower() not in ("0", "false", "no", "off")
+        else:
+            sys_controls_on = getattr(settings, "SYSTEM_CONTROLS_ENABLED", sys.platform == "win32")
+
+    if sys_controls_on:
+        from tools.system_tools import make_system_tools
+        sys_tools = make_system_tools(
+            sender=system_sender,
+            clock=system_clock or clock,
+            lock_fn=system_lock_fn,
+            opener=system_opener,
+        )
+        for tool in sys_tools:
             registry.register(tool)
 
     # Initialize routines store if ROUTINES_ENABLED
@@ -291,6 +318,7 @@ def build_app(
         clock=clock,
         reminders_enabled=reminders_on,
         routines_enabled=routines_on,
+        system_controls_enabled=sys_controls_on,
         tool_routing=tool_routing,
     )
 

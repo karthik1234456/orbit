@@ -209,11 +209,19 @@ def build_diagnostics_text(
     snr_str = f"{last_snr:.1f} dB" if (last_snr is not None and isinstance(last_snr, (int, float))) else "none"
     last_reason = getattr(voice_controller, "last_review_reason", None) or "none"
 
+    tts_engine = getattr(settings, "TTS_ENGINE", "sapi")
+    piper_voice = getattr(settings, "PIPER_VOICE", "") or "none"
+    from voice.tts_engines import LAST_TTS_FALLBACK_REASON
+    fallback_reason = LAST_TTS_FALLBACK_REASON or "none"
+
     sections.append(
         "=== VOICE ===\n"
         f"Microphone Available: {mic_available}\n"
         f"Speech Model: {stt_model}\n"
         f"Speech Language: {stt_lang}\n"
+        f"TTS Engine: {tts_engine}\n"
+        f"Piper Voice: {piper_voice}\n"
+        f"Last TTS Fallback Reason: {fallback_reason}\n"
         f"Speak Replies: {speak_flag}\n"
         f"Voice Settings: Highpass={hp}, AGC={agc_val}, Denoise={denoise_val}, Beam={beam_val}, Prompt={prompt_val}, Aliases={aliases_val}, Review={review_val}\n"
         f"Last Estimated SNR: {snr_str}\n"
@@ -250,6 +258,21 @@ def build_diagnostics_text(
         f"Vector Counts: {counts_str}\n"
         f"Last Fallback Reason: {fb_reason}\n"
         f"CPU Options Rejected: {cpu_rej}"
+    )
+
+    # 2d. System Controls Telemetry
+    sys_enabled = getattr(settings, "SYSTEM_CONTROLS_ENABLED", sys.platform == "win32")
+    env_sys = os.getenv("SYSTEM_CONTROLS_ENABLED")
+    if env_sys is not None:
+        sys_enabled = env_sys.strip().lower() not in ("0", "false", "no", "off")
+
+    from tools.system_tools import get_rate_limit_refusal_count
+    refusals = get_rate_limit_refusal_count()
+
+    sections.append(
+        "=== SYSTEM CONTROLS ===\n"
+        f"SYSTEM_CONTROLS_ENABLED: {sys_enabled}\n"
+        f"Rate Limit Refusals: {refusals}"
     )
 
     # HUD section
@@ -311,6 +334,7 @@ def build_diagnostics_text(
         "RAG_EMBED_THRESHOLD",
         "RAG_EMBED_MARGIN",
         "RAG_EMBED_TOOL",
+        "SYSTEM_CONTROLS_ENABLED",
         "UI_STYLE",
         "UI_THEME",
         "UI_MOTION",

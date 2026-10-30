@@ -141,6 +141,22 @@ def get_browser_profile_dir() -> Path:
     return (get_data_dir() / "browser_profile").resolve()
 
 
+def voices_dir() -> Path:
+    """Return resolved voices directory (data/voices under ORBIT home).
+
+    Precedence: VOICES_DIR env var > data_dir / voices.
+    """
+    explicit = os.getenv("VOICES_DIR")
+    if explicit and explicit.strip():
+        return Path(explicit.strip()).resolve()
+    return (get_data_dir() / "voices").resolve()
+
+
+def get_voices_dir() -> Path:
+    """Alias for voices_dir()."""
+    return voices_dir()
+
+
 def get_logs_dir() -> Path:
     """Return resolved logs directory.
 

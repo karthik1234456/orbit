@@ -18,6 +18,7 @@ class Tool:
     permission: PermissionLevel = PermissionLevel.CONFIRM
     untrusted_output: bool = False
     precheck: Callable[[dict], str | None] | None = None
+    escalate_when_tainted: bool = False
 
 
 class ToolRegistry:
