@@ -2,6 +2,7 @@
 
 from datetime import datetime
 import os
+from pathlib import Path
 import re
 import sys
 import secrets
@@ -71,6 +72,7 @@ class Agent:
         routine_store: Optional[Any] = None,
         routines_enabled: Optional[bool] = None,
         system_controls_enabled: Optional[bool] = None,
+        contact_store: Optional[Any] = None,
     ):
         """Initialize agent with LLM provider, tool registry, permission policy, guards, and audit logger."""
         self.provider = provider
@@ -97,6 +99,7 @@ class Agent:
         self.routine_store = routine_store
         self.routines_enabled = routines_enabled
         self.system_controls_enabled = system_controls_enabled
+        self.contact_store = contact_store
         self.last_plan_steps: Optional[list[dict[str, Any]]] = None
         self._routine_running: bool = False
 
@@ -267,7 +270,19 @@ class Agent:
         tool = self.registry.get(name) if self.registry else None
         tool_level = tool.permission if tool else None
 
-        if name in self._rejected_tools:
+        if not is_shortcut and tool and not getattr(tool, "model_visible", True):
+            result = "ERROR: that action is not available to the assistant"
+            status = "blocked"
+            outcome = "blocked"
+            log_decision = "not_model_visible"
+            hint = _RECOVERY_HINTS["blocked"]
+        elif tainted and tool and getattr(tool, "block_when_tainted", False):
+            result = "ERROR: I won't do that in a turn that read web or document content."
+            status = "blocked"
+            outcome = "blocked"
+            log_decision = "blocked_tainted"
+            hint = _RECOVERY_HINTS["blocked"]
+        elif name in self._rejected_tools:
             result = f"ERROR: BLOCKED: an earlier call to {name} was rejected in this turn; not retrying."
             status = "blocked"
             outcome = "blocked"
@@ -339,7 +354,13 @@ class Agent:
                         hint = _RECOVERY_HINTS["blocked"]
                 else:
                     warning = TAINT_WARNING if tainted else None
-                    confirmed = self._ask_confirmation(name, args, warning=warning)
+                    summary = None
+                    if tool and getattr(tool, "describe", None) is not None:
+                        try:
+                            summary = tool.describe(args)
+                        except Exception:
+                            summary = None
+                    confirmed = self._ask_confirmation(name, args, warning=warning, summary=summary)
                     if confirmed:
                         if self.registry:
                             result = self.registry.execute(name, args)
@@ -376,21 +397,69 @@ class Agent:
 
         duration_ms = (time.perf_counter() - start_time) * 1000
 
+        audit_args = dict(args) if isinstance(args, dict) else {}
+        audit_result = result
+        if name in ("send_whatsapp", "open_email_draft"):
+            from config import settings
+            mode = getattr(settings, "WHATSAPP_SEND_MODE", "draft")
+            text_len = len(str(args.get("text") or args.get("body") or ""))
+            contact_id = 0
+            c_store = getattr(self, "contact_store", None)
+            if c_store and hasattr(c_store, "resolve"):
+                try:
+                    ref = c_store.resolve(str(args.get("contact", "")))
+                    contact_id = ref.id
+                except Exception:
+                    pass
+            audit_args = {"contact_id": contact_id, "mode": mode, "text_length": text_len}
+        elif name == "find_files":
+            lines = [l for l in str(result).splitlines() if re.match(r"^\d+\.", l.strip())]
+            k = len(lines) if "No files found" not in str(result) and not str(result).startswith("ERROR") else 0
+            audit_args = {"kind": str(args.get("kind", "any")), "recent": bool(args.get("recent", False))}
+            audit_result = f"Found {k} files."
+        elif name in ("open_found_file", "reveal_found_file"):
+            idx = int(args.get("index", 1))
+            ext = ""
+            state = getattr(self, "session_state", None)
+            candidates = state.get_found_files() if state else []
+            if candidates and 1 <= idx <= len(candidates):
+                p = Path(candidates[idx - 1])
+                ext = p.suffix.lstrip(".").lower()
+            audit_args = {"index": idx, "extension": ext}
+            audit_result = f"Opened file {idx} (.{ext})." if name == "open_found_file" else f"Revealed file {idx} (.{ext})."
+        elif name == "type_into_app":
+            app_name = str(args.get("app", "")).strip()
+            text_len = len(str(args.get("text", "")))
+            audit_args = {"app": app_name, "char_count": text_len}
+            audit_result = f"Typed into {app_name}."
+        elif name in ("take_screenshot", "sleep_computer"):
+            audit_args = {}
+
         # Audit every tool invocation attempt
         if self.audit:
             audit_decision = (
-                "user_denied"
-                if (is_shortcut and log_decision == "user_denied")
-                else ("shortcut" if is_shortcut else log_decision)
+                log_decision
+                if log_decision in ("not_model_visible", "blocked_tainted")
+                else (
+                    "user_denied"
+                    if (is_shortcut and log_decision == "user_denied")
+                    else ("shortcut" if is_shortcut else log_decision)
+                )
             )
+            if name in ("send_whatsapp", "open_email_draft"):
+                if outcome == "success":
+                    if name == "send_whatsapp" and "Sent the draft by pressing Enter" in str(result):
+                        audit_decision = "message_enter_sent"
+                    else:
+                        audit_decision = "message_prepared" 
             run_source = getattr(run, "source", "typed")
             try:
                 self.audit.log(
                     tool=name,
-                    args=args,
+                    args=audit_args,
                     decision=audit_decision,
                     outcome=outcome,
-                    result=result,
+                    result=audit_result,
                     duration_ms=round(duration_ms, 2),
                     tainted=tainted,
                     extra=extra,
@@ -400,10 +469,10 @@ class Agent:
                 try:
                     self.audit.log(
                         tool=name,
-                        args=args,
+                        args=audit_args,
                         decision=audit_decision,
                         outcome=outcome,
-                        result=result,
+                        result=audit_result,
                         duration_ms=round(duration_ms, 2),
                         tainted=tainted,
                         extra=extra,
@@ -412,20 +481,20 @@ class Agent:
                     try:
                         self.audit.log(
                             tool=name,
-                            args=args,
+                            args=audit_args,
                             decision=audit_decision,
                             outcome=outcome,
-                            result=result,
+                            result=audit_result,
                             duration_ms=round(duration_ms, 2),
                             tainted=tainted,
                         )
                     except TypeError:
                         self.audit.log(
                             tool=name,
-                            args=args,
+                            args=audit_args,
                             decision=audit_decision,
                             outcome=outcome,
-                            result=result,
+                            result=audit_result,
                             duration_ms=round(duration_ms, 2),
                         )
 
@@ -435,20 +504,26 @@ class Agent:
 
         # Update step run record
         step_decision = (
-            "user_denied"
-            if (is_shortcut and log_decision == "user_denied")
-            else ("escalated_tainted" if log_decision == "escalated_tainted" else ("shortcut" if is_shortcut else None))
+            log_decision
+            if log_decision in ("not_model_visible", "blocked_tainted")
+            else (
+                "user_denied"
+                if (is_shortcut and log_decision == "user_denied")
+                else ("escalated_tainted" if log_decision == "escalated_tainted" else ("shortcut" if is_shortcut else None))
+            )
         )
+        step_args = audit_args if name in ("send_whatsapp", "open_email_draft", "find_files", "open_found_file", "reveal_found_file", "type_into_app", "take_screenshot", "sleep_computer") else args
+        step_result = audit_result if name in ("find_files", "open_found_file", "reveal_found_file", "type_into_app") else result
         run.add_step(
             tool=name,
-            args=args,
+            args=step_args,
             status=status,
-            result=result,
+            result=step_result,
             duration_ms=int(round(duration_ms)),
             decision=step_decision,
         )
 
-        self.last_tool_events.append((name, args, result))
+        self.last_tool_events.append((name, step_args, result))
 
         self._emit_event({
             "type": "step_end",
@@ -463,18 +538,31 @@ class Agent:
         ok = (status == "success")
         guard.record(name, args, ok=ok)
         if ok:
-            self.session_state.update_from_tool(name, args, status="success", sites=self.sites)
+            self.session_state.update_from_tool(
+                name,
+                args,
+                status="success",
+                sites=self.sites,
+                browser_controller=getattr(self, "browser_controller", None),
+            )
 
         return None, status, outcome, result, hint, tainted
 
     def _ask_confirmation(
-        self, tool_name: str, args: dict, warning: Optional[str] = None
+        self,
+        tool_name: str,
+        args: dict,
+        warning: Optional[str] = None,
+        summary: Optional[str] = None,
     ) -> bool:
-        """Call confirm_callback with optional warning, falling back to 2-argument signature if needed."""
+        """Call confirm_callback with optional warning and summary, falling back to older signatures if needed."""
         try:
-            return bool(self.confirm_callback(tool_name, args, warning=warning))
+            return bool(self.confirm_callback(tool_name, args, warning=warning, summary=summary))
         except TypeError:
-            return bool(self.confirm_callback(tool_name, args))
+            try:
+                return bool(self.confirm_callback(tool_name, args, warning=warning))
+            except TypeError:
+                return bool(self.confirm_callback(tool_name, args))
 
     def _emit_event(self, event: dict) -> None:
         """Safely emit an event to the on_event callback without allowing exceptions to break execution."""
@@ -1693,6 +1781,12 @@ class Agent:
 
             from core.chains import has_explicit_sequencing_separator, parse_chain
 
+            win_ctl_on = bool(self.registry.get("show_desktop")) if self.registry else None
+            files_on = bool(self.registry.get("find_files")) if self.registry else None
+            sc_on = bool(self.registry.get("take_screenshot")) if self.registry else None
+            typ_on = bool(self.registry.get("type_into_app")) if self.registry else None
+            slp_on = bool(self.registry.get("sleep_computer")) if self.registry else None
+
             shortcut_spec = None
             if self.chains_enabled() and has_explicit_sequencing_separator(user_text):
                 shortcut_spec = parse_chain(
@@ -1701,6 +1795,12 @@ class Agent:
                     self.sites,
                     state=self.session_state,
                     browser_enabled=browser_enabled,
+                    contacts=self.contact_store,
+                    window_control_enabled=win_ctl_on,
+                    files_enabled=files_on,
+                    screenshots_enabled=sc_on,
+                    typing_enabled=typ_on,
+                    sleep_enabled=slp_on,
                 )
                 if shortcut_spec is None:
                     shortcut_spec = parse_shortcut(
@@ -1712,6 +1812,12 @@ class Agent:
                         reminders_enabled=self.reminders_enabled_check(),
                         system_controls_enabled=self.system_controls_enabled_check(),
                         clock=self.clock,
+                        contacts=self.contact_store,
+                        window_control_enabled=win_ctl_on,
+                        files_enabled=files_on,
+                        screenshots_enabled=sc_on,
+                        typing_enabled=typ_on,
+                        sleep_enabled=slp_on,
                     )
             else:
                 shortcut_spec = parse_shortcut(
@@ -1723,6 +1829,12 @@ class Agent:
                     reminders_enabled=self.reminders_enabled_check(),
                     system_controls_enabled=self.system_controls_enabled_check(),
                     clock=self.clock,
+                    contacts=self.contact_store,
+                    window_control_enabled=win_ctl_on,
+                    files_enabled=files_on,
+                    screenshots_enabled=sc_on,
+                    typing_enabled=typ_on,
+                    sleep_enabled=slp_on,
                 )
                 if shortcut_spec is None and self.chains_enabled():
                     shortcut_spec = parse_chain(
@@ -1731,7 +1843,24 @@ class Agent:
                         self.sites,
                         state=self.session_state,
                         browser_enabled=browser_enabled,
+                        contacts=self.contact_store,
+                        window_control_enabled=win_ctl_on,
+                        files_enabled=files_on,
+                        screenshots_enabled=sc_on,
+                        typing_enabled=typ_on,
+                        sleep_enabled=slp_on,
                     )
+
+            from core.shortcuts import ShortcutReply
+            if isinstance(shortcut_spec, ShortcutReply):
+                run.finish(RunStatus.COMPLETED, shortcut_spec.reply)
+                if self.run_logger:
+                    self.run_logger.log(run)
+                self.history.append({"role": "assistant", "content": shortcut_spec.reply})
+                if effective_on_delta or on_delta:
+                    cb = effective_on_delta or on_delta
+                    cb(shortcut_spec.reply)
+                return shortcut_spec.reply
 
             if isinstance(shortcut_spec, ShortcutPlan):
                 effective_plan_cb = plan_callback if plan_callback is not None else self.plan_callback
@@ -1780,6 +1909,17 @@ class Agent:
                 )
                 history_reply = None
 
+                if shortcut_spec.name in ("send_whatsapp", "open_email_draft"):
+                    contact_disp = str(shortcut_spec.args.get("contact", "")).strip() or "contact"
+                    user_hist = (
+                        f"Send a WhatsApp message to {contact_disp}."
+                        if shortcut_spec.name == "send_whatsapp"
+                        else f"Send an email to {contact_disp}."
+                    )
+                    if self.history and self.history[-1].get("role") == "user":
+                        self.history[-1] = {"role": "user", "content": user_hist}
+                    run.goal = user_hist
+
                 if stop_reason is not None:
                     reply = self._build_stop_message(stop_reason, run.steps, [shortcut_spec.name])
                     run.finish(stop_reason, reply)
@@ -1792,12 +1932,38 @@ class Agent:
                             history_msg = f"Set a reminder for {time_str}."
                             self.history[-1] = {"role": "user", "content": history_msg}
                             history_reply = history_msg
+                    elif shortcut_spec.name in ("send_whatsapp", "open_email_draft"):
+                        reply = result
+                        contact_disp = str(shortcut_spec.args.get("contact", "")).strip() or "contact"
+                        if shortcut_spec.name == "send_whatsapp":
+                            if "Sent the draft by pressing Enter" in result:
+                                history_reply = f"Sent a WhatsApp message to {contact_disp}."
+                            else:
+                                history_reply = f"Prepared a WhatsApp message to {contact_disp}."
+                            user_hist = f"Send a WhatsApp message to {contact_disp}."
+                        else:
+                            history_reply = f"Prepared an email draft to {contact_disp}."
+                            user_hist = f"Send an email to {contact_disp}."
+                        if self.history and self.history[-1].get("role") == "user":
+                            self.history[-1] = {"role": "user", "content": user_hist}
                     elif shortcut_spec.name in (
                         "volume_change",
                         "volume_mute_toggle",
                         "media_key",
                         "lock_screen",
                         "open_settings_page",
+                        "focus_app",
+                        "minimize_app",
+                        "maximize_app",
+                        "restore_app",
+                        "snap_app",
+                        "show_desktop",
+                        "find_files",
+                        "open_found_file",
+                        "reveal_found_file",
+                        "take_screenshot",
+                        "type_into_app",
+                        "sleep_computer",
                     ):
                         reply = result
                     elif shortcut_spec.name.startswith("browser_"):
@@ -1823,6 +1989,26 @@ class Agent:
                         reply = result
                     run.finish(RunStatus.COMPLETED, reply)
 
+                if shortcut_spec.name == "find_files":
+                    lines = [l for l in str(result).splitlines() if re.match(r"^\d+\.", l.strip())]
+                    k = len(lines) if "No files found" not in str(result) and not str(result).startswith("ERROR") else 0
+                    history_reply = f"Found {k} files."
+                    if self.history and self.history[-1].get("role") == "user":
+                        self.history[-1] = {"role": "user", "content": "Find files."}
+                elif shortcut_spec.name == "open_found_file":
+                    history_reply = "Opened file."
+                    if self.history and self.history[-1].get("role") == "user":
+                        self.history[-1] = {"role": "user", "content": "Open file."}
+                elif shortcut_spec.name == "reveal_found_file":
+                    history_reply = "Revealed file in folder."
+                    if self.history and self.history[-1].get("role") == "user":
+                        self.history[-1] = {"role": "user", "content": "Reveal file."}
+                elif shortcut_spec.name == "type_into_app":
+                    app_name = str(shortcut_spec.args.get("app", "")).strip()
+                    history_reply = f"Typed into {app_name}."
+                    if self.history and self.history[-1].get("role") == "user":
+                        self.history[-1] = {"role": "user", "content": f"Type into {app_name}."}
+
                 if history_reply is None:
                     history_reply = reply
 
@@ -1844,7 +2030,7 @@ class Agent:
                 })
                 return reply
 
-        all_tools = self.registry.list_tools() if self.registry else []
+        all_tools = self.registry.list_tools(model_visible_only=True) if self.registry else []
         routing_on = self.tool_routing_enabled()
 
         if routing_on and all_tools:

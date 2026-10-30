@@ -42,7 +42,7 @@ from contextlib import contextmanager
 @contextmanager
 def _isolated_eval_environment():
     """Ensure eval runs with browser and reminders disabled and clean defaults, restoring env on exit."""
-    keys = ["COMMAND_SHORTCUTS", "SESSION_CONTEXT", "BROWSER_ENABLED", "REMINDERS_ENABLED", "TOOL_ROUTING", "ROUTINES_ENABLED", "SYSTEM_CONTROLS_ENABLED"]
+    keys = ["COMMAND_SHORTCUTS", "SESSION_CONTEXT", "BROWSER_ENABLED", "REMINDERS_ENABLED", "TOOL_ROUTING", "ROUTINES_ENABLED", "SYSTEM_CONTROLS_ENABLED", "MESSAGING_ENABLED", "WINDOW_CONTROL_ENABLED", "FILES_ENABLED", "SCREENSHOTS_ENABLED", "TYPING_ENABLED", "SLEEP_ENABLED"]
     prev = {k: os.environ.get(k) for k in keys}
     try:
         if "COMMAND_SHORTCUTS" not in os.environ:
@@ -57,6 +57,9 @@ def _isolated_eval_environment():
             os.environ["ROUTINES_ENABLED"] = "0"
         if "SYSTEM_CONTROLS_ENABLED" not in os.environ:
             os.environ["SYSTEM_CONTROLS_ENABLED"] = "0"
+        for l_key in ("WINDOW_CONTROL_ENABLED", "FILES_ENABLED", "SCREENSHOTS_ENABLED", "TYPING_ENABLED", "SLEEP_ENABLED"):
+            if l_key not in os.environ:
+                os.environ[l_key] = "0"
         os.environ["BROWSER_ENABLED"] = "0"
         yield
     finally:
@@ -300,6 +303,10 @@ def run_suite(
             os.environ["SYSTEM_CONTROLS_ENABLED"] = "0"
         sys_controls_on = os.getenv("SYSTEM_CONTROLS_ENABLED", "0").lower() in ("1", "true", "yes", "on")
 
+        if "MESSAGING_ENABLED" not in os.environ:
+            os.environ["MESSAGING_ENABLED"] = "0"
+        messaging_on = os.getenv("MESSAGING_ENABLED", "0").lower() in ("1", "true", "yes", "on")
+
         meta: dict[str, Any] = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "total_cases": len(cases),
@@ -317,6 +324,12 @@ def run_suite(
             "TOOL_ROUTING": routing_on,
             "ROUTINES_ENABLED": routines_on,
             "SYSTEM_CONTROLS_ENABLED": sys_controls_on,
+            "MESSAGING_ENABLED": messaging_on,
+            "WINDOW_CONTROL_ENABLED": os.getenv("WINDOW_CONTROL_ENABLED", "0").lower() in ("1", "true", "yes", "on"),
+            "FILES_ENABLED": os.getenv("FILES_ENABLED", "0").lower() in ("1", "true", "yes", "on"),
+            "SCREENSHOTS_ENABLED": os.getenv("SCREENSHOTS_ENABLED", "0").lower() in ("1", "true", "yes", "on"),
+            "TYPING_ENABLED": os.getenv("TYPING_ENABLED", "0").lower() in ("1", "true", "yes", "on"),
+            "SLEEP_ENABLED": os.getenv("SLEEP_ENABLED", "0").lower() in ("1", "true", "yes", "on"),
         }
         if extra_meta:
             meta.update(extra_meta)

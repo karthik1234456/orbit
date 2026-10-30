@@ -20,7 +20,7 @@ from core.version import VERSION
 from ui.dock import DockCanvas
 from ui.hud import HudCanvas
 from ui.hud_core import HudModel
-from ui.theme import apply_theme, get_data_font, get_palette, style_chat_tags
+from ui.theme import apply_theme, get_data_font, get_heading_font, get_palette, style_chat_tags
 
 LAST_HUD_ERROR: Optional[str] = None
 from ui.controller import ChatController, ConfirmRequest, UiEvent
@@ -163,10 +163,28 @@ class ConfirmDialog(tk.Toplevel):
             )
             warn_lbl.pack(anchor="w", pady=(0, 8))
 
+        palette = getattr(self.master, "palette", None) or get_palette()
+
+        summary_val = getattr(self.request, "summary", None)
+        if summary_val:
+            sum_lbl = ttk.Label(frame, text="Summary:", font=("Segoe UI", 9, "bold"))
+            sum_lbl.pack(anchor="w", pady=(0, 2))
+            self.summary_text = tk.Text(
+                frame,
+                height=3,
+                width=55,
+                wrap=tk.WORD,
+                font=("Segoe UI", 9),
+                bg=palette.panel,
+                fg=palette.text,
+                insertbackground=palette.accent,
+            )
+            self.summary_text.pack(fill="x", expand=False, pady=(0, 8))
+            self.summary_text.insert("1.0", str(summary_val))
+            self.summary_text.configure(state="disabled")
+
         args_lbl = ttk.Label(frame, text="Parameters (redacted):")
         args_lbl.pack(anchor="w", pady=(0, 4))
-
-        palette = getattr(self.master, "palette", None) or get_palette()
         self.args_text = tk.Text(
             frame,
             height=6,
@@ -329,6 +347,159 @@ class PlanDialog(tk.Toplevel):
         self.cancel_btn.focus_set()
 
         self._tick_countdown()
+
+    # --- Interactive Shortcuts, Palette, & Radial Menu ---
+
+    def _is_input_focused(self) -> bool:
+        try:
+            return self.root.focus_get() == getattr(self, "input_text", None)
+        except Exception:
+            return False
+
+    def _on_ctrl_k(self, event: Optional[tk.Event] = None) -> str:
+        if self._is_dialog_open():
+            return "break"
+        self._open_command_palette()
+        return "break"
+
+    def _on_ctrl_space(self, event: Optional[tk.Event] = None) -> str:
+        if self._is_dialog_open():
+            return "break"
+        self._on_toggle_mic()
+        return "break"
+
+    def _on_f1(self, event: Optional[tk.Event] = None) -> str:
+        self._on_show_shortcuts()
+        return "break"
+
+    def _on_question(self, event: Optional[tk.Event] = None) -> Optional[str]:
+        if self._is_input_focused():
+            return None
+        self._on_show_shortcuts()
+        return "break"
+
+    def _on_global_ctrl_c(self, event: Optional[tk.Event] = None) -> Optional[str]:
+        try:
+            focused = self.root.focus_get()
+            if focused is not None and hasattr(focused, "tag_ranges"):
+                ranges = focused.tag_ranges("sel")
+                if ranges:
+                    return None
+            if focused is not None and hasattr(focused, "select_present"):
+                if focused.select_present():
+                    return None
+        except Exception:
+            pass
+        self._on_copy_last_answer()
+        return "break"
+
+    def _on_copy_last_answer(self) -> None:
+        if not self._last_assistant_answer:
+            if self.hud_canvas is not None:
+                self.hud_canvas.show_notice("No answer to copy")
+            return
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(self._last_assistant_answer)
+            if self.hud_canvas is not None:
+                self.hud_canvas.show_notice("Copied last answer")
+        except Exception:
+            pass
+
+    def _cycle_theme(self) -> None:
+        themes = ["cyan", "gold", "mono"]
+        curr_theme = getattr(settings, "UI_THEME", "cyan").lower()
+        if curr_theme not in themes:
+            curr_theme = "cyan"
+        next_theme = themes[(themes.index(curr_theme) + 1) % len(themes)]
+        settings.UI_THEME = next_theme
+        self.palette = get_palette(next_theme)
+        apply_theme(self.root, self.palette)
+        if self.hud_canvas is not None:
+            self.hud_canvas.set_palette(self.palette)
+            self.hud_canvas.show_notice(f"Theme: {next_theme}")
+        if self.dock_canvas is not None:
+            self.dock_canvas.set_palette(self.palette)
+
+    def _open_radial_menu(self, cx: float, cy: float) -> bool:
+        if self.hud_canvas is None:
+            return False
+        from ui.radial_menu import RadialAction
+        actions = [
+            RadialAction("New conversation", self._on_new_conversation, icon="new"),
+            RadialAction("Toggle speak replies", self._on_toggle_speak_replies, icon="speak"),
+            RadialAction("Interrupt / Stop", self._on_stop, icon="stop"),
+            RadialAction("Doctor", self._on_doctor_click, icon="doc"),
+            RadialAction("Settings", self._on_settings_click, icon="gear"),
+            RadialAction("Cycle theme", self._cycle_theme, icon="theme"),
+        ]
+        return self.hud_canvas.open_radial_menu(actions)
+
+    def _open_command_palette(self) -> None:
+        if self._command_palette is not None and self._command_palette.winfo_exists():
+            self._command_palette.lift()
+            self._command_palette.focus_force()
+            return
+
+        from ui.palette import CommandPalette, PaletteItem
+        from routines.store import RoutineStore
+
+        static_items = [
+            PaletteItem("New conversation", "System", self._on_new_conversation),
+            PaletteItem("Toggle speak replies", "Voice", self._on_toggle_speak_replies),
+            PaletteItem("Interrupt / Stop speaking", "Voice", self._on_stop),
+            PaletteItem("Doctor diagnostics", "System", self._on_doctor_click),
+            PaletteItem("Open Settings", "System", self._on_settings_click),
+            PaletteItem("Contacts", "Tools", self._on_contacts_click),
+            PaletteItem("Cycle UI Theme", "Display", self._cycle_theme),
+            PaletteItem("Copy last assistant answer", "Chat", self._on_copy_last_answer),
+        ]
+
+        routine_names: list[str] = []
+        try:
+            rstore = getattr(self.controller, "routine_store", None)
+            if rstore is None:
+                rstore = RoutineStore()
+            routine_names = [getattr(r, "name", "") for r in rstore.list()]
+            routine_names = [n for n in routine_names if n]
+        except Exception:
+            routine_names = []
+
+        def _on_run_routine(name: str) -> None:
+            self.controller.submit(f"run routine {name}", source="ui")
+
+        def _on_submit_query(query: str) -> None:
+            self.controller.submit(query, source="ui")
+
+        def _on_palette_close() -> None:
+            self._command_palette = None
+
+        self._command_palette = CommandPalette(
+            self.root,
+            static_items=static_items,
+            routine_names=routine_names,
+            on_run_routine=_on_run_routine,
+            on_submit_query=_on_submit_query,
+            palette=self.palette,
+            on_close=_on_palette_close,
+        )
+
+    def _on_show_shortcuts(self) -> None:
+        if self._shortcuts_overlay is not None and self._shortcuts_overlay.winfo_exists():
+            self._shortcuts_overlay.lift()
+            self._shortcuts_overlay.focus_force()
+            return
+
+        from ui.shortcuts_registry import ShortcutsOverlay
+
+        def _on_overlay_close() -> None:
+            self._shortcuts_overlay = None
+
+        self._shortcuts_overlay = ShortcutsOverlay(
+            self.root,
+            palette=self.palette,
+            on_close=_on_overlay_close,
+        )
 
     def _on_close(self) -> None:
         self._resolve(False)
@@ -709,8 +880,8 @@ class OrbitWindow:
 
         ui_style = getattr(settings, "UI_STYLE", "hud").lower().strip()
         if ui_style == "hud":
-            self.root.geometry("1180x760")
-            self.root.minsize(960, 640)
+            self.root.geometry("1280x800")
+            self.root.minsize(1100, 700)
         else:
             self.root.geometry("1020x680")
             self.root.minsize(800, 500)
@@ -724,9 +895,23 @@ class OrbitWindow:
         self.dock_canvas: Optional[DockCanvas] = None
         self._notebook_visible = True
 
+        # Interactive HUD & Shortcuts state
+        self._command_palette: Optional[Any] = None
+        self._shortcuts_overlay: Optional[Any] = None
+        self._last_assistant_answer: str = ""
+
         # Wire shutdown protocols
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.bind("<Destroy>", self._on_root_destroyed)
+
+        # Wire global shortcuts
+        self.root.bind("<Control-k>", self._on_ctrl_k)
+        self.root.bind("<Control-K>", self._on_ctrl_k)
+        self.root.bind("<Control-space>", self._on_ctrl_space)
+        self.root.bind("<F1>", self._on_f1)
+        self.root.bind("<question>", self._on_question)
+        self.root.bind("<Control-c>", self._on_global_ctrl_c)
+        self.root.bind("<Control-C>", self._on_global_ctrl_c)
 
         # Wire voice controller
         self._last_speaker_poll = 0.0
@@ -1014,10 +1199,32 @@ class OrbitWindow:
         main_container = tk.Frame(self.root, bg=self.palette.bg)
         main_container.pack(fill="both", expand=True)
 
-        # Status Bar at the bottom
-        self._build_status_bar(main_container)
+        self._chat_expanded = False
+        self._notebook_visible = True
+        self.paned = None
 
-        # Dock Canvas right above the status bar
+        # 1. Full window background HUD canvas
+        fps_val = getattr(settings, "HUD_FPS", 30)
+        motion_val = getattr(settings, "UI_MOTION", "full")
+        self.hud_canvas = HudCanvas(
+            main_container,
+            model=self.hud_model,
+            palette=self.palette,
+            fps=fps_val,
+            motion=motion_val,
+            mode_label=self.mode_label,
+            doctor_label="ALL SYSTEMS NOMINAL",
+            interactive=bool(getattr(settings, "UI_INTERACTIVE", 1)),
+            is_dialog_open=self._is_dialog_open,
+            is_input_focused=self._is_input_focused,
+            on_mic=self._on_toggle_mic,
+            on_radial_menu=self._open_radial_menu,
+            on_shortcuts=self._on_show_shortcuts,
+        )
+        self.hud_canvas._is_blocked_callback = self._is_blocked
+        self.hud_canvas.place(x=0, y=0, relwidth=1.0, relheight=1.0)
+
+        # 2. Interactive Vector Dock (keyboard accessible)
         self.dock_canvas = DockCanvas(
             main_container,
             palette=self.palette,
@@ -1028,35 +1235,45 @@ class OrbitWindow:
             on_doctor=self._on_doctor_click,
             get_voice_state=self._get_dock_voice_state,
         )
-        self.dock_canvas.pack(fill="x", side="bottom", pady=(2, 4))
 
-        # Main horizontal split: Center (HUD + Chat + Input) | Right (Tabs)
-        self.paned = ttk.PanedWindow(main_container, orient="horizontal")
-        self.paned.pack(fill="both", expand=True, padx=8, pady=(8, 2))
-
-        # --- Center Column ---
-        self.left_frame = tk.Frame(self.paned, bg=self.palette.bg)
-        self.paned.add(self.left_frame, weight=3)
-
-        # 1. Top HUD Canvas
-        fps_val = getattr(settings, "HUD_FPS", 30)
-        motion_val = getattr(settings, "UI_MOTION", "full")
-        self.hud_canvas = HudCanvas(
-            self.left_frame,
-            model=self.hud_model,
-            palette=self.palette,
-            fps=fps_val,
-            motion=motion_val,
-            height=210,
+        # 3. Chat Panel (overlaying HUD canvas via place inset by 10px)
+        self.left_frame = tk.Frame(
+            main_container,
+            bg=self.palette.panel,
+            highlightthickness=0,
+            bd=0,
         )
-        self.hud_canvas.pack(fill="x", side="top", pady=(0, 4))
 
-        # 2. Chat history & input container
-        chat_box = tk.Frame(self.left_frame, bg=self.palette.bg)
-        chat_box.pack(fill="both", expand=True)
+        # Chat header with title and expand toggle button
+        chat_header = tk.Frame(self.left_frame, bg=self.palette.panel)
+        chat_header.pack(fill="x", side="top", padx=6, pady=(4, 2))
 
+        chat_title = tk.Label(
+            chat_header,
+            text="CHAT",
+            font=get_heading_font(self.root, 9),
+            fg=self.palette.text_dim,
+            bg=self.palette.panel,
+        )
+        chat_title.pack(side="left")
+
+        self.expand_btn = tk.Button(
+            chat_header,
+            text="▲ Expand",
+            font=("Segoe UI", 8),
+            bg=self.palette.panel,
+            fg=self.palette.accent,
+            activebackground=self.palette.panel_edge,
+            activeforeground=self.palette.accent,
+            bd=0,
+            cursor="hand2",
+            command=self._on_toggle_chat_expand,
+        )
+        self.expand_btn.pack(side="right")
+
+        # Chat history ScrolledText
         self.history = scrolledtext.ScrolledText(
-            chat_box,
+            self.left_frame,
             wrap=tk.WORD,
             state="disabled",
             font=get_data_font(self.root, 10),
@@ -1065,23 +1282,20 @@ class OrbitWindow:
             insertbackground=self.palette.accent,
             selectbackground=self.palette.panel_edge,
             selectforeground=self.palette.text,
-            bd=1,
-            relief="solid",
-            highlightthickness=1,
-            highlightbackground=self.palette.panel_edge,
-            highlightcolor=self.palette.accent_dim,
+            bd=0,
+            highlightthickness=0,
         )
-        self.history.pack(fill="both", expand=True, pady=(0, 6))
+        self.history.pack(fill="both", expand=True, padx=4, pady=(0, 4))
         style_chat_tags(self.history, self.palette)
 
         # Voice status bar (above input frame, packed when active)
-        self.voice_bar = tk.Frame(chat_box, bg=self.palette.bg, padx=0, pady=2)
+        self.voice_bar = tk.Frame(self.left_frame, bg=self.palette.panel, padx=0, pady=2)
         self.voice_status_lbl = tk.Label(
             self.voice_bar,
             text="",
             font=("Segoe UI", 9, "italic"),
             fg=self.palette.accent,
-            bg=self.palette.bg,
+            bg=self.palette.panel,
         )
         self.voice_status_lbl.pack(side="left", padx=(0, 8))
 
@@ -1093,9 +1307,9 @@ class OrbitWindow:
             maximum=100,
         )
 
-        # Input frame
-        input_frame = tk.Frame(chat_box, bg=self.palette.bg)
-        input_frame.pack(fill="x", side="bottom")
+        # Input frame at the bottom of the chat panel
+        input_frame = tk.Frame(self.left_frame, bg=self.palette.panel)
+        input_frame.pack(fill="x", side="bottom", padx=4, pady=(0, 4))
 
         self.input_text = tk.Text(
             input_frame,
@@ -1119,7 +1333,7 @@ class OrbitWindow:
         self.input_text.bind("<Return>", self._on_enter)
         self.input_text.bind("<Shift-Return>", self._on_shift_enter)
 
-        btn_box = tk.Frame(input_frame, bg=self.palette.bg)
+        btn_box = tk.Frame(input_frame, bg=self.palette.panel)
         btn_box.pack(side="right", fill="y")
 
         self.send_btn = ttk.Button(btn_box, text="Send", command=self._on_send)
@@ -1157,12 +1371,16 @@ class OrbitWindow:
 
         self._update_voice_ui()
 
-        # --- Right Column: Notebook ---
-        self.right_frame = tk.Frame(self.paned, bg=self.palette.bg, padx=2, pady=2)
-        self.paned.add(self.right_frame, weight=2)
+        # 4. Right Column: Notebook Tabs (overlaying HUD canvas via place inset by 10px)
+        self.right_frame = tk.Frame(
+            main_container,
+            bg=self.palette.panel,
+            highlightthickness=0,
+            bd=0,
+        )
 
         self.notebook = ttk.Notebook(self.right_frame)
-        self.notebook.pack(fill="both", expand=True)
+        self.notebook.pack(fill="both", expand=True, padx=4, pady=4)
 
         self._build_activity_tab()
         self._build_context_tab()
@@ -1171,6 +1389,88 @@ class OrbitWindow:
         self._build_reminders_tab()
         self._build_routines_tab()
         self._build_last_run_tab()
+
+        # 5. Build status bar widgets (kept accessible for tests & status updates)
+        self._build_status_bar(main_container)
+        self.status_bar.pack_forget()
+
+        # Dynamic panel positioning & resize handling
+        self.root.bind("<Configure>", self._on_window_configure, add="+")
+        self._reposition_hud_panels()
+        self.root.after(20, self._reposition_hud_panels)
+
+    def _on_window_configure(self, event: Optional[tk.Event] = None) -> None:
+        if event is not None and getattr(event, "widget", None) != self.root:
+            return
+        self._reposition_hud_panels()
+
+    def _reposition_hud_panels(self) -> None:
+        if getattr(self, "hud_canvas", None) is None or not hasattr(self, "left_frame"):
+            return
+        try:
+            w = float(self.root.winfo_width())
+            h = float(self.root.winfo_height())
+        except Exception:
+            return
+        if w < 100 or h < 100:
+            w = 1280.0
+            h = 800.0
+
+        from ui.hud_core import layout
+        ly = layout(w, h)
+
+        # Chat panel placement
+        c_top = ly.chat_y_expanded_top if getattr(self, "_chat_expanded", False) else ly.panel_y_top
+        c_h = ly.panel_y_bottom - c_top
+        try:
+            self.left_frame.place(
+                x=int(ly.chat_x_left + 10),
+                y=int(c_top + 10),
+                width=int(ly.panel_width - 20),
+                height=int(c_h - 20),
+            )
+        except Exception:
+            pass
+
+        # Right panel placement
+        if getattr(self, "_notebook_visible", True) and hasattr(self, "right_frame"):
+            r_h = ly.panel_y_bottom - ly.panel_y_top
+            try:
+                self.right_frame.place(
+                    x=int(ly.right_x_left + 10),
+                    y=int(ly.panel_y_top + 10),
+                    width=int(ly.panel_width - 20),
+                    height=int(r_h - 20),
+                )
+            except Exception:
+                pass
+        elif hasattr(self, "right_frame"):
+            try:
+                self.right_frame.place_forget()
+            except Exception:
+                pass
+
+        # Dock canvas placement
+        if getattr(self, "dock_canvas", None) is not None:
+            dock_w = int((0.643 - 0.357) * w + 2 * (ly.dock_mic_radius + 20))
+            dock_h = int(2 * ly.dock_mic_radius + 24)
+            try:
+                self.dock_canvas.place(
+                    x=int(ly.cx - dock_w / 2.0),
+                    y=int(ly.dock_y - dock_h / 2.0),
+                    width=dock_w,
+                    height=dock_h,
+                )
+            except Exception:
+                pass
+
+    def _on_toggle_chat_expand(self) -> None:
+        self._chat_expanded = not getattr(self, "_chat_expanded", False)
+        if hasattr(self, "expand_btn"):
+            self.expand_btn.configure(text="▼ Collapse" if self._chat_expanded else "▲ Expand")
+        if getattr(self, "hud_canvas", None) is not None:
+            self.hud_canvas.set_chat_expanded(self._chat_expanded)
+        self._reposition_hud_panels()
 
     def _build_classic_layout(self) -> None:
         # Main vertical splitter: content area + bottom status bar
@@ -1294,21 +1594,30 @@ class OrbitWindow:
         self._toggle_or_select_tab(self.routines_frame)
 
     def _toggle_or_select_tab(self, target_frame: tk.Widget) -> None:
-        if not hasattr(self, "paned") or not hasattr(self, "right_frame"):
+        if not hasattr(self, "right_frame"):
             return
         if not self._notebook_visible:
-            try:
-                self.paned.add(self.right_frame, weight=2)
-                self._notebook_visible = True
-            except Exception:
-                pass
+            self._notebook_visible = True
+            if getattr(self, "hud_canvas", None) is not None:
+                self._reposition_hud_panels()
+            elif getattr(self, "paned", None) is not None:
+                try:
+                    self.paned.add(self.right_frame, weight=2)
+                except Exception:
+                    pass
             if hasattr(self, "notebook"):
                 self.notebook.select(target_frame)
         else:
             try:
                 curr = self.notebook.select()
                 if str(curr) == str(target_frame):
-                    self.paned.forget(self.right_frame)
+                    if getattr(self, "hud_canvas", None) is not None:
+                        self.right_frame.place_forget()
+                    elif getattr(self, "paned", None) is not None:
+                        try:
+                            self.paned.forget(self.right_frame)
+                        except Exception:
+                            pass
                     self._notebook_visible = False
                 else:
                     self.notebook.select(target_frame)
@@ -2091,6 +2400,7 @@ class OrbitWindow:
 
         elif kind == "reply":
             full_text = data.get("text") or data.get("reply", "")
+            self._last_assistant_answer = str(full_text).strip()
             streamed = data.get("streamed", False)
             if self._current_task_had_denial or "user denied permission" in str(full_text).lower():
                 full_text = "Okay, I didn't do that because you didn't approve it."
@@ -2102,6 +2412,8 @@ class OrbitWindow:
             self._streaming = False
             if getattr(self, "_speak_replies", False) and getattr(self, "voice_controller", None) is not None:
                 self.voice_controller.speak_reply(full_text)
+            if hasattr(self, "hud_model") and self.hud_model is not None:
+                self.hud_model.trigger_pulse("soft", 0.5)
 
         elif kind == "voice_state":
             st = data.get("state", "idle")
@@ -2223,6 +2535,8 @@ class OrbitWindow:
             self._current_task_had_denial = False
             if data.get("task") is None:
                 self._view_task_counter += 1
+            if hasattr(self, "hud_model") and self.hud_model is not None:
+                self.hud_model.trigger_pulse("mild", 0.45)
 
         elif kind == "busy":
             pass
@@ -2239,6 +2553,8 @@ class OrbitWindow:
             self._current_task_had_denial = False
             if data.get("task") is None:
                 self._view_task_counter += 1
+            if hasattr(self, "hud_model") and self.hud_model is not None:
+                self.hud_model.trigger_pulse("mild", 0.45)
 
         elif kind == "step_start":
             idx = data.get("index", data.get("idx", ""))
@@ -2507,6 +2823,10 @@ class OrbitWindow:
         self._update_voice_ui()
 
     def _append_chat(self, text: str, tags: tuple) -> None:
+        if not isinstance(tags, tuple):
+            tags = tuple(tags)
+        if ("orbit" in tags or "user" in tags) and "bubble" not in tags:
+            tags = tags + ("bubble",)
         self.history.configure(state="normal")
         self.history.insert(tk.END, text, tags)
         self.history.see(tk.END)
@@ -2819,6 +3139,13 @@ class OrbitWindow:
         t = threading.Thread(target=_worker, daemon=True)
         t.start()
 
+    def _on_contacts_click(self) -> None:
+        if self._is_dialog_open():
+            return
+        from ui.contacts_window import ContactsWindow
+        c_store = getattr(self.controller, "contact_store", None)
+        ContactsWindow(self.root, contacts=c_store, controller=self.controller, palette=self.palette)
+
     def _on_settings_click(self) -> None:
         try:
             from ui.settings_window import SettingsWindow
@@ -2903,6 +3230,158 @@ class OrbitWindow:
                 self.context_lbl.pack_forget()
 
     # --- Destruction Protocols ---
+
+    # --- Interactive Shortcuts, Palette, & Radial Menu ---
+
+    def _is_input_focused(self) -> bool:
+        try:
+            return self.root.focus_get() == getattr(self, "input_text", None)
+        except Exception:
+            return False
+
+    def _on_ctrl_k(self, event: Optional[tk.Event] = None) -> str:
+        if self._is_dialog_open():
+            return "break"
+        self._open_command_palette()
+        return "break"
+
+    def _on_ctrl_space(self, event: Optional[tk.Event] = None) -> str:
+        if self._is_dialog_open():
+            return "break"
+        self._on_toggle_mic()
+        return "break"
+
+    def _on_f1(self, event: Optional[tk.Event] = None) -> str:
+        self._on_show_shortcuts()
+        return "break"
+
+    def _on_question(self, event: Optional[tk.Event] = None) -> Optional[str]:
+        if self._is_input_focused():
+            return None
+        self._on_show_shortcuts()
+        return "break"
+
+    def _on_global_ctrl_c(self, event: Optional[tk.Event] = None) -> Optional[str]:
+        try:
+            focused = self.root.focus_get()
+            if focused is not None and hasattr(focused, "tag_ranges"):
+                ranges = focused.tag_ranges("sel")
+                if ranges:
+                    return None
+            if focused is not None and hasattr(focused, "select_present"):
+                if focused.select_present():
+                    return None
+        except Exception:
+            pass
+        self._on_copy_last_answer()
+        return "break"
+
+    def _on_copy_last_answer(self) -> None:
+        if not self._last_assistant_answer:
+            if self.hud_canvas is not None:
+                self.hud_canvas.show_notice("No answer to copy")
+            return
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(self._last_assistant_answer)
+            if self.hud_canvas is not None:
+                self.hud_canvas.show_notice("Copied last answer")
+        except Exception:
+            pass
+
+    def _cycle_theme(self) -> None:
+        themes = ["cyan", "gold", "mono"]
+        curr_theme = getattr(settings, "UI_THEME", "cyan").lower()
+        if curr_theme not in themes:
+            curr_theme = "cyan"
+        next_theme = themes[(themes.index(curr_theme) + 1) % len(themes)]
+        settings.UI_THEME = next_theme
+        self.palette = get_palette(next_theme)
+        apply_theme(self.root, self.palette)
+        if self.hud_canvas is not None:
+            self.hud_canvas.set_palette(self.palette)
+            self.hud_canvas.show_notice(f"Theme: {next_theme}")
+        if self.dock_canvas is not None:
+            self.dock_canvas.set_palette(self.palette)
+
+    def _open_radial_menu(self, cx: float, cy: float) -> bool:
+        if self.hud_canvas is None:
+            return False
+        from ui.radial_menu import RadialAction
+        actions = [
+            RadialAction("New conversation", self._on_new_conversation, icon="new"),
+            RadialAction("Toggle speak replies", self._on_toggle_speak_replies, icon="speak"),
+            RadialAction("Interrupt / Stop", self._on_stop, icon="stop"),
+            RadialAction("Doctor", self._on_doctor_click, icon="doc"),
+            RadialAction("Settings", self._on_settings_click, icon="gear"),
+            RadialAction("Cycle theme", self._cycle_theme, icon="theme"),
+        ]
+        return self.hud_canvas.open_radial_menu(actions)
+
+    def _open_command_palette(self) -> None:
+        if self._command_palette is not None and self._command_palette.winfo_exists():
+            self._command_palette.lift()
+            self._command_palette.focus_force()
+            return
+
+        from ui.palette import CommandPalette, PaletteItem
+        from routines.store import RoutineStore
+
+        static_items = [
+            PaletteItem("New conversation", "System", self._on_new_conversation),
+            PaletteItem("Toggle speak replies", "Voice", self._on_toggle_speak_replies),
+            PaletteItem("Interrupt / Stop speaking", "Voice", self._on_stop),
+            PaletteItem("Doctor diagnostics", "System", self._on_doctor_click),
+            PaletteItem("Open Settings", "System", self._on_settings_click),
+            PaletteItem("Cycle UI Theme", "Display", self._cycle_theme),
+            PaletteItem("Copy last assistant answer", "Chat", self._on_copy_last_answer),
+        ]
+
+        routine_names: list[str] = []
+        try:
+            rstore = getattr(self.controller, "routine_store", None)
+            if rstore is None:
+                rstore = RoutineStore()
+            routine_names = [getattr(r, "name", "") for r in rstore.list()]
+            routine_names = [n for n in routine_names if n]
+        except Exception:
+            routine_names = []
+
+        def _on_run_routine(name: str) -> None:
+            self.controller.submit(f"run routine {name}", source="ui")
+
+        def _on_submit_query(query: str) -> None:
+            self.controller.submit(query, source="ui")
+
+        def _on_palette_close() -> None:
+            self._command_palette = None
+
+        self._command_palette = CommandPalette(
+            self.root,
+            static_items=static_items,
+            routine_names=routine_names,
+            on_run_routine=_on_run_routine,
+            on_submit_query=_on_submit_query,
+            palette=self.palette,
+            on_close=_on_palette_close,
+        )
+
+    def _on_show_shortcuts(self) -> None:
+        if self._shortcuts_overlay is not None and self._shortcuts_overlay.winfo_exists():
+            self._shortcuts_overlay.lift()
+            self._shortcuts_overlay.focus_force()
+            return
+
+        from ui.shortcuts_registry import ShortcutsOverlay
+
+        def _on_overlay_close() -> None:
+            self._shortcuts_overlay = None
+
+        self._shortcuts_overlay = ShortcutsOverlay(
+            self.root,
+            palette=self.palette,
+            on_close=_on_overlay_close,
+        )
 
     def _on_close(self) -> None:
         for toast in list(getattr(self, "_active_toasts", [])):

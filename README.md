@@ -267,6 +267,89 @@ python scripts/voice_record.py --split dev --kind real_noise
 
 ---
 
+## Messaging (optional)
+
+ORBIT provides an optional, privacy-respecting messaging layer for preparing and dispatching communications to contacts stored in a local address book. Messaging tools are strictly local, deterministic, and gated by explicit physical human approval.
+
+### Local Contact Book
+- **Private SQLite Storage**: Contacts reside in `data/contacts.db` (enforced git-ignored) using parameterized queries with a 200-contact limit.
+- **Masked Phone Numbers**: All phone numbers are strictly masked across user interfaces, dialogs, string representations, and diagnostics (`••••1234`).
+- **Management Options**:
+  - **GUI**: Centered, themed Contacts window accessible from the Command Palette (`Ctrl+K` -> `"Contacts"`) or the Settings window (**Manage Contacts...** button). Supports Adding, Editing, and Deleting contacts with confirmation dialogs.
+  - **Terminal**: Direct CLI management via `/contacts`, `/contact add`, `/contact edit`, and `/contact delete` with explicit `(y/n)` confirmations.
+
+### Example Commands You Can Try
+- `text Mom saying on my way home`
+- `message Bob that the meeting is moved to 4pm`
+- `whatsapp Alice to say see you tomorrow`
+- `send this link to Mom` *(attaches current interactive YouTube, GitHub, or Wikipedia page link)*
+- `open chat with Dad`
+- `email Bob about Project Update`
+- `open an email draft to Alice with subject Quarterly Report`
+
+### Draft Mode vs Send Mode
+- **Draft Mode (Default, Recommended)**:
+  - Invokes WhatsApp via its registered URI protocol (`whatsapp://send?phone=...&text=...`).
+  - Pre-fills the recipient and message, leaving the final Enter keystroke to the user.
+- **Send Mode (`WHATSAPP_SEND_MODE=send`)**:
+  - Gated by an explicit warning dialog upon activation in Settings.
+  - Requires physical user approval in a modal `ConfirmDialog` showing the exact plain-text message preview and masked number.
+  - Verifies the active foreground window title (`WhatsApp`) and process name (`WhatsApp.exe`, `WhatsApp.Root.exe`).
+  - Enforces a 1.2-second settle delay, double-checks foreground window integrity, and presses Enter exactly once.
+
+### Task-Linked Page Artifacts
+- When browsing interactive sites (YouTube, Wikipedia, GitHub, docs, localhost), ORBIT tracks page artifacts with a 30-minute time-to-live.
+- Commands such as `send this link to <contact>` resolve the active link at execution time.
+- **Anti-Drift Guard**: If the active page URL changes between the moment of user approval and tool execution, the message is cancelled to prevent sharing unintended links.
+
+### Deliberate Omissions & Safety Boundaries
+- **No Message Reading**: ORBIT cannot inspect, read, search, or summarize received WhatsApp messages or emails.
+- **No Attachments**: File attachments are omitted to prevent data exfiltration.
+- **No Groups or Bulk Messaging**: Only direct 1-on-1 communication with saved contacts; bulk sends and broadcasts are prohibited.
+- **One Human-Approved Message at a Time**: Every dispatch requires its own distinct physical confirmation (`ConfirmDialog`).
+- **No Background Automation**: Routines and chains strictly disallow free-body messaging to prevent unreviewed text injection.
+- **Model Invisibility & Taint Blocking**: Messaging tools are hidden from LLM tool schemas (`model_visible=False`) and blocked whenever a turn reads untrusted web or document content (`block_when_tainted=True`).
+
+### Browser Fallback & WhatsApp Terms
+- **wa.me Fallback**: If the native WhatsApp desktop protocol is unregistered, ORBIT cleanly falls back to `https://wa.me/<phone>?text=<encoded>` in the default browser.
+- **User Responsibility**: All WhatsApp communications are subject to WhatsApp's Terms of Service. ORBIT operates strictly as a local assistant aiding human user composition.
+
+---
+
+## Laptop Control (optional)
+
+ORBIT provides an optional, privacy-respecting local laptop control suite for managing application windows, searching and opening personal files, taking desktop screenshots, typing short text into allowlisted windows, and putting the system to sleep.
+
+Every tool operates strictly under verified Windows API outcomes with mandatory human confirmation on destructive or disruptive actions, strict rate limiting, zero network egress, and absolute privacy guarantees: file names, folder paths, window titles, and typed text are strictly excluded from all model prompts, context blocks, agent history, audit logs, and diagnostics.
+
+### Capabilities Matrix
+
+| Capability | Commands / Patterns | Default Status | Safety Gating & Verification |
+| :--- | :--- | :--- | :--- |
+| **Window Control** | `switch to notepad`, `focus chrome`, `minimize calculator`, `maximize vscode`, `restore edge`, `snap notepad left`, `snap chrome right`, `show desktop` | Enabled (`WINDOW_CONTROL_ENABLED=1`) | Enforces 30 actions/min sliding window rate limit. Restores minimized windows when focusing. Refuses non-allowlisted processes and elevated/admin target windows. Verified via `GetForegroundWindow` / `IsIconic` / `IsZoomed` with harmless ALT key workaround if Windows delays focus switch. |
+| **File Search & Open** | `find my recent pdfs`, `find documents named invoice`, `find photos of sunset`, `find latest download`, `open the 1st one`, `reveal file 2 in explorer` | Enabled (`FILES_ENABLED=1`) | Searches strictly within pre-approved user roots (`Documents`, `Downloads`, `Pictures`, `Videos`, `Desktop`, `Music` and OneDrive equivalents). Maximum directory depth of 4 with a 2-second search budget. Refuses symbolic links, junctions, double extensions (e.g. `file.pdf.exe`), colon characters, bidi/zero-width formatting overrides, and trailing spaces or dots. Opening or revealing files requires explicit human approval (`CONFIRM`). Memory-only candidate cache expires after 10 minutes. |
+| **Screenshots** | `take a screenshot`, `capture screen`, `screenshot` | Enabled (`SCREENSHOTS_ENABLED=1`) | Saves PNG captures to `workspace/screenshots/` with timestamp naming (`screenshot_YYYYMMDD_HHMMSS.png`). Requires >100 MB free workspace disk space. Rate limited to 20 captures/hour. Model-invisible (`model_visible=False`) and blocked when turns read untrusted web content (`block_when_tainted=True`). |
+| **Guarded Typing** | `type hello world into notepad`, `type see you soon in whatsapp` | Disabled (`TYPING_ENABLED=0`) | Restricted strictly to allowlisted apps (`Notepad`, `WhatsApp`). Maximum 300 characters; newlines and tabs are stripped. Types in chunks of 20 characters via `SendInput(KEYEVENTF_UNICODE)` with verified foreground focus check before each chunk; typing aborts immediately if focus shifts. Refuses elevated windows. Rate limited to 5 actions per 10 minutes. Requires explicit user confirmation (`CONFIRM`). Enabling in Settings prompts a prominent security warning. |
+| **Power Sleep** | `put computer to sleep`, `sleep laptop`, `sleep pc` | Disabled (`SLEEP_ENABLED=0`) | Calls `SetSuspendState(0, 0, 0)` under `ctypes.windll.powrprof`. Classified as `CONFIRM` requiring physical human approval. Rate limited to 2 calls per 10 minutes. Blocked when tainted. |
+
+### Typing Allowlist
+To prevent unintended keystroke delivery to terminal prompts, system dialogs, or web browsers, `type_into_app` enforces a hard allowlist restricted to:
+- **Notepad** (`notepad.exe`)
+- **WhatsApp** (`WhatsApp.exe`, `WhatsApp.Root.exe`)
+
+Typing commands directed at any other application (e.g., `type hello into chrome`, `type password into powershell`) are deterministically rejected with an informative error message: `I only type into notepad, whatsapp.`
+
+### Honest Notes: What is MISSING (By Design)
+ORBIT's laptop control is deliberately scoped to bounded, verifiable actions. It is **NOT** a general-purpose desktop agent or GUI automator. Specifically:
+- **No Arbitrary Mouse/Click Control**: ORBIT has no mouse cursor movement, clicking, dragging, scrolling on desktop applications, or coordinate-based interaction.
+- **No Window OCR or Pixel Scraping**: ORBIT does not read, OCR, or parse the graphical contents of open desktop application windows.
+- **No Background Keystroke Injection**: ORBIT cannot and will not send keystrokes to background or minimized windows. Typing requires verified active foreground focus and immediately aborts if focus shifts.
+- **No Reading Window Contents or Titles**: Window titles are never inspected, stored, or revealed to the model or recorded in history.
+- **No File Deletion or Modification via Search**: `find_files` only searches and inspects metadata. Files cannot be renamed, moved, deleted, or overwritten through the file search tools.
+- **No Execution of Arbitrary Binaries from Search**: Only files with strictly allowlisted document, image, audio, and video extensions can be opened. Executables (`.exe`, `.bat`, `.cmd`, `.ps1`, `.vbs`, `.js`, `.msi`, `.dll`, etc.) are unconditionally barred from being opened.
+
+---
+
 ## Interface
 
 ORBIT includes a sci-fi desktop interface inspired by dark teal technical dashboards, rendered with pure Python and Tkinter vector graphics (original artwork only, zero external UI libraries).
@@ -299,6 +382,25 @@ ORBIT provides three distinct color palettes designed for readability and visual
 - **`mono`**: Deep graphite slate background (`#0a0c0f`), charcoal panels (`#14181f`), and crisp white highlights (`#ffffff`).
 
 Every primary text (`text`) and secondary label (`text_dim`) across all three palettes strictly complies with the WCAG 2.1 relative contrast ratio threshold (>= 4.5:1 against both background and panel surfaces).
+
+### Interacting with the HUD
+ORBIT v2.18 introduces responsive direct manipulation and accessibility controls for the HUD interface:
+- **Orb Drag & Inertial Coasting**: Clicking and dragging the central orb rotates sphere yaw and pitch. In `UI_MOTION="full"`, releasing the mouse applies smooth inertial coasting with exponential angular velocity decay (decay rate $\\tau=1/3$, $e^{-3t}$). In `reduced` or `off` motion, inertia is cleanly disabled.
+- **Bounded Zoom Clamping**: Scrolling the mouse wheel or pressing `+` / `-` scales the orb smoothly within $[0.8, 1.25]$. Zooming dynamically enforces a minimum clearance floor of 260 px between the orb boundary and sidebar panels across any screen size. Double-clicking or pressing `0` resets the orb to default scale and orientation.
+- **Click vs Drag Discrimination**: Pointer movements under 4 px qualify as clicks, triggering the microphone toggle through the exact same handler as the dock mic button. If microphone activation is blocked by active tasks or open dialogs, a transient notice (`"Microphone busy"`) is displayed. Dragging 4 px or more engages 3D sphere rotation without toggling audio.
+- **Cursor Parallax Look-At**: In full motion mode, moving the cursor smoothly tilts the orb up to $\\pm 6^\\circ$ ($0.1047$ rad) toward the mouse with 300 ms exponential smoothing, giving the HUD lifelike depth.
+- **Live System Telemetry in Equalizer Arcs**: Segmented Arc A (top/left) dynamically displays live system CPU load, while Arc B (bottom/right) displays system memory utilization. Active blocks highlight brightly, while unlit blocks dim to background tones. Hovering over either arc displays a real-time percentage and memory usage tooltip.
+- **Radial Quick Action Menu**: Right-clicking the orb (or pressing `m` / `M` while the HUD canvas is focused) opens a 6-item radial quick action menu centered at $1.30 \\times r_{\\text{orb}}$ with $60^\\circ$ wedges:
+  1. **New conversation**: Starts a clean conversation context.
+  2. **Toggle speak replies**: Toggles voice synthesis on and off.
+  3. **Interrupt / Stop**: Immediately halts running tasks or voice speech.
+  4. **Doctor**: Opens system diagnostics and environment checks.
+  5. **Settings**: Opens the configuration and settings editor.
+  6. **Cycle theme**: Cycles the color theme (`cyan` -> `gold` -> `mono`).
+  Supports mouse hover/click and keyboard navigation (arrows, Tab / Shift+Tab, Enter to activate, Escape to dismiss).
+- **Command Palette (`Ctrl+K`)**: Global shortcut opens a centered, non-modal command palette dialog titled "Command palette". Subsequence fuzzy matching with span scoring ranks up to 12 results across static commands, user routines (sanitized names from `RoutineStore`), and a fallback `"Ask ORBIT: <query>"` entry. Strictly avoids inspecting memory stores or chat logs.
+- **Shortcuts Overlay (`F1` / `?`)**: Pressing `F1` or `?` (when the chat input is not focused) opens a non-modal keyboard shortcuts window displaying all key bindings categorized by scope (global, chat, hud, dock, radial, palette, dialogs).
+- **`UI_INTERACTIVE` Setting**: Setting `UI_INTERACTIVE=0` disables pointer manipulation, radial menus, and drag events while preserving keyboard accessibility and visual rendering.
 
 ### Motion Modes & Adaptive Quality Governor
 - **Motion Modes (`UI_MOTION`)**:
@@ -931,7 +1033,7 @@ pytest
 ```
 
 **Current Test Count**:
-- **1343 passed, 2 skipped** (1345 collected tests)
+- **1482 passed, 2 skipped** (1484 collected tests)
 
 ---
 

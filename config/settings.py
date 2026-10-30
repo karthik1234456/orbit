@@ -275,6 +275,15 @@ SESSION_CONTEXT: bool = _parse_bool(os.getenv("SESSION_CONTEXT"), True)
 SESSION_TTL_SECONDS: float = _parse_float(os.getenv("SESSION_TTL_SECONDS"), 1800.0)
 REMINDERS_ENABLED: bool = _parse_bool(os.getenv("REMINDERS_ENABLED"), True)
 SYSTEM_CONTROLS_ENABLED: bool = _parse_bool(os.getenv("SYSTEM_CONTROLS_ENABLED"), sys.platform == "win32")
+WINDOW_CONTROL_ENABLED: bool = _parse_bool(os.getenv("WINDOW_CONTROL_ENABLED"), True)
+FILES_ENABLED: bool = _parse_bool(os.getenv("FILES_ENABLED"), True)
+SCREENSHOTS_ENABLED: bool = _parse_bool(os.getenv("SCREENSHOTS_ENABLED"), True)
+TYPING_ENABLED: bool = _parse_bool(os.getenv("TYPING_ENABLED"), False)
+SLEEP_ENABLED: bool = _parse_bool(os.getenv("SLEEP_ENABLED"), False)
+MESSAGING_ENABLED: bool = _parse_bool(os.getenv("MESSAGING_ENABLED"), True)
+_raw_send_mode = os.getenv("WHATSAPP_SEND_MODE", "draft").strip().lower()
+WHATSAPP_SEND_MODE: str = _raw_send_mode if _raw_send_mode in ("draft", "send") else "draft"
+WHATSAPP_PROCESS_NAMES: tuple[str, ...] = ("WhatsApp.exe", "WhatsApp.Root.exe")
 
 TOOL_ROUTING: bool = _parse_bool(os.getenv("TOOL_ROUTING"), False)
 DOCTOR_ON_START: bool = _parse_bool(os.getenv("DOCTOR_ON_START"), True)
@@ -353,6 +362,16 @@ ALLOWED_UI_STYLE = ("hud", "classic")
 ALLOWED_UI_THEME = ("cyan", "gold", "mono")
 ALLOWED_UI_MOTION = ("full", "reduced", "off")
 ALLOWED_HUD_FPS = (15, 24, 30)
+ALLOWED_UI_REALISM = ("full", "lite", "off")
+
+
+def _parse_ui_realism(val: Optional[str], default: str = "full") -> str:
+    if val is None or not val.strip():
+        return default
+    v = val.strip().lower()
+    if v in ALLOWED_UI_REALISM:
+        return v
+    return default
 
 
 def _parse_ui_style(val: Optional[str], default: str = "hud") -> str:
@@ -382,6 +401,22 @@ def _parse_ui_motion(val: Optional[str], default: str = "full") -> str:
     return default
 
 
+def _parse_ui_interactive(val: Any, default: int = 1) -> int:
+    if val is None:
+        return default
+    if isinstance(val, str):
+        v = val.strip().lower()
+        if v in ("0", "false", "no", "off"):
+            return 0
+        if v in ("1", "true", "yes", "on"):
+            return 1
+        return default
+    try:
+        return 1 if int(val) else 0
+    except (ValueError, TypeError):
+        return default
+
+
 def _parse_hud_fps(val: Any, default: int = 30) -> int:
     if val is None:
         return default
@@ -398,6 +433,8 @@ UI_STYLE: str = _parse_ui_style(os.getenv("UI_STYLE"), "hud")
 UI_THEME: str = _parse_ui_theme(os.getenv("UI_THEME"), "cyan")
 UI_MOTION: str = _parse_ui_motion(os.getenv("UI_MOTION"), "full")
 HUD_FPS: int = _parse_hud_fps(os.getenv("HUD_FPS"), 30)
+UI_REALISM: str = _parse_ui_realism(os.getenv("UI_REALISM"), "full")
+UI_INTERACTIVE: int = _parse_ui_interactive(os.getenv("UI_INTERACTIVE"), 1)
 
 
 def __getattr__(name: str) -> Any:
@@ -459,6 +496,10 @@ def __getattr__(name: str) -> Any:
         return _parse_ui_motion(os.getenv("UI_MOTION"), "full")
     if name == "HUD_FPS":
         return _parse_hud_fps(os.getenv("HUD_FPS"), 30)
+    if name == "UI_REALISM":
+        return _parse_ui_realism(os.getenv("UI_REALISM"), "full")
+    if name == "UI_INTERACTIVE":
+        return _parse_ui_interactive(os.getenv("UI_INTERACTIVE"), 1)
     if name == "RAG_EMBEDDINGS":
         return _parse_bool(os.getenv("RAG_EMBEDDINGS"), False)
     if name == "RAG_EMBED_MODEL":
@@ -507,6 +548,23 @@ def __getattr__(name: str) -> Any:
         return _parse_float_range(os.getenv("TTS_VOLUME"), 1.0, 0.3, 1.0)
     if name == "SYSTEM_CONTROLS_ENABLED":
         return _parse_bool(os.getenv("SYSTEM_CONTROLS_ENABLED"), sys.platform == "win32")
+    if name == "WINDOW_CONTROL_ENABLED":
+        return _parse_bool(os.getenv("WINDOW_CONTROL_ENABLED"), True)
+    if name == "FILES_ENABLED":
+        return _parse_bool(os.getenv("FILES_ENABLED"), True)
+    if name == "SCREENSHOTS_ENABLED":
+        return _parse_bool(os.getenv("SCREENSHOTS_ENABLED"), True)
+    if name == "TYPING_ENABLED":
+        return _parse_bool(os.getenv("TYPING_ENABLED"), False)
+    if name == "SLEEP_ENABLED":
+        return _parse_bool(os.getenv("SLEEP_ENABLED"), False)
+    if name == "MESSAGING_ENABLED":
+        return _parse_bool(os.getenv("MESSAGING_ENABLED"), True)
+    if name == "WHATSAPP_SEND_MODE":
+        mode = os.getenv("WHATSAPP_SEND_MODE", "draft").strip().lower()
+        return mode if mode in ("draft", "send") else "draft"
+    if name == "WHATSAPP_PROCESS_NAMES":
+        return ("WhatsApp.exe", "WhatsApp.Root.exe")
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 
@@ -553,12 +611,19 @@ def __dir__() -> list[str]:
             "UI_THEME",
             "UI_MOTION",
             "HUD_FPS",
+        "UI_REALISM",
+        "UI_INTERACTIVE",
             "VOICES_DIR",
             "TTS_ENGINE",
             "PIPER_VOICE",
             "TTS_SPEED",
             "TTS_VOLUME",
             "SYSTEM_CONTROLS_ENABLED",
+            "WINDOW_CONTROL_ENABLED",
+            "FILES_ENABLED",
+            "SCREENSHOTS_ENABLED",
+            "TYPING_ENABLED",
+            "SLEEP_ENABLED",
         }
     )
 

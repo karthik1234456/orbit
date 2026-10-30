@@ -265,6 +265,125 @@ def handle_set_command(
         print_func("Setting unchanged.")
 
 
+def handle_contacts_command(user_input: str, store: Any) -> None:
+    """Handle /contacts and /contact add/edit/delete commands."""
+    from contacts.store import mask_phone
+    parts = user_input.strip().split()
+    cmd = parts[0].lower()
+    subcmd = parts[1].lower() if len(parts) > 1 else ""
+
+    if cmd == "/contacts" or (cmd == "/contact" and subcmd in ("", "list")):
+        contacts = store.list_contacts()
+        if not contacts:
+            print("No contacts saved yet. Use '/contact add' to add one.")
+            return
+        print(f"\nContacts ({len(contacts)}/200):")
+        print(f"{'#':<4} {'Name':<20} {'Phone':<16} {'Email':<25} {'Aliases'}")
+        print("-" * 75)
+        for c in contacts:
+            masked = mask_phone(c.phone) if c.phone else ""
+            aliases_str = ", ".join(c.aliases) if c.aliases else ""
+            print(f"{c.id:<4} {c.display_name:<20} {masked:<16} {c.email or '':<25} {aliases_str}")
+        print()
+        return
+
+    if cmd == "/contact" and subcmd == "add":
+        name = input("Contact display name: ").strip()
+        if not name:
+            print("Cancelled: Name cannot be empty.")
+            return
+        phone = input("Phone number (8-15 digits, digits only, or empty): ").strip() or None
+        email = input("Email address (or empty): ").strip() or None
+        raw_aliases = input("Aliases (comma-separated, or empty): ").strip()
+        aliases = [a.strip() for a in raw_aliases.split(",") if a.strip()]
+
+        confirm = input(f"Save new contact '{name}'? (y/n): ").strip().lower()
+        if confirm != "y":
+            print("Contact creation cancelled.")
+            return
+
+        try:
+            contact = store.add(display_name=name, phone=phone, email=email, aliases=aliases)
+            print(f"Added contact '{contact.display_name}' (ID: {contact.id}).")
+        except Exception as exc:
+            print(f"Error adding contact: {exc}")
+        return
+
+    if cmd == "/contact" and subcmd == "edit":
+        target = input("Contact ID or Name to edit: ").strip()
+        if not target:
+            print("Cancelled: No contact specified.")
+            return
+        contact = None
+        if target.isdigit():
+            contact = store.get(int(target))
+        if contact is None:
+            try:
+                ref = store.resolve(target)
+                contact = store.get(ref.id)
+            except Exception:
+                pass
+        if contact is None:
+            print(f"Contact '{target}' not found.")
+            return
+
+        print(f"Editing contact: {contact.display_name} (leave empty to keep current value)")
+        new_name = input(f"Display name [{contact.display_name}]: ").strip() or contact.display_name
+        current_phone = contact.phone or ""
+        new_phone_in = input(f"Phone number [{current_phone}]: ").strip()
+        new_phone = new_phone_in if new_phone_in else contact.phone
+        current_email = contact.email or ""
+        new_email_in = input(f"Email [{current_email}]: ").strip()
+        new_email = new_email_in if new_email_in else contact.email
+        current_aliases = ", ".join(contact.aliases)
+        new_aliases_in = input(f"Aliases [{current_aliases}]: ").strip()
+        new_aliases = [a.strip() for a in new_aliases_in.split(",") if a.strip()] if new_aliases_in else contact.aliases
+
+        confirm = input(f"Save changes to '{new_name}'? (y/n): ").strip().lower()
+        if confirm != "y":
+            print("Contact update cancelled.")
+            return
+
+        try:
+            updated = store.update(contact.id, display_name=new_name, phone=new_phone, email=new_email, aliases=new_aliases)
+            print(f"Updated contact '{updated.display_name}'.")
+        except Exception as exc:
+            print(f"Error updating contact: {exc}")
+        return
+
+    if cmd == "/contact" and subcmd == "delete":
+        target = input("Contact ID or Name to delete: ").strip()
+        if not target:
+            print("Cancelled: No contact specified.")
+            return
+        contact = None
+        if target.isdigit():
+            contact = store.get(int(target))
+        if contact is None:
+            try:
+                ref = store.resolve(target)
+                contact = store.get(ref.id)
+            except Exception:
+                pass
+        if contact is None:
+            print(f"Contact '{target}' not found.")
+            return
+
+        confirm = input(f"Delete contact '{contact.display_name}'? (y/n): ").strip().lower()
+        if confirm != "y":
+            print("Contact deletion cancelled.")
+            return
+
+        try:
+            store.delete(contact.id)
+            print(f"Deleted contact '{contact.display_name}'.")
+        except Exception as exc:
+            print(f"Error deleting contact: {exc}")
+        return
+
+    print("Usage: /contacts, /contact add, /contact edit, /contact delete")
+
+
 def main() -> None:
     """Terminal chat loop managing user input, permissions, tool execution, and responses."""
     speaker = None
@@ -283,11 +402,18 @@ def main() -> None:
         # Build interrupt monitor
         monitor = InterruptMonitor()
 
-        def confirm_tool(tool_name: str, args: dict, warning: Optional[str] = None) -> bool:
+        def confirm_tool(
+            tool_name: str,
+            args: dict,
+            warning: Optional[str] = None,
+            summary: Optional[str] = None,
+        ) -> bool:
             """Prompt the user in the terminal to authorize actions requiring confirmation."""
             try:
                 if warning:
                     print(f"WARNING: {warning}")
+                if summary:
+                    print(f"SUMMARY: {summary}")
                 prompt = f"ORBIT wants to run {tool_name} with {args}. Allow? (y/n): "
                 with monitor.paused():
                     answer = input(prompt).strip().lower()
@@ -439,6 +565,14 @@ def main() -> None:
 
                 if user_input.lower() == "/settings":
                     print_settings_table()
+                    continue
+
+                if user_input.lower() == "/contacts" or user_input.lower().startswith("/contact"):
+                    c_store = getattr(app, "contact_store", None)
+                    if c_store is None:
+                        from contacts.store import ContactStore
+                        c_store = ContactStore()
+                    handle_contacts_command(user_input, c_store)
                     continue
 
                 if user_input.lower().startswith("/set"):
@@ -728,6 +862,10 @@ def main() -> None:
                     print("  /doctor            - Run environment doctor checks")
                     print("  /diag              - Save and view diagnostic report")
                     print("  /settings          - Display editable configuration settings table")
+                    print("  /contacts          - View saved contacts with masked numbers")
+                    print("  /contact add       - Add a new contact (name, phone, email, aliases)")
+                    print("  /contact edit      - Edit an existing contact")
+                    print("  /contact delete    - Delete a contact")
                     print("  /set <key> <val>   - Update a configuration setting in .env")
                     print("  /status            - Show provider and local Ollama model reachability")
                     print("  /context           - Inspect active session context (last site, app, query)")

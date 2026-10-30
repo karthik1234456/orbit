@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 import os
 import re
-from typing import Any, Callable, Mapping, Optional, Union
+from typing import Any, Callable, Mapping, Optional, Sequence, Union
 
 _DISALLOWED_CHARS = set(";&|`$><")
 
@@ -208,6 +208,27 @@ def is_bare_browser_verb(text: str) -> bool:
         return False
     w = words[0].lower()
     return any(_match_verb(w, v) for v in BARE_BROWSER_VERBS)
+
+
+@dataclass
+class ShortcutReply:
+    """Fixed plain-text reply for a shortcut that executes no tool."""
+
+    reply: str
+
+    @property
+    def text(self) -> str:
+        return self.reply
+
+    def __str__(self) -> str:
+        return self.reply
+
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, str):
+            return self.reply == other
+        if isinstance(other, ShortcutReply):
+            return self.reply == other.reply
+        return False
 
 
 @dataclass
@@ -660,6 +681,575 @@ def is_system_control_pattern(text: str) -> bool:
     return parse_system_control_shortcut(cleaned) is not None
 
 
+
+RESERVED_CONTACT_WORDS: set[str] = {
+    "me", "him", "her", "them", "us", "a", "an", "the", "this", "that", "it",
+    "later", "soon", "now", "back", "again", "when", "if", "message", "text", "someone"
+}
+
+_NAME_CHAR_RE = re.compile(r"^[A-Za-z0-9 '-]+$")
+
+
+def _is_valid_contact_name_syntax(name: str) -> bool:
+    """Validate candidate contact name syntax (1-3 words, allowed chars, no reserved words)."""
+    if not name or not isinstance(name, str):
+        return False
+    trimmed = name.strip()
+    words = trimmed.split()
+    if not (1 <= len(words) <= 3):
+        return False
+    if not _NAME_CHAR_RE.match(trimmed):
+        return False
+    first = words[0].lower().strip("'-")
+    last = words[-1].lower().strip("'-")
+    if first in RESERVED_CONTACT_WORDS or last in RESERVED_CONTACT_WORDS:
+        return False
+    return True
+
+
+def _is_valid_body(body: str) -> bool:
+    """Validate message body: 1-300 chars, 1-60 words, not starting with conjunction/sequencing word."""
+    if not body or not isinstance(body, str):
+        return False
+    trimmed = body.strip()
+    if not (1 <= len(trimmed) <= 300):
+        return False
+    words = trimmed.split()
+    if not (1 <= len(words) <= 60):
+        return False
+    first = words[0].lower().strip(".,!?:;\"'()[]{}")
+    if first in CONJUNCTIONS_SEQUENCING:
+        return False
+    return True
+
+
+def _match_contact_name(raw_name: str, contacts: Any = None, contact_names: Optional[Sequence[str]] = None) -> Optional[str]:
+    """Match candidate contact name strictly against known contacts by longest exact match (never fuzzy)."""
+    if not raw_name or not isinstance(raw_name, str):
+        return None
+    query_norm = " ".join(raw_name.strip().split()).lower()
+    if not query_norm:
+        return None
+
+    # If contacts has resolve() method (e.g. ContactStore)
+    if contacts is not None and hasattr(contacts, "resolve"):
+        try:
+            ref = contacts.resolve(raw_name)
+            return ref.display_name
+        except Exception:
+            pass
+
+    # Build candidates list
+    candidates: list[tuple[str, str]] = []  # (normalized_alias, canonical_display_name)
+    if contacts is not None and hasattr(contacts, "list_contacts"):
+        try:
+            for c in contacts.list_contacts():
+                candidates.append(( " ".join(c.display_name.strip().split()).lower(), c.display_name ))
+                for a in c.aliases:
+                    candidates.append(( " ".join(a.strip().split()).lower(), c.display_name ))
+        except Exception:
+            pass
+    elif contact_names is not None:
+        for n in contact_names:
+            candidates.append(( " ".join(n.strip().split()).lower(), n.strip() ))
+
+    # Sort candidates by number of words descending, then character length descending
+    candidates.sort(key=lambda item: (len(item[0].split()), len(item[0])), reverse=True)
+
+    for norm_name, disp_name in candidates:
+        if norm_name == query_norm:
+            return disp_name
+
+    return None
+
+
+def parse_messaging_shortcut(
+    cleaned: str,
+    contacts: Any = None,
+    contact_names: Optional[Sequence[str]] = None,
+) -> Optional[Union[ToolCallSpec, ShortcutReply]]:
+    """Parse cleaned user text into messaging ToolCallSpec or ShortcutReply."""
+    if not cleaned or not isinstance(cleaned, str):
+        return None
+
+    if any(ch in _DISALLOWED_CHARS for ch in cleaned):
+        return None
+
+    # Load contacts if not passed
+    if contacts is None and contact_names is None:
+        try:
+            from contacts.store import ContactStore
+            contacts = ContactStore()
+        except Exception:
+            contacts = None
+
+    # Pattern a1: text|message|whatsapp <name> (on whatsapp)? (saying|that|to say|:) <body>
+    m_a1 = re.match(
+        r"^(?:text|message|whatsapp)\s+(.+?)(?:\s+on\s+whatsapp)?\s+(?:saying|that|to\s+say|:)\s+(.+)$",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if m_a1:
+        raw_name = m_a1.group(1).strip()
+        body = m_a1.group(2).strip()
+        if _is_valid_body(body):
+            matched = _match_contact_name(raw_name, contacts=contacts, contact_names=contact_names)
+            if matched:
+                return ToolCallSpec(
+                    name="send_whatsapp",
+                    args={"contact": matched, "text": body, "attach_link": False},
+                    target_name="whatsapp",
+                )
+            if _is_valid_contact_name_syntax(raw_name):
+                return ShortcutReply(f"I don't have a contact called {raw_name}. Add it in Contacts.")
+        return None
+
+    # Pattern a2: send (a )?(whatsapp )?(message|text) to <name> (on whatsapp)? (saying|that|:) <body>
+    m_a2 = re.match(
+        r"^send\s+(?:a\s+)?(?:whatsapp\s+)?(?:message|text)\s+to\s+(.+?)(?:\s+on\s+whatsapp)?\s+(?:saying|that|:)\s+(.+)$",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if m_a2:
+        raw_name = m_a2.group(1).strip()
+        body = m_a2.group(2).strip()
+        if _is_valid_body(body):
+            matched = _match_contact_name(raw_name, contacts=contacts, contact_names=contact_names)
+            if matched:
+                return ToolCallSpec(
+                    name="send_whatsapp",
+                    args={"contact": matched, "text": body, "attach_link": False},
+                    target_name="whatsapp",
+                )
+            if _is_valid_contact_name_syntax(raw_name):
+                return ShortcutReply(f"I don't have a contact called {raw_name}. Add it in Contacts.")
+        return None
+
+    # Pattern b: (open|start) (a )?(whatsapp )?chat with <name>
+    m_b = re.match(
+        r"^(?:open|start)\s+(?:a\s+)?(?:whatsapp\s+)?chat\s+with\s+(.+)$",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if m_b:
+        raw_name = m_b.group(1).strip()
+        matched = _match_contact_name(raw_name, contacts=contacts, contact_names=contact_names)
+        if matched:
+            return ToolCallSpec(
+                name="send_whatsapp",
+                args={"contact": matched, "text": "", "attach_link": False},
+                target_name="whatsapp",
+            )
+        if _is_valid_contact_name_syntax(raw_name):
+            return ShortcutReply(f"I don't have a contact called {raw_name}. Add it in Contacts.")
+        return None
+
+    # Pattern c1: send (this|the|that) (link|page|video|article) to <name> (on whatsapp)?( (saying|with|:) <body>)?
+    m_c1 = re.match(
+        r"^send\s+(?:this|the|that)\s+(?:link|page|video|article)\s+to\s+(.+?)(?:\s+on\s+whatsapp)?(?:\s+(?:saying|with|:)\s+(.+))?$",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if m_c1:
+        raw_name = m_c1.group(1).strip()
+        body = (m_c1.group(2) or "").strip()
+        if body and not _is_valid_body(body):
+            return None
+        matched = _match_contact_name(raw_name, contacts=contacts, contact_names=contact_names)
+        if matched:
+            return ToolCallSpec(
+                name="send_whatsapp",
+                args={"contact": matched, "text": body, "attach_link": True},
+                target_name="whatsapp",
+            )
+        if _is_valid_contact_name_syntax(raw_name):
+            return ShortcutReply(f"I don't have a contact called {raw_name}. Add it in Contacts.")
+        return None
+
+    # Pattern c2: share (this|the) (link|page|video|article) with <name> (on whatsapp)?
+    m_c2 = re.match(
+        r"^share\s+(?:this|the)\s+(?:link|page|video|article)\s+with\s+(.+?)(?:\s+on\s+whatsapp)?$",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if m_c2:
+        raw_name = m_c2.group(1).strip()
+        matched = _match_contact_name(raw_name, contacts=contacts, contact_names=contact_names)
+        if matched:
+            return ToolCallSpec(
+                name="send_whatsapp",
+                args={"contact": matched, "text": "", "attach_link": True},
+                target_name="whatsapp",
+            )
+        if _is_valid_contact_name_syntax(raw_name):
+            return ShortcutReply(f"I don't have a contact called {raw_name}. Add it in Contacts.")
+        return None
+
+    # Pattern c3: message <name> (this|the) link
+    m_c3 = re.match(
+        r"^message\s+(.+?)\s+(?:this|the)\s+link$",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if m_c3:
+        raw_name = m_c3.group(1).strip()
+        matched = _match_contact_name(raw_name, contacts=contacts, contact_names=contact_names)
+        if matched:
+            return ToolCallSpec(
+                name="send_whatsapp",
+                args={"contact": matched, "text": "", "attach_link": True},
+                target_name="whatsapp",
+            )
+        if _is_valid_contact_name_syntax(raw_name):
+            return ShortcutReply(f"I don't have a contact called {raw_name}. Add it in Contacts.")
+        return None
+
+    # Pattern d1: (email|mail) <name> (saying|that|about|:) <body>
+    m_d1 = re.match(
+        r"^(?:email|mail)\s+(.+?)\s+(?:saying|that|about|:)\s+(.+)$",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if m_d1:
+        raw_name = m_d1.group(1).strip()
+        body = m_d1.group(2).strip()
+        if _is_valid_body(body):
+            matched = _match_contact_name(raw_name, contacts=contacts, contact_names=contact_names)
+            if matched:
+                return ToolCallSpec(
+                    name="open_email_draft",
+                    args={"contact": matched, "subject": body[:60], "body": body, "attach_link": False},
+                    target_name="email",
+                )
+            if _is_valid_contact_name_syntax(raw_name):
+                return ShortcutReply(f"I don't have a contact called {raw_name}. Add it in Contacts.")
+        return None
+
+    # Pattern d2: email (this|the) (link|page) to <name>
+    m_d2 = re.match(
+        r"^email\s+(?:this|the)\s+(?:link|page)\s+to\s+(.+)$",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if m_d2:
+        raw_name = m_d2.group(1).strip()
+        matched = _match_contact_name(raw_name, contacts=contacts, contact_names=contact_names)
+        if matched:
+            return ToolCallSpec(
+                name="open_email_draft",
+                args={"contact": matched, "subject": "", "body": "", "attach_link": True},
+                target_name="email",
+            )
+        if _is_valid_contact_name_syntax(raw_name):
+            return ShortcutReply(f"I don't have a contact called {raw_name}. Add it in Contacts.")
+        return None
+
+    # Bare pattern: text|message <name>
+    m_bare = re.match(
+        r"^(?:text|message)\s+(.+)$",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if m_bare:
+        raw_name = m_bare.group(1).strip()
+        matched = _match_contact_name(raw_name, contacts=contacts, contact_names=contact_names)
+        if matched:
+            return ShortcutReply(f"What should I say to {matched}? Try: text {matched} saying ...")
+        if _is_valid_contact_name_syntax(raw_name):
+            return ShortcutReply(f"I don't have a contact called {raw_name}. Add it in Contacts.")
+        return None
+
+    return None
+
+
+def parse_laptop_shortcut(
+    cleaned: str,
+    allowed_apps: Optional[Mapping[str, Any]] = None,
+    state: Optional[Any] = None,
+    window_control_enabled: Optional[bool] = None,
+    files_enabled: Optional[bool] = None,
+    screenshots_enabled: Optional[bool] = None,
+    typing_enabled: Optional[bool] = None,
+    sleep_enabled: Optional[bool] = None,
+) -> Optional[Union[ToolCallSpec, ShortcutReply]]:
+    """Parse window controls, user file operations, screenshots, typing, and sleep shortcuts."""
+    from config import settings
+    from config.apps import ALLOWED_APPS, TYPING_ALLOWLIST
+
+    apps_map = allowed_apps if allowed_apps is not None else ALLOWED_APPS
+
+    if window_control_enabled is None:
+        window_control_enabled = getattr(settings, "WINDOW_CONTROL_ENABLED", True)
+    if files_enabled is None:
+        files_enabled = getattr(settings, "FILES_ENABLED", True)
+    if screenshots_enabled is None:
+        screenshots_enabled = getattr(settings, "SCREENSHOTS_ENABLED", True)
+    if typing_enabled is None:
+        typing_enabled = getattr(settings, "TYPING_ENABLED", False)
+    if sleep_enabled is None:
+        sleep_enabled = getattr(settings, "SLEEP_ENABLED", False)
+
+    def _resolve_win_app(name: str) -> Optional[str]:
+        c = name.strip().lower()
+        if c in apps_map:
+            info = apps_map[c]
+            if isinstance(info, dict) and info.get("windows"):
+                return c
+        return None
+
+    # show desktop / minimize everything
+    if re.match(r"^(?:show\s+(?:the\s+)?desktop|minimize\s+(?:everything|all\s+windows))$", cleaned, re.IGNORECASE):
+        if not window_control_enabled:
+            return ShortcutReply("Window control is off. Turn on WINDOW_CONTROL_ENABLED in Settings.")
+        return ToolCallSpec(name="show_desktop", args={}, target_name="desktop")
+
+    # switch to / focus <app>
+    m_focus = re.match(r"^(?:switch\s+to|focus)\s+([a-zA-Z0-9_-]+)$", cleaned, re.IGNORECASE)
+    if m_focus:
+        app_key = _resolve_win_app(m_focus.group(1))
+        if app_key:
+            if not window_control_enabled:
+                return ShortcutReply("Window control is off. Turn on WINDOW_CONTROL_ENABLED in Settings.")
+            return ToolCallSpec(name="focus_app", args={"app": app_key}, target_name=app_key)
+        return None
+
+    # bring <app> to the front
+    m_front = re.match(r"^bring\s+([a-zA-Z0-9_-]+)\s+to\s+the\s+front$", cleaned, re.IGNORECASE)
+    if m_front:
+        app_key = _resolve_win_app(m_front.group(1))
+        if app_key:
+            if not window_control_enabled:
+                return ShortcutReply("Window control is off. Turn on WINDOW_CONTROL_ENABLED in Settings.")
+            return ToolCallSpec(name="focus_app", args={"app": app_key}, target_name=app_key)
+        return None
+
+    # minimize <app>
+    m_min = re.match(r"^minimize\s+([a-zA-Z0-9_-]+)$", cleaned, re.IGNORECASE)
+    if m_min:
+        app_key = _resolve_win_app(m_min.group(1))
+        if app_key:
+            if not window_control_enabled:
+                return ShortcutReply("Window control is off. Turn on WINDOW_CONTROL_ENABLED in Settings.")
+            return ToolCallSpec(name="minimize_app", args={"app": app_key}, target_name=app_key)
+        return None
+
+    # maximize <app>
+    m_max = re.match(r"^maximize\s+([a-zA-Z0-9_-]+)$", cleaned, re.IGNORECASE)
+    if m_max:
+        app_key = _resolve_win_app(m_max.group(1))
+        if app_key:
+            if not window_control_enabled:
+                return ShortcutReply("Window control is off. Turn on WINDOW_CONTROL_ENABLED in Settings.")
+            return ToolCallSpec(name="maximize_app", args={"app": app_key}, target_name=app_key)
+        return None
+
+    # restore <app>
+    m_res = re.match(r"^restore\s+([a-zA-Z0-9_-]+)$", cleaned, re.IGNORECASE)
+    if m_res:
+        app_key = _resolve_win_app(m_res.group(1))
+        if app_key:
+            if not window_control_enabled:
+                return ShortcutReply("Window control is off. Turn on WINDOW_CONTROL_ENABLED in Settings.")
+            return ToolCallSpec(name="restore_app", args={"app": app_key}, target_name=app_key)
+        return None
+
+    # snap <app> (to the )?(left|right)
+    m_snap = re.match(r"^snap\s+([a-zA-Z0-9_-]+)(?:\s+to\s+the)?\s+(left|right)$", cleaned, re.IGNORECASE)
+    if m_snap:
+        app_key = _resolve_win_app(m_snap.group(1))
+        side = m_snap.group(2).lower()
+        if app_key and side in ("left", "right"):
+            if not window_control_enabled:
+                return ShortcutReply("Window control is off. Turn on WINDOW_CONTROL_ENABLED in Settings.")
+            return ToolCallSpec(name="snap_app", args={"app": app_key, "side": side}, target_name=f"{app_key} {side}")
+        return None
+
+    # put <app> on the (left|right)( half)?
+    m_put = re.match(r"^put\s+([a-zA-Z0-9_-]+)\s+on\s+the\s+(left|right)(?:\s+half)?$", cleaned, re.IGNORECASE)
+    if m_put:
+        app_key = _resolve_win_app(m_put.group(1))
+        side = m_put.group(2).lower()
+        if app_key and side in ("left", "right"):
+            if not window_control_enabled:
+                return ShortcutReply("Window control is off. Turn on WINDOW_CONTROL_ENABLED in Settings.")
+            return ToolCallSpec(name="snap_app", args={"app": app_key, "side": side}, target_name=f"{app_key} {side}")
+        return None
+
+    # Screenshots
+    if re.match(r"^(?:take\s+(?:a\s+)?(?:screenshot|screen\s+shot)|screenshot|capture\s+(?:the\s+)?screen)$", cleaned, re.IGNORECASE):
+        if not screenshots_enabled:
+            return ShortcutReply("Screenshots are off. Turn on SCREENSHOTS_ENABLED in Settings.")
+        return ToolCallSpec(name="take_screenshot", args={}, target_name="screenshot")
+
+    # Sleep
+    if re.match(r"^put\s+(?:the\s+|this\s+|my\s+)?(?:computer|laptop|pc)\s+to\s+sleep$", cleaned, re.IGNORECASE):
+        if not sleep_enabled:
+            return ShortcutReply("Sleep is off. Turn on SLEEP_ENABLED in Settings.")
+        return ToolCallSpec(name="sleep_computer", args={}, target_name="sleep")
+
+    # Typing
+    m_type1 = re.match(r"^type\s+(.+?)\s+(?:in|into)\s+([a-zA-Z0-9_-]+)$", cleaned, re.IGNORECASE)
+    m_type2 = re.match(r"^in\s+([a-zA-Z0-9_-]+)\s+type\s+(.+)$", cleaned, re.IGNORECASE)
+    m_type3 = re.match(r"^write\s+(.+?)\s+in\s+([a-zA-Z0-9_-]+)$", cleaned, re.IGNORECASE)
+
+    raw_text: Optional[str] = None
+    target_app: Optional[str] = None
+
+    if m_type1:
+        raw_text = m_type1.group(1).strip()
+        target_app = m_type1.group(2).strip().lower()
+    elif m_type2:
+        target_app = m_type2.group(1).strip().lower()
+        raw_text = m_type2.group(2).strip()
+    elif m_type3:
+        raw_text = m_type3.group(1).strip()
+        target_app = m_type3.group(2).strip().lower()
+
+    if raw_text is not None and target_app is not None:
+        words = raw_text.split()
+        if (
+            1 <= len(raw_text) <= 300
+            and 1 <= len(words) <= 60
+            and not re.match(r"^(?:and|then|after|so|but|or|because)", raw_text, re.IGNORECASE)
+        ):
+            allowed_set = {a.lower() for a in TYPING_ALLOWLIST}
+            if target_app not in allowed_set:
+                allow_str = ", ".join(sorted(list(allowed_set)))
+                return ShortcutReply(f"I only type into {allow_str}.")
+            if not typing_enabled:
+                return ShortcutReply("Typing is off. Turn on TYPING_ENABLED in Settings.")
+            return ToolCallSpec(
+                name="type_into_app",
+                args={"app": target_app, "text": raw_text},
+                target_name=target_app,
+            )
+        return None
+
+    # File open / reveal
+    _ORDS = {
+        "first": 1, "1st": 1, "top": 1, "1": 1,
+        "second": 2, "2nd": 2, "2": 2,
+        "third": 3, "3rd": 3, "3": 3,
+        "fourth": 4, "4th": 4, "4": 4,
+        "fifth": 5, "5th": 5, "5": 5,
+    }
+
+    m_rev = re.match(
+        r"^reveal\s+(?:the\s+)?(first|second|third|fourth|fifth|1st|2nd|3rd|4th|5th|top)\s+file\s+in\s+(?:the\s+)?folder$",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if m_rev:
+        idx = _ORDS[m_rev.group(1).lower()]
+        if not files_enabled:
+            return ShortcutReply("File operations are off. Turn on FILES_ENABLED in Settings.")
+        return ToolCallSpec(name="reveal_found_file", args={"index": idx}, target_name=f"file #{idx}")
+
+    m_open_file = re.match(
+        r"^open\s+(?:the\s+)?(first|second|third|fourth|fifth|1st|2nd|3rd|4th|5th|top)\s+file$",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if m_open_file:
+        idx = _ORDS[m_open_file.group(1).lower()]
+        if not files_enabled:
+            return ShortcutReply("File operations are off. Turn on FILES_ENABLED in Settings.")
+        return ToolCallSpec(name="open_found_file", args={"index": idx}, target_name=f"file #{idx}")
+
+    m_open_num = re.match(
+        r"^open\s+file\s+(?:number\s+)?([1-5])$",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if m_open_num:
+        idx = int(m_open_num.group(1))
+        if not files_enabled:
+            return ShortcutReply("File operations are off. Turn on FILES_ENABLED in Settings.")
+        return ToolCallSpec(name="open_found_file", args={"index": idx}, target_name=f"file #{idx}")
+
+    m_bare_ord = re.match(
+        r"^open\s+(?:the\s+)?(first|second|third|fourth|fifth|1st|2nd|3rd|4th|5th|top)\s+(?:one|result)$",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if m_bare_ord:
+        idx = _ORDS[m_bare_ord.group(1).lower()]
+        is_files = (
+            state is not None
+            and getattr(state, "last_result_kind", None) == "files"
+            and bool(state.get_found_files())
+        )
+        if is_files:
+            if not files_enabled:
+                return ShortcutReply("File operations are off. Turn on FILES_ENABLED in Settings.")
+            return ToolCallSpec(name="open_found_file", args={"index": idx}, target_name=f"file #{idx}")
+
+    # File search
+    _KIND_MAP = {
+        "pdf": "pdf",
+        "document": "document",
+        "documents": "document",
+        "image": "image",
+        "images": "image",
+        "photo": "image",
+        "photos": "image",
+        "picture": "image",
+        "pictures": "image",
+        "video": "video",
+        "videos": "video",
+        "audio": "audio",
+        "file": "any",
+        "files": "any",
+    }
+
+    m_latest = re.match(
+        r"^find\s+(?:my\s+)?(?:latest|newest|most\s+recent)\s+(download|pdf|document|image|photo|picture|video|file)$",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if m_latest:
+        target_kind_word = m_latest.group(1).lower()
+        if target_kind_word == "download":
+            kind = "any"
+            query = "download"
+        else:
+            kind = _KIND_MAP.get(target_kind_word, "any")
+            query = ""
+        if not files_enabled:
+            return ShortcutReply("File operations are off. Turn on FILES_ENABLED in Settings.")
+        return ToolCallSpec(
+            name="find_files",
+            args={"query": query, "kind": kind, "recent": True, "_free_text": False},
+            target_name=f"recent {target_kind_word}",
+        )
+
+    m_find = re.match(
+        r"^find\s+(?:my\s+)?(recent\s+)?(?:(pdf|document|documents|image|images|photo|photos|picture|pictures|video|videos|audio|file|files)\s+)?(?:(?:named|called|about)\s+)?([a-zA-Z0-9\s]+)$",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if m_find:
+        is_recent_word = bool(m_find.group(1))
+        kind_word = (m_find.group(2) or "").lower()
+        query_str = m_find.group(3).strip()
+        has_named_clause = bool(re.search(r"(?:named|called|about)", cleaned, re.IGNORECASE))
+
+        if kind_word or is_recent_word or has_named_clause:
+            words = query_str.split()
+            if 1 <= len(words) <= 5 and not any(ch in r"*?/[\];:|`<>$" for ch in query_str):
+                kind = _KIND_MAP.get(kind_word, "any")
+                recent = is_recent_word
+                if not files_enabled:
+                    return ShortcutReply("File operations are off. Turn on FILES_ENABLED in Settings.")
+                return ToolCallSpec(
+                    name="find_files",
+                    args={"query": query_str, "kind": kind, "recent": recent, "_free_text": True},
+                    target_name=f"{kind} files",
+                )
+
+    return None
+
+
 def parse_shortcut(
     text: str,
     allowed_apps: Optional[Mapping[str, Any]] = None,
@@ -669,7 +1259,15 @@ def parse_shortcut(
     reminders_enabled: Optional[bool] = None,
     system_controls_enabled: Optional[bool] = None,
     clock: Optional[Callable[[], datetime]] = None,
-) -> Optional[Union[ToolCallSpec, ShortcutPlan]]:
+    contacts: Optional[Any] = None,
+    contact_names: Optional[Sequence[str]] = None,
+    messaging_enabled: Optional[bool] = None,
+    window_control_enabled: Optional[bool] = None,
+    files_enabled: Optional[bool] = None,
+    screenshots_enabled: Optional[bool] = None,
+    typing_enabled: Optional[bool] = None,
+    sleep_enabled: Optional[bool] = None,
+) -> Optional[Union[ToolCallSpec, ShortcutPlan, ShortcutReply]]:
     """Parse user text into a ToolCallSpec or ShortcutPlan if it matches a strict shortcut pattern.
 
     Returns None for any text that does not strictly match the whitelisted patterns,
@@ -736,9 +1334,10 @@ def parse_shortcut(
         return None
 
     # Early rejections per Requirement 7:
-    # "in my default browser", "in chrome", and "in a new tab" return None
-    if re.search(r"\b(?:in\s+(?:my\s+)?default\s+browser|in\s+chrome|in\s+a\s+new\s+tab)\b", cleaned, re.IGNORECASE):
-        return None
+    # "in my default browser", "in chrome", and "in a new tab" return None (unless typing into an app)
+    if not re.match(r"^(?:type|write)\b|^in\s+[a-zA-Z0-9_-]+\s+type\b", cleaned, re.IGNORECASE):
+        if re.search(r"\b(?:in\s+(?:my\s+)?default\s+browser|in\s+chrome|in\s+a\s+new\s+tab)\b", cleaned, re.IGNORECASE):
+            return None
 
     # "open|click the first link|website|page" containing "or" returns None
     if (
@@ -773,6 +1372,38 @@ def parse_shortcut(
         sys_spec = parse_system_control_shortcut(cleaned)
         if sys_spec is not None:
             return sys_spec
+
+    # Messaging shortcuts (WhatsApp and Email)
+    if messaging_enabled is None:
+        env_m = os.getenv("MESSAGING_ENABLED")
+        if env_m is not None:
+            messaging_enabled = env_m.strip().lower() not in ("0", "false", "no", "off")
+        else:
+            from config import settings
+            messaging_enabled = getattr(settings, "MESSAGING_ENABLED", True)
+
+    if messaging_enabled:
+        msg_spec = parse_messaging_shortcut(
+            cleaned,
+            contacts=contacts,
+            contact_names=contact_names,
+        )
+        if msg_spec is not None:
+            return msg_spec
+
+    # Laptop shortcuts (window, files, screenshots, typing, sleep)
+    lap_spec = parse_laptop_shortcut(
+        cleaned,
+        allowed_apps=allowed_apps,
+        state=state,
+        window_control_enabled=window_control_enabled,
+        files_enabled=files_enabled,
+        screenshots_enabled=screenshots_enabled,
+        typing_enabled=typing_enabled,
+        sleep_enabled=sleep_enabled,
+    )
+    if lap_spec is not None:
+        return lap_spec
 
     if browser_enabled:
         if sites is None:

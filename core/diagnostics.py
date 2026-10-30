@@ -7,6 +7,7 @@ Redacts credentials, secrets, tokens, and caps file size at 20 KB.
 """
 
 from datetime import datetime, timezone
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -275,6 +276,35 @@ def build_diagnostics_text(
         f"Rate Limit Refusals: {refusals}"
     )
 
+    # Laptop Control section
+    win_ctl = bool(getattr(settings, "WINDOW_CONTROL_ENABLED", True))
+    files_on = bool(getattr(settings, "FILES_ENABLED", True))
+    sc_on = bool(getattr(settings, "SCREENSHOTS_ENABLED", True))
+    typ_on = bool(getattr(settings, "TYPING_ENABLED", False))
+    slp_on = bool(getattr(settings, "SLEEP_ENABLED", False))
+    plat_supported = sys.platform == "win32"
+    has_pillow = importlib.util.find_spec("PIL") is not None
+
+    from config.apps import ALLOWED_APPS, TYPING_ALLOWLIST
+    from tools.user_files import default_search_roots
+    apps_with_windows = sum(1 for a in ALLOWED_APPS.values() if isinstance(a, dict) and a.get("windows"))
+    roots_count = len(default_search_roots())
+    typing_allowlist_count = len(TYPING_ALLOWLIST)
+
+    sections.append(
+        "=== LAPTOP CONTROL ===\n"
+        f"WINDOW_CONTROL_ENABLED: {win_ctl}\n"
+        f"FILES_ENABLED: {files_on}\n"
+        f"SCREENSHOTS_ENABLED: {sc_on}\n"
+        f"TYPING_ENABLED: {typ_on}\n"
+        f"SLEEP_ENABLED: {slp_on}\n"
+        f"Platform Supported: {plat_supported}\n"
+        f"Pillow Present: {has_pillow}\n"
+        f"Apps With Windows: {apps_with_windows}\n"
+        f"Search Roots Count: {roots_count}\n"
+        f"Typing Allowlist Size: {typing_allowlist_count}"
+    )
+
     # HUD section
     ui_style = getattr(settings, "UI_STYLE", "hud")
     ui_theme = getattr(settings, "UI_THEME", "cyan")
@@ -294,15 +324,92 @@ def build_diagnostics_text(
             avg_frame_time = f"{avg_ft * 1000.0:.2f} ms"
         downgrades = int(getattr(hud_model, "downgrades_count", 0))
 
+    ui_realism = getattr(settings, "UI_REALISM", "full")
+    items_last = "n/a"
+    items_avg = "n/a"
+    sprites = "n/a"
+    bitmap_time = "n/a"
+    fallback_val = False
+
+    if hud_obj is not None:
+        val_last = getattr(hud_obj, "items_touched_last_frame", None)
+        if isinstance(val_last, (int, float)):
+            items_last = str(val_last)
+        elif val_last is not None and not hasattr(val_last, "_mock_return_value"):
+            items_last = str(val_last)
+
+        val_avg = getattr(hud_obj, "items_touched_average", None)
+        if isinstance(val_avg, (int, float)):
+            items_avg = f"{val_avg:.1f}"
+        elif val_avg is not None and not hasattr(val_avg, "_mock_return_value"):
+            items_avg = str(val_avg)
+
+        val_spr = getattr(hud_obj, "realism_sprite_count", None)
+        if isinstance(val_spr, (int, float)):
+            sprites = str(val_spr)
+        elif val_spr is not None and not hasattr(val_spr, "_mock_return_value"):
+            sprites = str(val_spr)
+
+        val_bt = getattr(hud_obj, "bitmap_build_ms", None)
+        if isinstance(val_bt, (int, float)) and val_bt > 0:
+            bitmap_time = f"{val_bt:.1f} ms"
+        elif val_bt is not None and not hasattr(val_bt, "_mock_return_value"):
+            bitmap_time = str(val_bt)
+
+        fb = getattr(hud_obj, "realism_fallback", False)
+        if not hasattr(fb, "_mock_return_value"):
+            fallback_val = fb or False
+
     sections.append(
         "=== HUD ===\n"
         f"UI Style: {ui_style}\n"
         f"UI Theme: {ui_theme}\n"
         f"UI Motion: {ui_motion}\n"
+        f"UI Realism: {ui_realism}\n"
         f"HUD FPS: {hud_fps}\n"
         f"Current Tier: {current_tier}\n"
         f"Average Frame Time: {avg_frame_time}\n"
-        f"Governor Downgrades: {downgrades}"
+        f"Governor Downgrades: {downgrades}\n"
+        f"Items Touched (Last): {items_last}\n"
+        f"Items Touched (Avg): {items_avg}\n"
+        f"Realism Sprites: {sprites}\n"
+        f"Bitmap Build Time: {bitmap_time}\n"
+        f"Realism Fallback: {fallback_val}"
+    )
+
+    # 2f. Interaction Telemetry (flags and counters only, no text)
+    ui_interactive = getattr(settings, "UI_INTERACTIVE", 1)
+    drag_count = 0
+    zoom_factor = 1.0
+    radial_opens = 0
+    palette_opens = getattr(app, "palette_opens", 0) if app is not None and isinstance(getattr(app, "palette_opens", 0), int) else 0
+    notices_count = 0
+
+    if hud_obj is not None:
+        v_dc = getattr(hud_obj, "drag_count", None)
+        if isinstance(v_dc, int):
+            drag_count = v_dc
+        v_zf = getattr(hud_obj, "zoom_factor", None)
+        if isinstance(v_zf, (int, float)):
+            zoom_factor = float(v_zf)
+        v_ro = getattr(hud_obj, "radial_menu_opens", None)
+        if isinstance(v_ro, int):
+            radial_opens = v_ro
+        v_po = getattr(hud_obj, "palette_opens", None)
+        if isinstance(v_po, int):
+            palette_opens = v_po
+        v_nc = getattr(hud_obj, "notices_count", None)
+        if isinstance(v_nc, int):
+            notices_count = v_nc
+
+    sections.append(
+        "=== INTERACTION ===\n"
+        f"UI_INTERACTIVE: {ui_interactive}\n"
+        f"Orb Drag Count: {drag_count}\n"
+        f"Orb Zoom Factor: {zoom_factor:.2f}\n"
+        f"Radial Menu Opens: {radial_opens}\n"
+        f"Palette Opens: {palette_opens}\n"
+        f"Notices Shown: {notices_count}"
     )
 
     # 3. Settings That Matter
@@ -338,6 +445,8 @@ def build_diagnostics_text(
         "UI_STYLE",
         "UI_THEME",
         "UI_MOTION",
+        "UI_REALISM",
+        "UI_INTERACTIVE",
         "HUD_FPS",
     ):
         val = getattr(settings, key, "not_configured")
@@ -689,6 +798,24 @@ def build_diagnostics_text(
     else:
         chat_section_lines.append("No chat lines recorded.")
     sections.append("\n".join(chat_section_lines))
+
+    # 7b. Messaging & Contacts (counts and flags only, NO PII, no names, no numbers, no emails, no message texts)
+    msg_lines = ["=== MESSAGING & CONTACTS ==="]
+    messaging_enabled = bool(getattr(settings, "MESSAGING_ENABLED", True))
+    send_mode = getattr(settings, "WHATSAPP_SEND_MODE", "draft")
+    c_count = 0
+    try:
+        c_store = getattr(agent, "contact_store", None)
+        if c_store is None:
+            from contacts.store import ContactStore
+            c_store = ContactStore()
+        c_count = c_store.count()
+    except Exception:
+        c_count = 0
+    msg_lines.append(f"Messaging Enabled: {messaging_enabled}")
+    msg_lines.append(f"WhatsApp Send Mode: {send_mode}")
+    msg_lines.append(f"Total Contacts: {c_count}")
+    sections.append("\n".join(msg_lines))
 
     # 8. Last 30 Audit Entries (redacted)
     audit = audit_logger or (getattr(app, "audit", None) if app else None) or (getattr(agent, "audit", None) if agent else None) or AuditLogger()

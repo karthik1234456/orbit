@@ -130,6 +130,17 @@ def get_routines_db_path() -> Path:
     return (get_data_dir() / "routines.db").resolve()
 
 
+def get_contacts_db_path() -> Path:
+    """Return resolved contacts SQLite database path.
+
+    Precedence: CONTACTS_DB_PATH env var > data_dir / contacts.db.
+    """
+    explicit = os.getenv("CONTACTS_DB_PATH")
+    if explicit and explicit.strip():
+        return Path(explicit.strip()).resolve()
+    return (get_data_dir() / "contacts.db").resolve()
+
+
 def get_browser_profile_dir() -> Path:
     """Return resolved browser profile directory.
 
@@ -211,6 +222,7 @@ RECORDED_OLD_DEFAULTS: dict[str, Path] = {
     "rag_db": (REPO_ROOT / "data" / "rag.db").resolve(),
     "reminders_db": (REPO_ROOT / "data" / "reminders.db").resolve(),
     "routines_db": (REPO_ROOT / "data" / "routines.db").resolve(),
+    "contacts_db": (REPO_ROOT / "data" / "contacts.db").resolve(),
     "browser_profile": (REPO_ROOT / "data" / "browser_profile").resolve(),
     "audit_log": (REPO_ROOT / "logs" / "audit.jsonl").resolve(),
     "runs_log": (REPO_ROOT / "logs" / "runs.jsonl").resolve(),

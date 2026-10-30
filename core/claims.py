@@ -28,6 +28,28 @@ FAMILIES: dict[str, set[str]] = {
         "lock_screen",
         "open_settings_page",
     },
+    "window": {
+        "focus_app",
+        "minimize_app",
+        "maximize_app",
+        "restore_app",
+        "snap_app",
+        "show_desktop",
+    },
+    "files": {
+        "find_files",
+        "open_found_file",
+        "reveal_found_file",
+    },
+    "screenshot": {
+        "take_screenshot",
+    },
+    "typing": {
+        "type_into_app",
+    },
+    "sleep": {
+        "sleep_computer",
+    },
 }
 
 NEGATION_WORDS: tuple[str, ...] = (
@@ -79,6 +101,44 @@ _FILE_RE = re.compile(
     re.IGNORECASE,
 )
 _FILE_TARGET_RE = re.compile(r"\b(file|folder|note)s?\b", re.IGNORECASE)
+_WINDOW_RE = re.compile(
+    r"\b(i(?:'ve|\s+have|'ll|\s+will|\s+already)?|\bi)\s+(?:[a-z]+\s+)*?"
+    r"("
+    r"(?:switched\s+to|brought\s+.+?\s+to\s+the\s+front|focused|minimized|maximized|restored|snapped)\b|"
+    r"(?:showed\s+(?:the\s+)?desktop|minimized\s+(?:all\s+windows|everything))\b"
+    r")",
+    re.IGNORECASE,
+)
+_FILES_ACTION_RE = re.compile(
+    r"\b(i(?:'ve|\s+have|'ll|\s+will|\s+already)?|\bi)\s+(?:[a-z]+\s+)*?"
+    r"("
+    r"(?:found|searched\s+for|revealed)\s+(?:the\s+|your\s+|some\s+)?(?:file|files|download|downloads|document|documents)\b|"
+    r"opened\s+(?:the\s+)?(?:first|second|third|fourth|fifth|1st|2nd|3rd|4th|5th|top|found)\s+file\b"
+    r")",
+    re.IGNORECASE,
+)
+_SCREENSHOT_RE = re.compile(
+    r"\b(i(?:'ve|\s+have|'ll|\s+will|\s+already)?|\bi)\s+(?:[a-z]+\s+)*?"
+    r"("
+    r"(?:took\s+a\s+screenshot|captured\s+(?:the\s+)?screen|saved\s+a\s+screenshot)\b"
+    r")",
+    re.IGNORECASE,
+)
+_TYPING_RE = re.compile(
+    r"\b(i(?:'ve|\s+have|'ll|\s+will|\s+already)?|\bi)\s+(?:[a-z]+\s+)*?"
+    r"("
+    r"(?:typed|dictated)\b"
+    r")",
+    re.IGNORECASE,
+)
+_SLEEP_RE = re.compile(
+    r"\b(i(?:'ve|\s+have|'ll|\s+will|\s+already)?|\bi)\s+(?:[a-z]+\s+)*?"
+    r"("
+    r"(?:put\s+(?:the\s+|this\s+|your\s+)?(?:computer|pc|laptop)\s+to\s+sleep)\b"
+    r")",
+    re.IGNORECASE,
+)
+
 _APP_RE = re.compile(
     rf"\b(i(?:'ve|\s+have))\s+(?:[a-z]+\s+)*({_APP_VERBS})\b",
     re.IGNORECASE,
@@ -151,6 +211,51 @@ def find_action_claims(text: str) -> list[Claim]:
             prefix = s_clean[:verb_start]
             if not _NEGATION_RE.search(prefix):
                 claims.append(Claim(kind="memory", phrase=s_clean))
+                continue
+
+        # 4. Check for window claim
+        m_win = _WINDOW_RE.search(s_clean)
+        if m_win:
+            verb_start = m_win.start(2)
+            prefix = s_clean[:verb_start]
+            if not _NEGATION_RE.search(prefix):
+                claims.append(Claim(kind="window", phrase=s_clean))
+                continue
+
+        # 5. Check for files claim
+        m_files = _FILES_ACTION_RE.search(s_clean)
+        if m_files:
+            verb_start = m_files.start(2)
+            prefix = s_clean[:verb_start]
+            if not _NEGATION_RE.search(prefix):
+                claims.append(Claim(kind="files", phrase=s_clean))
+                continue
+
+        # 6. Check for screenshot claim
+        m_sc = _SCREENSHOT_RE.search(s_clean)
+        if m_sc:
+            verb_start = m_sc.start(2)
+            prefix = s_clean[:verb_start]
+            if not _NEGATION_RE.search(prefix):
+                claims.append(Claim(kind="screenshot", phrase=s_clean))
+                continue
+
+        # 7. Check for typing claim
+        m_typ = _TYPING_RE.search(s_clean)
+        if m_typ:
+            verb_start = m_typ.start(2)
+            prefix = s_clean[:verb_start]
+            if not _NEGATION_RE.search(prefix):
+                claims.append(Claim(kind="typing", phrase=s_clean))
+                continue
+
+        # 8. Check for sleep claim
+        m_slp = _SLEEP_RE.search(s_clean)
+        if m_slp:
+            verb_start = m_slp.start(2)
+            prefix = s_clean[:verb_start]
+            if not _NEGATION_RE.search(prefix):
+                claims.append(Claim(kind="sleep", phrase=s_clean))
                 continue
 
     return claims

@@ -301,3 +301,87 @@ python main.py
    - Verify rate limits prevent more than 30 volume keystrokes/min or 10 media keystrokes/min.
    - Verify that reading untrusted files taints subsequent system actions with `TAINT_WARNING`.
 
+### K. HUD Direct Interactions & Shortcuts Verification
+
+1. **Orb Drag & Inertia**:
+   - Drag orb with mouse: verify 3D rotation follows drag distance.
+   - Release mouse: in `UI_MOTION="full"`, verify smooth inertial coasting with exponential decay ($e^{-3t}$).
+   - Set `UI_MOTION="reduced"`: verify inertia is disabled and orb halts immediately on mouse release.
+
+2. **Bounded Zoom & Panel Clearance**:
+   - Scroll mouse wheel over canvas or press `+` / `-`: verify orb zoom stays clamped strictly within $[0.8, 1.25]$.
+   - Resize window to minimum size (1100x700): verify zoom does not breach the 260 px panel clearance boundary.
+   - Double-click orb or press `0`: verify zoom and angles reset cleanly.
+
+3. **Click vs Drag Discrimination & Microphone State**:
+   - Click orb (< 4 px): verify microphone listening state toggles via the exact same handler as the dock mic button.
+   - When agent is busy or a confirmation dialog is open: click orb and verify notice `"Microphone busy"` appears under the title rule.
+
+4. **Radial Quick Menu**:
+   - Right-click orb or press `m` / `M` (when canvas focused): verify 6-item radial menu opens centered around the orb.
+   - Navigate with arrow keys or Tab / Shift+Tab: verify circular wrap-around selection.
+   - Press Enter or click an item: verify action executes and menu closes.
+   - Press Escape or click outside: verify menu dismisses without action.
+
+5. **Command Palette (`Ctrl+K`)**:
+   - Press `Ctrl+K`: verify centered, non-modal command palette dialog opens titled `"Command palette"`.
+   - Type query: verify fuzzy subsequence filtering and span scoring displays up to 12 ranked items.
+   - Verify static actions, user routines from `RoutineStore`, and fallback `"Ask ORBIT: <query>"` are present.
+   - Press Enter: verify command executes once and palette dismisses.
+
+6. **Shortcuts Overlay (`F1` / `?`)**:
+   - Press `F1` or `?`: verify keyboard shortcuts overlay dialog displays categorized shortcuts.
+   - Verify typing in chat input text box never triggers HUD hotkeys or opens shortcuts overlay.
+
+7. **Telemetry & Disabling Interactions**:
+   - Verify Arc A and Arc B lit block counts match live CPU and memory load.
+   - Hover over arcs: verify tooltip displays percentage and memory metrics.
+   - Set `UI_INTERACTIVE=0`: verify pointer drag, zoom, clicks, and radial menus are deactivated while visual rendering and keyboard accessibility continue operating.
+
+---
+
+## 3. v2.19 Messaging & Contacts Verification Checklist
+
+| # | Component / Feature | Action / Command | Expected Result | Result | Notes |
+| :-: | :--- | :--- | :--- | :-: | :--- |
+| **M1** | **Two Fake Contacts** | In Contacts window or terminal (`/contact add`), add two fake contacts (e.g. "Self", phone `+15550100123`; "Bob Work", email `fakebob@example.com`). | Contacts are created with normalized names; phone numbers appear masked as `••••0123`. | `PASS` | Uses fake numbers only. |
+| **M2** | **Draft to Self** | Type: `"text Self saying hello from orbit"`. | `ConfirmDialog` opens with preview: `"WhatsApp to Self (••••0123): will be DRAFTED, you press Enter to send"`. Clicking **Allow** opens WhatsApp desktop draft. | `PASS` | Does not press Enter. |
+| **M3** | **Exact Text in Dialog** | Review the confirmation dialog for `"text Self saying hello from orbit"`. | Dialog shows exact plain-text preview; Enter key defaults to Deny; Allow button enables after 800ms. | `PASS` | Physical confirmation required. |
+| **M4** | **Deny Behavior** | Trigger `"text Self saying hello"`. In `ConfirmDialog`, click `Deny` or press Enter. | Operation is cancelled immediately. WhatsApp is not opened; history records user cancelled. | `PASS` | Fail-closed on denial. |
+| **M5** | **Send Mode to Self** | In Settings, set `WHATSAPP_SEND_MODE=send` (accept warning dialog). Type `"text Self saying automated test"`. Approve dialog. | Verifies active window title (`WhatsApp`) and process, waits settle delay, re-verifies, and presses Enter once. | `PASS` | Double window verification. |
+| **M6** | **Page-Derived Link** | In controlled browser, navigate to a YouTube video. Then type `"send this link to Self"`. | Link to the current video is resolved and attached to the WhatsApp draft preview. | `PASS` | Anti-drift link freshness. |
+| **M7** | **Tainted Turn Blocking** | Ask agent to read an untrusted web page or doc. In the same turn, attempt a messaging shortcut. | Action is strictly refused with an error indicating messaging is blocked in turns that read untrusted content. | `PASS` | Taint tracking defense. |
+| **M8** | **Unknown Contact** | Type: `"text NonExistentContact saying hi"`. | Agent replies directly: `"I don't have a contact called NonExistentContact. Add it in Contacts."` without opening WhatsApp or calling the LLM. | `PASS` | Exact contact name matching. |
+| **M9** | **Duplicate Alias Refusal** | Attempt to add a second contact with an existing alias or normalized name. | Rejected with `ContactConflictError` informing the user the name or alias is already in use. | `PASS` | Normalized uniqueness. |
+| **M10** | **Rate Limit Protection** | Attempt to send more than 5 messages within 10 minutes or repeat send within 10 seconds. | Excess requests are rejected by `MessagingRateLimiter` with cooldown notices. | `PASS` | Flood protection. |
+| **M11** | **Demo Mode Refusal** | Run in demo mode (`python scripts/demo.py --terminal`). Attempt a messaging command. | Refused with message: `"Messaging is disabled in demo mode."` | `PASS` | Demo mode safety boundary. |
+| **M12** | **Contacts Window GUI** | Press `Ctrl+K` and select "Contacts", or open from Settings panel. | Themed Contacts window opens; lists contacts with masked numbers; Add, Edit, Delete (with confirm) work. | `PASS` | Tkinter GUI. |
+| **M13** | **Mailto Draft** | Type: `"email Bob Work about Project Update"`. Approve dialog. | Default email client opens with draft addressed to `fakebob@example.com` with subject `Project Update`. | `PASS` | Sanitized mailto URI. |
+
+---
+
+## 4. v2.21 Laptop Control Verification Checklist
+
+| # | Component / Feature | Action / Command | Expected Result | Result | Notes |
+| :-: | :--- | :--- | :--- | :-: | :--- |
+| **L1** | **Window Focus & Restore** | Type `"switch to notepad"` while Notepad is minimized. | Notepad is restored if minimized and brought to active foreground with verified focus. | `PASS` | Restores via `ShowWindow(SW_RESTORE)`. |
+| **L2** | **Window Minimize & Maximize** | Type `"minimize notepad"` followed by `"maximize notepad"`. | Notepad window minimizes to taskbar then expands to maximized state; verified by Win32 state checks. | `PASS` | Verified via `IsIconic` and `IsZoomed`. |
+| **L3** | **Window Snap** | Type `"snap notepad left"` and `"snap notepad right"`. | Notepad is repositioned to fill exactly the left or right half of the current monitor's working area. | `PASS` | Query monitor rect via `GetMonitorInfoW`. |
+| **L4** | **Show Desktop** | Type `"show desktop"` or `"minimize all windows"`. | Minimizes all open top-level application windows to reveal desktop cleanly. | `PASS` | Win+D chord or toggle. |
+| **L5** | **Window Control Elevation Refusal** | Attempt to focus an elevated admin window or protected system process. | Refused with error indicating the window is running with elevated privileges. | `PASS` | OpenProcess query rights check. |
+| **L6** | **Window Non-Allowlist Refusal** | Type `"focus cmd"` or attempt to control non-allowlisted process. | Deterministically refused; only apps registered in `ALLOWED_APPS` with a `windows` entry can be controlled. | `PASS` | Strict process allowlist check. |
+| **L7** | **File Search by Query & Kind** | Type `"find pdfs named report"` or `"find photos of sunset"`. | Searches allowed user folders up to depth 4; returns top 5 sorted by mtime with index, folder, size, date. | `PASS` | Memory-only candidate cache. |
+| **L8** | **File Search Recent & Downloads** | Type `"find my latest download"` or `"find recent documents"`. | Scans Downloads or user folders, returning recent files with newest first. | `PASS` | Recent sort mode. |
+| **L9** | **File Search Depth & Budget** | Search directory trees deeper than depth 4 or exceeding 2-second time budget. | Scanning halts at depth 4 without traversing deeper subdirectories or exceeding budget. | `PASS` | Depth limit 4, 2s wall-clock cap. |
+| **L10** | **File Symlink & Reparse Refusal** | Attempt to find or open a symlink or junction point. | Refused; symbolic links and reparse points are strictly excluded from results and cannot be opened. | `PASS` | No traversal outside roots. |
+| **L11** | **File Double-Extension Refusal** | Attempt to search for or open `report.pdf.exe` or `invoice.txt.vbs`. | Refused with security error: `"Refused: files with multiple or double extensions are not allowed."` | `PASS` | Anti-spoofing defense. |
+| **L12** | **Open Found File with CONFIRM** | After searching, type `"open the first one"`. | Modal `ConfirmDialog` opens: `"Open '<filename>' from '<folder>'?"`. Clicking Allow opens file via default handler. | `PASS` | Mandatory user confirmation. |
+| **L13** | **Reveal File in Explorer** | Type `"reveal file 2 in explorer"`. | Modal `ConfirmDialog` opens: `"Reveal '<filename>' in File Explorer?"`. Clicking Allow opens `explorer.exe /select,<path>`. | `PASS` | Mandatory user confirmation. |
+| **L14** | **Out of Range & Expired Index** | Type `"open file 9"` or attempt to open a candidate after 10-minute TTL expires. | Refused with clear error: `"No search result #9 available. Run a file search first."` or expired cache notice. | `PASS` | Bounds and 10-minute TTL check. |
+| **L15** | **Screenshot Capture** | Type `"take a screenshot"`. | PNG saved to `workspace/screenshots/screenshot_YYYYMMDD_HHMMSS.png`; replies with path; model-invisible. | `PASS` | Timestamp naming. |
+| **L16** | **Screenshot Disk & Rate Limit** | Attempt capture with <100 MB free disk space, or trigger 21st screenshot within 1 hour. | Refused with disk space error or rate limit message (`20 per hour`). | `PASS` | Rate limiter and disk guard. |
+| **L17** | **Guarded Typing into Notepad** | Enable `TYPING_ENABLED=1`. Type `"type hello world into notepad"`. | Dialog asks confirmation. Focuses Notepad, types characters in 20-char chunks via SendInput Unicode. | `PASS` | 300-char max, sanitized. |
+| **L18** | **Typing Non-Allowlist Refusal** | Type `"type hello into chrome"`. | Deterministically refused: `"I only type into notepad, whatsapp."` | `PASS` | Allowlist restricted. |
+| **L19** | **Typing Focus Loss Abort** | Switch active window mid-typing (>20 chars). | Typing loop detects foreground window changed and immediately aborts further keystrokes. | `PASS` | Chunks of 20 with focus check. |
+| **L20** | **Typing Rate Limit & Default Off** | Run typing 6 times within 10 minutes, or test with default settings. | Excess calls refused by rate limiter (max 5/10min); disabled by default with UI warning dialog on enablement. | `PASS` | Rate limited and off by default. |
+| **L21** | **Computer Sleep Confirmation** | Enable `SLEEP_ENABLED=1`. Type `"put computer to sleep"`. | Modal `ConfirmDialog` opens asking approval. Clicking Allow invokes `SetSuspendState`. Clicking Deny aborts. | `PASS` | CONFIRM gated and 2/10min limit. |

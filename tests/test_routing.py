@@ -195,12 +195,12 @@ def test_agent_routing_disabled_by_default(tmp_path):
     agent.chat("list files")
     last_call = provider.calls[-1]
     offered_names = {t.name for t in last_call["tools"]}
-    assert offered_names == {t.name for t in registry.list_tools()}
+    assert offered_names == {t.name for t in registry.list_tools(model_visible_only=True)}
 
     # Verify TaskRun trace
     assert agent.last_run.routing_on is False
-    assert agent.last_run.tools_offered_count == len(registry.list_tools())
-    assert agent.last_run.tools_registered_count == len(registry.list_tools())
+    assert agent.last_run.tools_offered_count == len(registry.list_tools(model_visible_only=True))
+    assert agent.last_run.tools_registered_count == len(registry.list_tools(model_visible_only=True))
 
 
 def test_agent_routing_enabled_narrows_tools(tmp_path):
@@ -225,7 +225,7 @@ def test_agent_routing_enabled_narrows_tools(tmp_path):
     # Verify TaskRun trace fields
     assert agent.last_run.routing_on is True
     assert agent.last_run.tools_offered_count == len(offered_names)
-    assert agent.last_run.tools_registered_count == len(registry.list_tools())
+    assert agent.last_run.tools_registered_count == len(registry.list_tools(model_visible_only=True))
     assert agent.last_run.off_route_call == 0
     assert agent.last_run.routing_retry == 0
 
@@ -280,7 +280,7 @@ def test_agent_miss_recovery_retries_once_on_inability(tmp_path):
     assert agent.last_run.routing_retry == 1
     # Check that retry offered full tool set
     retry_call = provider.calls[1]
-    assert len(retry_call["tools"]) == len(registry.list_tools())
+    assert len(retry_call["tools"]) == len(registry.list_tools(model_visible_only=True))
     # Final reply from completed retry
     assert "Here are the files" in reply
 

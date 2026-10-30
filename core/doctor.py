@@ -194,6 +194,18 @@ def default_clock() -> float:
     return time.monotonic()
 
 
+def default_whatsapp_protocol_registered() -> bool:
+    """Check if whatsapp:// protocol handler is registered in Windows registry (heuristic)."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, "whatsapp", 0, winreg.KEY_READ):
+            return True
+    except Exception:
+        return False
+
+
 @dataclass
 class Probes:
     """Injectable system probes ensuring tests never invoke real network, shell, or hardware."""
@@ -208,6 +220,7 @@ class Probes:
     disk_free: Callable[[Union[str, Path]], int] = default_disk_free
     env: Any = default_env
     clock: Callable[[], float] = default_clock
+    whatsapp_protocol_registered: Callable[[], bool] = default_whatsapp_protocol_registered
 
 
 def _probe_env(probes: Probes, key: str, default: Optional[str] = None) -> Optional[str]:
@@ -1556,6 +1569,73 @@ def check_rag_embeddings(probes: Probes, fast: bool = False) -> Check:
         )
 
 
+def check_desktop_controls(probes: Probes) -> Check:
+    """Check desktop controls (window, files, screenshots, typing, sleep)."""
+    from config import settings
+    win_ctl = getattr(settings, "WINDOW_CONTROL_ENABLED", True)
+    files_on = getattr(settings, "FILES_ENABLED", True)
+    sc_on = getattr(settings, "SCREENSHOTS_ENABLED", True)
+    typ_on = getattr(settings, "TYPING_ENABLED", False)
+    slp_on = getattr(settings, "SLEEP_ENABLED", False)
+
+    plat_ok = sys.platform == "win32"
+    has_pil = importlib.util.find_spec("PIL") is not None
+
+    from config.apps import ALLOWED_APPS, TYPING_ALLOWLIST
+    from tools.user_files import default_search_roots
+    win_apps = sum(1 for a in ALLOWED_APPS.values() if isinstance(a, dict) and a.get("windows"))
+    roots_cnt = len(default_search_roots())
+    typ_cnt = len(TYPING_ALLOWLIST)
+
+    detail = (
+        f"platform={'win32' if plat_ok else sys.platform}, pillow={'available' if has_pil else 'missing'}, "
+        f"window_apps={win_apps}, search_roots={roots_cnt}, typing_allowlist={typ_cnt}, "
+        f"enabled(win={win_ctl}, files={files_on}, screen={sc_on}, typing={typ_on}, sleep={slp_on})"
+    )
+    status = "OK" if (plat_ok or not win_ctl) else "WARN"
+    fix = None
+    if not plat_ok and win_ctl:
+        fix = "Window controls and typing SendInput require Windows."
+    elif not has_pil and sc_on:
+        fix = "Install Pillow with: pip install pillow"
+    return Check(name="Desktop controls", status=status, detail=detail, fix=fix)
+
+
+def check_messaging(probes: Probes) -> Check:
+    """Check messaging configuration, contact count, send mode, protocol handler, and window controls."""
+    from config import settings
+    raw_enabled = _probe_env(probes, "MESSAGING_ENABLED")
+    if raw_enabled is not None:
+        enabled = str(raw_enabled).strip().lower() not in ("0", "false", "no", "off")
+    else:
+        enabled = bool(getattr(settings, "MESSAGING_ENABLED", True))
+
+    send_mode = getattr(settings, "WHATSAPP_SEND_MODE", "draft")
+
+    contact_count = 0
+    try:
+        from contacts.store import ContactStore
+        store = ContactStore()
+        contact_count = store.count()
+    except Exception:
+        contact_count = 0
+
+    protocol_registered = False
+    if hasattr(probes, "whatsapp_protocol_registered") and callable(probes.whatsapp_protocol_registered):
+        protocol_registered = bool(probes.whatsapp_protocol_registered())
+
+    is_windows = sys.platform == "win32"
+    proto_str = "protocol registered" if protocol_registered else "protocol not detected (heuristic)"
+    sys_str = "system keys/windows available" if is_windows else "system keys/windows unavailable"
+
+    if not enabled:
+        detail = f"Disabled via MESSAGING_ENABLED=0 ({contact_count} contacts; mode: {send_mode})"
+        return Check(name="Messaging", status="OK", detail=detail, fix=None)
+
+    detail = f"Enabled ({contact_count} contacts; mode: {send_mode}; {proto_str}; {sys_str}; no key sent)"
+    return Check(name="Messaging", status="OK", detail=detail, fix=None)
+
+
 def run_checks(probes: Optional[Probes] = None, fast: bool = False) -> list[Check]:
     """Run environment doctor checks inside isolated try/except blocks.
 
@@ -1634,6 +1714,8 @@ def run_checks(probes: Optional[Probes] = None, fast: bool = False) -> list[Chec
     _execute("Demo mode", lambda: check_demo_mode(p))
     _execute("RAG embeddings", lambda: check_rag_embeddings(p, fast=fast))
     _execute("System controls", lambda: check_system_controls(p))
+    _execute("Messaging", lambda: check_messaging(p))
+    _execute("Desktop controls", lambda: check_desktop_controls(p))
 
     return checks
 

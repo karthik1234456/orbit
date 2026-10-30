@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 import itertools
 import os
 import re
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 from config import settings
 from config.sites import SITES, resolve_site
@@ -31,7 +31,8 @@ COMMAND_VERBS = (
     "pause", "resume", "mute", "unmute", "go", "back", "forward",
     "reload", "refresh", "close", "come", "home", "shorts", "next",
     "previous", "wait", "read", "run", "fire", "bring", "pull", "show",
-    "look", "restart",
+    "look", "restart", "switch", "focus", "minimize", "maximize",
+    "restore", "snap", "screenshot", "capture", "find", "reveal",
 )
 
 NON_VERB_TYPOS: set[str] = {
@@ -239,6 +240,25 @@ def describe_step(tool: str, args: Optional[dict[str, Any]] = None) -> str:
         p = args.get("page", "settings")
         return f"Open {p} settings"
 
+    if t == "send_whatsapp":
+        contact = str(args.get("contact", "")).strip()
+        attach_link = bool(args.get("attach_link", False))
+        text_val = str(args.get("text", "")).strip()
+        if attach_link:
+            if text_val:
+                return f"Send link to {contact} saying '{text_val}'"
+            return f"Send link to {contact}"
+        if not text_val:
+            return f"Open WhatsApp chat with {contact}"
+        return f"Send WhatsApp to {contact}"
+
+    if t == "open_email_draft":
+        contact = str(args.get("contact", "")).strip()
+        attach_link = bool(args.get("attach_link", False))
+        if attach_link:
+            return f"Email link to {contact}"
+        return f"Email {contact}"
+
     return t.replace("_", " ").capitalize()
 
 
@@ -343,6 +363,13 @@ def _try_segmentation(
     sites: Any,
     state: Any,
     browser_enabled: bool,
+    contacts: Any = None,
+    contact_names: Optional[Sequence[str]] = None,
+    window_control_enabled: Optional[bool] = None,
+    files_enabled: Optional[bool] = None,
+    screenshots_enabled: Optional[bool] = None,
+    typing_enabled: Optional[bool] = None,
+    sleep_enabled: Optional[bool] = None,
 ) -> Optional[ShortcutPlan]:
     """Test a specific boundary subset. Returns a ShortcutPlan if valid, else None."""
     segments: list[str] = []
@@ -359,7 +386,8 @@ def _try_segmentation(
     sim_state = _clone_state(state)
     all_steps: list[PlanStep] = []
 
-    for seg in segments:
+    for seg_idx, seg in enumerate(segments):
+        is_last_seg = (seg_idx == len(segments) - 1)
         cleaned_seg = _clean_segment(seg)
         if not cleaned_seg:
             return None
@@ -394,15 +422,56 @@ def _try_segmentation(
             sites=sites,
             state=sim_state,
             browser_enabled=browser_enabled,
+            contacts=contacts,
+            contact_names=contact_names,
+            window_control_enabled=window_control_enabled,
+            files_enabled=files_enabled,
+            screenshots_enabled=screenshots_enabled,
+            typing_enabled=typing_enabled,
+            sleep_enabled=sleep_enabled,
         )
         if res is None:
             return None
 
-        # Reminder and system control tool calls are never allowed in chains
-        if hasattr(res, "name") and res.name in (
-            "set_reminder", "set_timer", "list_reminders", "cancel_reminder", "cancel_all_reminders",
-            "volume_change", "volume_mute_toggle", "media_key", "lock_screen", "open_settings_page",
+        # ShortcutReply is conversational and cannot be part of a chain
+        if not hasattr(res, "name") and not hasattr(res, "steps"):
+            return None
+
+        # Reminder, system control, typing, and sleep tool calls are never allowed in chains.
+        # Free-text find_files patterns are also never allowed in chains.
+        if hasattr(res, "name") and (
+            res.name in (
+                "set_reminder", "set_timer", "list_reminders", "cancel_reminder", "cancel_all_reminders",
+                "volume_change", "volume_mute_toggle", "media_key", "lock_screen", "open_settings_page",
+                "type_into_app", "sleep_computer",
+            )
+            or (res.name == "find_files" and res.args.get("_free_text", False))
         ):
+            return None
+
+        # Messaging tools validation in chains:
+        # - Allowed ONLY as the LAST segment of a chain
+        # - Free-body patterns (a, d) are NEVER allowed in chains
+        # - Only chat opening (b) and attach-link patterns (c, email link) are allowed as last step
+        def _check_messaging_step(tool_name: str, tool_args: dict) -> bool:
+            if tool_name not in ("send_whatsapp", "open_email_draft"):
+                return True
+            if not is_last_seg:
+                return False
+            if tool_name == "send_whatsapp":
+                attach_link = bool(tool_args.get("attach_link", False))
+                body_text = str(tool_args.get("text", "")).strip()
+                if not attach_link and body_text:
+                    return False
+                return True
+            if tool_name == "open_email_draft":
+                attach_link = bool(tool_args.get("attach_link", False))
+                if not attach_link:
+                    return False
+                return True
+            return True
+
+        if hasattr(res, "name") and not _check_messaging_step(res.name, res.args):
             return None
 
         if isinstance(res, ShortcutPlan):
@@ -443,6 +512,13 @@ def parse_chain(
     sites: Optional[Mapping[str, Any]] = None,
     state: Optional[Any] = None,
     browser_enabled: bool = False,
+    contacts: Optional[Any] = None,
+    contact_names: Optional[Sequence[str]] = None,
+    window_control_enabled: Optional[bool] = None,
+    files_enabled: Optional[bool] = None,
+    screenshots_enabled: Optional[bool] = None,
+    typing_enabled: Optional[bool] = None,
+    sleep_enabled: Optional[bool] = None,
 ) -> Optional[ShortcutPlan]:
     """Parse user text into a multi-step ShortcutPlan with source='chain'.
 
@@ -507,6 +583,13 @@ def parse_chain(
                 sites=sites,
                 state=state,
                 browser_enabled=browser_enabled,
+                contacts=contacts,
+                contact_names=contact_names,
+            window_control_enabled=window_control_enabled,
+            files_enabled=files_enabled,
+            screenshots_enabled=screenshots_enabled,
+            typing_enabled=typing_enabled,
+            sleep_enabled=sleep_enabled,
             )
             if plan is not None:
                 return plan

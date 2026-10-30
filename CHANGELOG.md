@@ -7,6 +7,133 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.21.0] - 2026-10-30
+
+### Added & Enhanced
+- **Laptop Control Tools Suite**:
+  - **Window Control (`tools/window_tools.py`, `system/winwindow.py`)**:
+    - Implemented `focus_app`, `minimize_app`, `maximize_app`, `restore_app`, `snap_app`, and `show_desktop`.
+    - Restores minimized windows automatically on focus.
+    - Verified action outcomes via `GetForegroundWindow`, `IsIconic`, `IsZoomed`, and `GetWindowRect` with harmless ALT key workaround if Windows delays foreground focus switch.
+    - Strict allowlist filtering via `ALLOWED_APPS` and elevation checking (`is_elevated_target`) refusing administrator or protected windows.
+    - Sliding window rate limiting to 30 actions per minute.
+  - **User File Search & Discovery (`tools/user_files.py`)**:
+    - Implemented `find_files`, `open_found_file`, and `reveal_found_file`.
+    - Searches strictly within standard user folders (Documents, Downloads, Pictures, Videos, Desktop, Music) and OneDrive equivalents up to directory depth 4 with a 2-second wall-clock budget.
+    - Strict safety validation (`validate_file_safety`): refuses reparse points, junctions, symlinks, double extensions (`.pdf.exe`), colons, bidi/zero-width formatting characters, trailing spaces/dots, and non-allowlisted file extensions.
+    - `open_found_file` and `reveal_found_file` classified as `PermissionLevel.CONFIRM` requiring physical human approval.
+    - Session-cached candidates expire after 10 minutes.
+  - **Desktop Screenshots (`tools/screenshot_tools.py`)**:
+    - Implemented `take_screenshot` saving PNG captures to `workspace/screenshots/screenshot_YYYYMMDD_HHMMSS.png`.
+    - Enforces >100 MB free workspace disk space pre-check and 20 captures per hour rate limit.
+    - Registered with `model_visible=False` and `block_when_tainted=True`.
+  - **Guarded Typing into Applications (`tools/typing_tools.py`)**:
+    - Implemented `type_into_app` sending Unicode keystrokes via `SendInput`.
+    - Hard allowlist restricted strictly to Notepad (`notepad.exe`) and WhatsApp (`WhatsApp.exe`, `WhatsApp.Root.exe`). All other applications are deterministically refused.
+    - Sanitizes text: collapses whitespace, strips newlines and tabs, and caps at 300 characters.
+    - Chunked typing in batches of 20 characters, re-verifying foreground window integrity before each chunk and aborting immediately if focus shifts.
+    - Rate limited to 5 typing actions per 10 minutes. Classified as `PermissionLevel.CONFIRM`. Disabled by default (`TYPING_ENABLED=0`) with UI warning on activation.
+  - **Power Control (`tools/power_tools.py`)**:
+    - Implemented `sleep_computer` calling `SetSuspendState(0, 0, 0)` under `ctypes.windll.powrprof`.
+    - Classified as `PermissionLevel.CONFIRM` requiring human approval. Rate limited to 2 calls per 10 minutes and blocked when tainted.
+- **Strict Privacy Guarantees**:
+  - File names, folder paths, window titles, and typed text are strictly excluded from prompts, context blocks, agent history, audit logs, run traces, and diagnostics.
+  - History entries use standardized summaries: `"Found N files."`, `"Opened file."`, `"Revealed file in File Explorer."`, `"Typed N characters into <App>."`.
+- **Claims Guard Families & Shortcuts**:
+  - Added claim families `"window"`, `"files"`, `"screenshot"`, `"typing"`, and `"sleep"` in `core/claims.py` with negation-aware heuristics.
+  - Deterministic shortcuts in `core/shortcuts.py` for window operations, file searches, screenshots, typing, and sleep.
+  - Chaining rules in `core/chains.py` forbid typing, sleep, and free-text search queries in multi-step plans.
+- **Settings, Diagnostics & Doctor**:
+  - Added settings: `WINDOW_CONTROL_ENABLED` (default 1), `FILES_ENABLED` (default 1), `SCREENSHOTS_ENABLED` (default 1), `TYPING_ENABLED` (default 0), and `SLEEP_ENABLED` (default 0).
+  - Doctor check `check_desktop_controls` verifies system layer availability, search roots, and tool presence.
+  - Diagnostics section `=== LAPTOP CONTROL ===` displays operational flags and counts only.
+  - Intent probe and evaluation runners disable new controls by default to preserve baseline benchmarks.
+
+---
+
+## [2.19.0] - 2026-10-30
+
+### Added & Enhanced
+- **Local Contact Book (`contacts/store.py`, `ui/contacts_window.py`)**:
+  - **SQLite Contact Storage**: Thread-safe SQLite store with WAL mode, parameterized queries, unique case-insensitive normalized names/aliases, strict 200-contact limit (`ContactLimit`), and corrupted file safe unlinking and recreation.
+  - **Phone Number Masking (`mask_phone`)**: Phone numbers displayed across UI, logs, and representations strictly masked to last 4 digits (`••••1234`), with immutable `ContactRef` guarding against accidental PII exposure.
+  - **GUI & Terminal Management**: Themed `ContactsWindow` and `ContactEditorDialog` with masked numbers, Add, Edit, and Delete (with explicit confirmation). Terminal commands `/contacts`, `/contact add`, `/contact edit`, `/contact delete` with explicit `(y/n)` confirmations. Command palette integration under `"Contacts"`.
+- **Safe Messaging Tools & Service (`tools/messaging_tools.py`, `messaging/service.py`, `messaging/links.py`)**:
+  - **WhatsApp Drafting & Sending (`send_whatsapp`)**: Integrates with local desktop WhatsApp via registered protocol or `https://wa.me/` fallback. Supports two operating modes:
+    - *Draft mode (default)*: Opens WhatsApp with prefilled message and leaves sending to manual user action.
+    - *Send mode*: Requires physical approval in confirmation dialog displaying exact message preview. Verifies active foreground window title and process name against allowed whitelist (`WhatsApp.exe`, `WhatsApp.Root.exe`), waits settle delay, double-checks foreground window, and presses Enter exactly once.
+  - **Email Drafting (`open_email_draft`)**: Generates safe, quoted `mailto:` links opening the user's default email client with recipient, subject, and body prefilled. Disallows cc/bcc and limits length.
+  - **Message Sanitization & Guardrails**: Enforces 300-character cap, strips newline and control characters, and purges bidirectional override and zero-width unicode characters to prevent visual spoofing.
+  - **Rate Limiting (`MessagingRateLimiter`)**: Sliding window enforces maximum 5 messages per 10 minutes system-wide and a 10-second cooldown per recipient.
+  - **Taint Tracking & Model Visibility**: Messaging tools are hidden from LLM function schemas (`model_visible=False`) and blocked when turns have read untrusted web or document content (`block_when_tainted=True`).
+- **Task-Linked Page Artifacts (`core/session_state.py`)**:
+  - **Interactive Page Tracking**: Automatically tracks current interactive pages (YouTube, Wikipedia, GitHub, docs, localhost) with a 30-minute TTL. Context block surfaces `- last_page_host:` without exposing page titles.
+  - **Anti-Drift Link Verification**: Precheck and execution verify page link freshness; if the page changes between user approval and tool execution, the action is cancelled.
+- **Natural Deterministic Shortcuts & Chaining (`core/shortcuts.py`, `core/chains.py`)**:
+  - **Phrase Patterns**: Comprehensive regex matching for drafting, texting, messaging, opening chat, and email shortcuts with longest-name resolution.
+  - **Chain Safety Rules**: Free-body patterns are forbidden in multi-step chains (`parse_chain` returns None) to prevent unreviewed text injection or semicolon splitting exploits. Messaging actions are permitted strictly as the terminal step of a chain.
+  - **Near-Miss Rejections**: Deterministically returns None for prompt near misses (`"text me when you arrive"`, `"whatsapp"`, `"open whatsapp"`, `"send this link"`, etc.).
+  - **Routine Rejection**: Routines explicitly disallow messaging tools.
+- **Privacy & PII Protections (`core/agent.py`)**:
+  - Strictly guarantees phone numbers, emails, and message bodies NEVER appear in `agent.history`, `run.steps`, `RunLogger` logs, `audit.log`, session context blocks, diagnostics, doctor checks, or LLM prompts.
+  - History entries use standardized summaries: `"Prepared a WhatsApp message to <name>."` or `"Prepared an email draft to <name>."`. Audit entries record redacted IDs and lengths (`{"contact_id": ..., "mode": ..., "text_length": ...}`).
+- **Diagnostics, Doctor & Settings**:
+  - Settings: `MESSAGING_ENABLED` (default 1), `WHATSAPP_SEND_MODE` (default draft), `WHATSAPP_PROCESS_NAMES`. Selecting "send" mode triggers an explicit warning dialog.
+  - Doctor check `check_messaging` verifies contact count, protocol registration, and window controls without exposing contact names or PII.
+  - Diagnostics section `=== MESSAGING & CONTACTS ===` reports counts and flags only.
+
+---
+
+## [2.18.0] - 2026-10-30
+
+### Added & Enhanced
+- **Interactive HUD Canvas & Controls (`ui/hud.py`, `ui/hud_core.py`)**:
+  - **Orb Drag & Inertia**: Direct mouse dragging rotates orb yaw and pitch; on release in full motion mode, inertia coasts with exponential angular velocity decay (tau = 1/3, decay exp(-3t)); disabled in reduced and off motion modes.
+  - **Bounded Zoom Clamping**: Mouse wheel (+/- 5%) and keyboard (+/- 0.1) zoom bounded strictly to [0.8, 1.25] and clamped to preserve at least 260 px side panel clearance across all window dimensions. Double-click resets view and zoom.
+  - **Click vs Drag Discrimination**: Pointer movements < 4 px qualify as clicks, triggering the microphone toggle through the exact same handler as the dock mic button; when microphone is blocked by ongoing processing or open dialogs, posts transient HUD notice "Microphone busy". Movements >= 4 px engage 3D rotation.
+  - **Cursor Parallax Look-At**: Orb subtly tilts and yaws toward cursor within +/- 6 degrees (0.1047 rad) with 300 ms exponential smoothing; disabled in reduced and off motion modes.
+  - **Live Arc Telemetry (`ui/telemetry.py`)**: Arc A (CPU load) and Arc B (memory load) lit blocks dynamically reflect system load sampled once per second via safe, exception-swallowing telemetry provider. Inactive blocks dim to #383125. Hovering over arc quads displays live tooltip.
+- **Radial Quick Action Menu (`ui/radial_menu.py`)**:
+  - Right-clicking the orb (or pressing 'm' / 'M' when HUD canvas is focused) opens a 6-item radial quick action menu centered on the orb at 1.30 * r_orb: New conversation, Toggle speak replies, Interrupt / Stop, Doctor, Settings, and Cycle theme.
+  - Mouse hover and click support; keyboard navigation via arrows and Tab / Shift+Tab with circular wrap-around; Enter to execute; Escape or clicking outside dismisses without action.
+- **Command Palette (`ui/palette.py`)**:
+  - Global `Ctrl+K` invokes centered, non-modal command palette dialog titled "Command palette".
+  - Subsequence fuzzy matching ranked by `(first_pos * 10 + span * 2 + len_diff)` displaying up to 12 ranked actions and remembering last 5 recent command titles in memory.
+  - Surfaces static actions, available user routines from `RoutineStore.list()` (sanitized names only), and fallback `"Ask ORBIT: <query>"` submitting via standard controller path.
+  - Strict privacy guarantee: zero imports or inspection of memory store, document store, reminder store, or chat history.
+- **Shortcuts Registry & Overlay (`ui/shortcuts_registry.py`)**:
+  - Single source of truth registry covering all scopes (global, chat, hud, dock, radial, palette, dialog).
+  - `F1` or `?` (when chat not focused) opens non-modal keyboard shortcuts overlay.
+  - Registry validation helper ensuring zero key collisions within scopes and verifying that chat input receives only allowed text keys.
+- **HUD Transient Notices & Interactions Setting**:
+  - Under-title-rule transient notices with fade-out timing ("Microphone busy", "Theme: <name>", "Copied last answer", "No answer to copy").
+  - Configuration setting `UI_INTERACTIVE` (`0` or `1`, default `1`) allowing complete deactivation of pointer manipulation.
+  - Diagnostics section `=== INTERACTION ===` reporting interaction counters (Orb Drag Count, Orb Zoom Factor, Radial Menu Opens, Palette Opens, Notices Shown) without exposing chat or memory text.
+
+---
+
+## [2.17.0] - 2026-10-30
+
+### Fixed & Enhanced
+- **HUD Preview Visual Defects Resolution (Part A)**:
+  - **Dock Clipping Resolution (A1)**: Dock canvas height dynamically sized from `layout(W, H, scaling)` (`dock_height = 2 * (r_mic + margin)`) so all mic and side icon circles, labels, and focus rings lie strictly within canvas bounds across 1100x700, 1280x800, 1920x1080 and DPI scales 1.0, 1.25, 1.5.
+  - **Concentric Core Layering (A2)**: Core concentric circles drawn largest-first (index 0 radius 0.55 down to index 4 radius 0.12) preserving monotonic luminance stepping; low and static tiers maintain a 3-layer stepped core rather than collapsing to a single flat disc.
+  - **Orthographic Wireframe Projection (A3)**: Replaced perspective projection of 3D sphere wireframe with orthographic projection, mathematically guaranteeing that every projected point stays strictly within the sphere radius ($r_s + 0.5\text{ px}$).
+  - **Segmented Equaliser Arc Quads (A4)**: Rendered arc blocks as true trapezoidal quads (`create_polygon`) with radial thickness spanning $0.285 H$ to $0.310 H$, maintaining 24 blocks in Arc A and 20 blocks in Arc B with Gaussian brightness profile.
+  - **Motion Mode Parity (A5)**: In `UI_MOTION="reduced"`, HUD runs at 8 FPS with half particles, gentle motion, and full equaliser arcs; in `UI_MOTION="off"`, HUD renders a single static frame containing wireframe, core, arcs, ticks, and static dust.
+  - **Equal-Advance Typography (A6)**: Center title rendered in equal-advance cells ($cell = widest\_glyph + tracking$) strictly symmetric around canvas center ($cx$).
+  - **Wireframe Polyline Optimization (A7)**: 27 3D sphere curves (11 latitudes, 16 meridians) partitioned across the $z=0$ horizon plane into at most 54 continuous front/back polylines, eliminating hundreds of individual segment canvas items and reducing per-frame touched items to $<450$ on high tier.
+- **Cinematic HUD Realism & Pure Python Bitmaps (Part B)**:
+  - **Zero-Dependency Bitmaps (`ui/hud_bitmap.py`)**: Generated standard PPM P6 binary bytes in pure numpy and fed directly to `tk.PhotoImage` without PIL, Pillow, or external libraries.
+  - **Layered Gradient Background (B1)**: Deterministic radial vignette, 0.55H soft elliptical accent haze, perspective floor grid converging at $y = 0.80 H$, dock reflection haze, and dither grain preventing 8-bit banding; memory footprint $<14\text{ MB}$ at 1080p.
+  - **Pre-rendered Bloom Halo Sprites (B2)**: Multi-layer core halo and limb rim bloom sprites cached across 5 intensity levels with border pixels strictly matching background.
+  - **Translucent Glass Body Sprite (B3)**: Pre-rendered volumetric sphere body with internal absorption, Fresnel rim, and specular highlight.
+  - **Multi-Plane Cursor Parallax (B5)**: 60 dust particles organized into three depth planes (deep, mid, near) with mouse position tracking and subtle horizon drift.
+  - **UI_REALISM Setting & Resilience (B6-B7)**: Added `UI_REALISM` setting (`"full"`, `"lite"`, `"off"`) with 200 ms resize debounce, worker thread bitmap rendering, and graceful automatic fallback to pure vector canvas on any PhotoImage error.
+  - **HUD Preview Tool (`scripts/hud_preview.py`)**: Added 'B' key to cycle realism modes, real-time item counter telemetry, and dynamic dock height adjustment.
+
+---
+
 ## [2.16.0] - 2026-10-30
 
 ### Added & Enhanced
@@ -44,6 +171,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `check_system_controls`: verifies platform and enabled state, reporting `"no key sent"`.
   - `/diag`: adds `=== SYSTEM CONTROLS ===` section reporting `SYSTEM_CONTROLS_ENABLED` flag and rate limit refusal count with no action history.
   - Setting `SYSTEM_CONTROLS_ENABLED`: added to `config/settings.py` and `config/settings_store.py` (default `True` on Windows, `False` elsewhere; requires restart). Forced to `0` by default in eval runner and `scripts/intent_probe.py` (`--system-controls` flag enables for dry run).
+
+## [2.16.1] - 2026-10-30
+
+### Enhanced
+- **Sci-Fi HUD Reference Visual & Mathematical Redesign (`ui/hud.py`, `ui/hud_core.py`, `ui/dock.py`, `ui/theme.py`, `ui/app.py`, `docs/HUD_DESIGN.md`)**:
+  - **Reference Geometry (`layout(W, H)`)**: Centralized single-source-of-truth mathematical layout without magic numbers. Orb centered at `cx = 0.50 W, cy = 0.43 H`. Sphere radius `0.21 H * scale` with 18° axial tilt toward the viewer revealing the north polar meridian fan (16 meridians, latitudes every 15°). Stepped glow limb with 2 px bright ring and 3 darker amber stepped strokes.
+  - **5-Tier Concentric Core**: Filled circles stepping from `#FADEA4` at center to `#B29C71` and fading into deep background at radii `[0.12, 0.20, 0.30, 0.42, 0.55] * sphere_radius`.
+  - **Segmented Equaliser Arcs**: Band `[0.285, 0.310] H`, 3.2° blocks with 0.8° gaps (4.0° pitch). Arc A (92° to 188°, 24 blocks, drifting `+3 deg/s`), Arc B (+8° to -72°, 20 blocks, drifting `-2 deg/s`), with bell-curve brightness peaking at 55% along each arc.
+  - **Tilted Dust Ring with Depth-Correct Z-Ordering**: Ellipse tilted -22° in screen plane with ~70° inclination (semi-major `0.31 H`, semi-minor `0.10 H`), 350 particles with gaussian radial jitter and 1.5 px central guide ellipse. Front half (`z >= 0`) drawn in front of sphere; back half (`z < 0`) drawn behind and geometrically occluded within sphere radius.
+  - **Dynamic Clearance & Panel Scaling**: Panels enforce a 260 px width floor with clearance rule `panel_width = min(0.262 W, cx - arc_outer_radius - 12 px)`. If the floor cannot be met (e.g. at 1100x900), the entire orb scales down smoothly so panels never intersect the orb bounding circle.
+  - **Panel Ergonomics & Chat Expand**: Left chat panel placed inset by 10 px over HUD canvas card outline, with header expand control toggling height upward to `y = 0.30 H` (never sideways). Real widgets placed inside inset. Chat bubbles styled with `#302B23` fill in gold theme.
+  - **Dock & Bottom Pills**: 5 vector round icons centered at `y = 0.88 H` with exact horizontal coordinates `[0.357, 0.422, 0.500, 0.578, 0.643] * W`, side radius `0.038 H`, mic radius `0.060 H` on `#262015` dark bronze disc. Bottom baseline at `y = 0.967 H` with `#F4DDAA` and `#836F47` dark-text pill chips.
+  - **Pulse Envelope & Audio Dynamics**: Analytical envelope with 0.25 s attack and 0.80 s decay. Radial equaliser block stretching, core/halo 20% brightness step, and dust ring expansion to 0.36 H. Task completion triggers a mild 45% pulse; replies trigger a soft 50% pulse; microphone smoothed with 80 ms attack and 400 ms decay.
+  - **Governor & Motion Modes**: Governor tiers scale particles (350, 200, 100, 0) and tick count (120, 60, 24, 0).
+  - **Developer Preview Tool (`scripts/hud_preview.py`)**: Added 'R' key toggle to display design reference side-by-side with live HUD if present, keys for all pulse types (P/C/H/S), and frame-time telemetry readout.
+
+---
+
 
 ## [2.15.0] - 2026-10-30
 

@@ -389,6 +389,8 @@ def offered_tools(
 
     result: list[Tool] = []
     for tool in registry_tools:
+        if not getattr(tool, "model_visible", True):
+            continue
         if tool.name in allowed_tool_names:
             result.append(tool)
         elif tool.name not in all_grouped_tools:

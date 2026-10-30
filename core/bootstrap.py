@@ -11,6 +11,7 @@ from config.apps import ALLOWED_APPS
 from config import settings
 from config.paths import (
     get_audit_log_path,
+    get_contacts_db_path,
     get_docs_dir,
     get_memory_db_path,
     get_rag_db_path,
@@ -68,6 +69,7 @@ class AppPaths:
     runs_log: Path
     reminders_db: Path = Path("data/reminders.db")
     routines_db: Path = Path("data/routines.db")
+    contacts_db: Path = Path("data/contacts.db")
 
     def __post_init__(self) -> None:
         self.workspace = Path(self.workspace)
@@ -78,6 +80,7 @@ class AppPaths:
         self.runs_log = Path(self.runs_log)
         self.reminders_db = Path(self.reminders_db)
         self.routines_db = Path(self.routines_db)
+        self.contacts_db = Path(self.contacts_db)
 
     @classmethod
     def from_settings(cls) -> "AppPaths":
@@ -91,6 +94,7 @@ class AppPaths:
             runs_log=get_runs_log_path(),
             reminders_db=get_reminders_db_path(),
             routines_db=get_routines_db_path(),
+            contacts_db=get_contacts_db_path(),
         )
 
     @classmethod
@@ -106,6 +110,7 @@ class AppPaths:
             runs_log=r / "logs" / "runs.jsonl",
             reminders_db=r / "data" / "reminders.db",
             routines_db=r / "data" / "routines.db",
+            contacts_db=r / "data" / "contacts.db",
         )
 
 
@@ -143,6 +148,7 @@ class App:
     browser_controller: Optional[Any] = None
     reminder_store: Optional[Any] = None
     routine_store: Optional[Any] = None
+    contact_store: Optional[Any] = None
 
     def shutdown(self) -> None:
         """Clean up and shut down application resources."""
@@ -176,6 +182,35 @@ def build_app(
     system_clock: Optional[Callable[[], datetime]] = None,
     system_lock_fn: Optional[Callable[[], None]] = None,
     system_opener: Optional[Callable[[str], None]] = None,
+    window_control_enabled: Optional[bool] = None,
+    files_enabled: Optional[bool] = None,
+    screenshots_enabled: Optional[bool] = None,
+    typing_enabled: Optional[bool] = None,
+    sleep_enabled: Optional[bool] = None,
+    window_enumerator: Optional[Callable[[], list]] = None,
+    window_focus_fn: Optional[Callable[[int], bool]] = None,
+    window_minimize_fn: Optional[Callable[[int], bool]] = None,
+    window_maximize_fn: Optional[Callable[[int], bool]] = None,
+    window_restore_fn: Optional[Callable[[int], bool]] = None,
+    window_snap_fn: Optional[Callable[[int, str], bool]] = None,
+    window_show_desktop_fn: Optional[Callable[[], bool]] = None,
+    window_is_elevated_fn: Optional[Callable[[int], bool]] = None,
+    files_search_roots_getter: Optional[Callable[[], list[Path]]] = None,
+    files_opener: Optional[Callable[[str], bool]] = None,
+    files_revealer: Optional[Callable[[list[str]], bool]] = None,
+    files_clock: Optional[Callable[[], float]] = None,
+    screenshot_grabber: Optional[Callable[[], Any]] = None,
+    screenshot_disk_free_getter: Optional[Callable[[Path], int]] = None,
+    screenshot_clock: Optional[Callable[[], float]] = None,
+    typing_enumerator: Optional[Callable[[], list]] = None,
+    typing_focus_fn: Optional[Callable[[int], bool]] = None,
+    typing_foreground_fn: Optional[Callable[[], tuple[Optional[str], Optional[str]]]] = None,
+    typing_char_sender: Optional[Callable[[str], None]] = None,
+    typing_is_elevated_fn: Optional[Callable[[int], bool]] = None,
+    typing_clock: Optional[Callable[[], float]] = None,
+    typing_sleep_fn: Optional[Callable[[float], None]] = None,
+    power_suspend_fn: Optional[Callable[[bool, bool, bool], bool]] = None,
+    power_clock: Optional[Callable[[], float]] = None,
 ) -> App:
     """Build and wire an ORBIT application instance with configured tools, policy, and logging."""
     if paths is None:
@@ -295,6 +330,140 @@ def build_app(
     audit = AuditLogger(path=str(paths.audit_log))
     run_logger = RunLogger(path=str(paths.runs_log))
 
+    # Initialize contact store and messaging tools
+    contact_store = None
+    env_msg = os.getenv("MESSAGING_ENABLED")
+    if env_msg is not None:
+        msg_on = env_msg.strip().lower() not in ("0", "false", "no", "off")
+    else:
+        msg_on = getattr(settings, "MESSAGING_ENABLED", True)
+
+    if msg_on:
+        try:
+            from contacts.store import ContactStore
+            paths.contacts_db.parent.mkdir(parents=True, exist_ok=True)
+            contact_store = ContactStore(path=paths.contacts_db)
+        except Exception:
+            contact_store = None
+
+    if contact_store is not None:
+        from tools.messaging_tools import make_messaging_tools
+        msg_tools = make_messaging_tools(
+            contacts=contact_store,
+            state_getter=lambda: getattr(agent, "session_state", None) if "agent" in locals() else None,
+            clock=clock,
+        )
+        for tool in msg_tools:
+            registry.register(tool)
+
+    # Window control tools
+    if window_control_enabled is not None:
+        win_controls_on = bool(window_control_enabled)
+    else:
+        env_win = os.getenv("WINDOW_CONTROL_ENABLED")
+        if env_win is not None:
+            win_controls_on = env_win.strip().lower() not in ("0", "false", "no", "off")
+        else:
+            win_controls_on = getattr(settings, "WINDOW_CONTROL_ENABLED", True)
+
+    if win_controls_on:
+        from tools.window_tools import make_window_tools
+        for tool in make_window_tools(
+            enumerator=window_enumerator,
+            focus_fn=window_focus_fn,
+            minimize_fn=window_minimize_fn,
+            maximize_fn=window_maximize_fn,
+            restore_fn=window_restore_fn,
+            snap_fn=window_snap_fn,
+            show_desktop_fn=window_show_desktop_fn,
+            is_elevated_fn=window_is_elevated_fn,
+            clock=system_clock or clock,
+        ):
+            registry.register(tool)
+
+    # User file discovery and opening tools
+    if files_enabled is not None:
+        files_on = bool(files_enabled)
+    else:
+        env_files = os.getenv("FILES_ENABLED")
+        if env_files is not None:
+            files_on = env_files.strip().lower() not in ("0", "false", "no", "off")
+        else:
+            files_on = getattr(settings, "FILES_ENABLED", True)
+
+    if files_on:
+        from tools.user_files import make_user_file_tools
+        for tool in make_user_file_tools(
+            session_state_getter=lambda: getattr(agent, "session_state", None) if "agent" in locals() else None,
+            search_roots_getter=files_search_roots_getter,
+            opener=files_opener,
+            revealer=files_revealer,
+            clock=files_clock or (system_clock or clock),
+        ):
+            registry.register(tool)
+
+    # Screenshot tools
+    if screenshots_enabled is not None:
+        sc_on = bool(screenshots_enabled)
+    else:
+        env_sc = os.getenv("SCREENSHOTS_ENABLED")
+        if env_sc is not None:
+            sc_on = env_sc.strip().lower() not in ("0", "false", "no", "off")
+        else:
+            sc_on = getattr(settings, "SCREENSHOTS_ENABLED", True)
+
+    if sc_on:
+        from tools.screenshot_tools import make_screenshot_tools
+        for tool in make_screenshot_tools(
+            workspace_dir_getter=lambda: paths.workspace,
+            grabber=screenshot_grabber,
+            disk_free_getter=screenshot_disk_free_getter,
+            clock=screenshot_clock or (system_clock or clock),
+        ):
+            registry.register(tool)
+
+    # Guarded typing tools
+    if typing_enabled is not None:
+        typ_on = bool(typing_enabled)
+    else:
+        env_typ = os.getenv("TYPING_ENABLED")
+        if env_typ is not None:
+            typ_on = env_typ.strip().lower() not in ("0", "false", "no", "off")
+        else:
+            typ_on = getattr(settings, "TYPING_ENABLED", False)
+
+    if typ_on:
+        from tools.typing_tools import make_typing_tools
+        for tool in make_typing_tools(
+            enumerator=typing_enumerator or window_enumerator,
+            focus_fn=typing_focus_fn or window_focus_fn,
+            foreground_fn=typing_foreground_fn,
+            char_sender=typing_char_sender,
+            is_elevated_fn=typing_is_elevated_fn or window_is_elevated_fn,
+            clock=typing_clock or (system_clock or clock),
+            sleep=typing_sleep_fn,
+            typing_enabled_getter=lambda: typ_on,
+        ):
+            registry.register(tool)
+
+    # Power sleep tools
+    if sleep_enabled is not None:
+        slp_on = bool(sleep_enabled)
+    else:
+        env_slp = os.getenv("SLEEP_ENABLED")
+        if env_slp is not None:
+            slp_on = env_slp.strip().lower() not in ("0", "false", "no", "off")
+        else:
+            slp_on = getattr(settings, "SLEEP_ENABLED", False)
+
+    if slp_on:
+        from tools.power_tools import make_power_tools
+        for tool in make_power_tools(
+            suspend_fn=power_suspend_fn,
+            clock=power_clock or (system_clock or clock),
+        ):
+            registry.register(tool)
+
     agent = Agent(
         provider=provider,
         registry=registry,
@@ -320,6 +489,7 @@ def build_app(
         routines_enabled=routines_on,
         system_controls_enabled=sys_controls_on,
         tool_routing=tool_routing,
+        contact_store=contact_store,
     )
 
     return App(
@@ -335,4 +505,5 @@ def build_app(
         browser_controller=browser_ctrl,
         reminder_store=reminder_store,
         routine_store=routine_store,
+        contact_store=contact_store,
     )

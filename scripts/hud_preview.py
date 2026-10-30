@@ -4,6 +4,7 @@ Key controls:
 - Keys 1-6: Force HUD states (1: Idle, 2: Listening, 3: Thinking, 4: Speaking, 5: Confirming, 6: Error)
 - M: Cycle motion modes (full -> reduced -> off)
 - T: Cycle theme palettes (cyan -> gold -> mono)
+- B: Cycle realism modes (full -> lite -> off)
 - Mic Slider: Adjust simulated microphone audio level
 - Dock icons: Click or use Left/Right arrows + Enter or Ctrl+1..5 to test actions
 """
@@ -21,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.version import VERSION
 from ui.dock import DockCanvas
 from ui.hud import HudCanvas
-from ui.hud_core import HudModel
+from ui.hud_core import HudModel, layout
 from ui.theme import apply_theme, get_data_font, get_palette
 
 
@@ -30,6 +31,7 @@ class HudPreviewApp:
 
     THEMES = ["cyan", "gold", "mono"]
     MOTIONS = ["full", "reduced", "off"]
+    REALISMS = ["full", "lite", "off"]
 
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -39,12 +41,16 @@ class HudPreviewApp:
 
         self.theme_idx = 0
         self.motion_idx = 0
+        self.realism_idx = 0
         self.palette = get_palette(self.THEMES[self.theme_idx])
         apply_theme(self.root, self.palette)
 
         self.model = HudModel()
         self._manual_state: str = "auto"
 
+        self._ref_visible: bool = False
+        self._ref_photo = None
+        self.ref_label = None
         self._build_ui()
         self._bind_keys()
         self._update_telemetry()
@@ -74,21 +80,34 @@ class HudPreviewApp:
         )
         self.telemetry_lbl.pack(side="right")
 
-        # Main HUD Canvas
+        # Main HUD Canvas & Reference Container
+        self.hud_container = tk.Frame(self.root, bg=self.palette.bg)
+        self.hud_container.pack(fill="both", expand=True, padx=12, pady=(0, 6))
+
+        self.ref_label = tk.Label(self.hud_container, bg=self.palette.bg)
+
         self.hud_canvas = HudCanvas(
-            self.root,
+            self.hud_container,
             model=self.model,
             palette=self.palette,
             fps=30,
             motion=self.MOTIONS[self.motion_idx],
             height=300,
         )
-        self.hud_canvas.pack(fill="both", expand=True, padx=12, pady=(0, 6))
+        self.hud_canvas.pack(side="right", fill="both", expand=True)
 
         # Bottom Dock Canvas
+        # Size dock canvas from layout so circles are strictly inside canvas
+        try:
+            tk_s = float(self.root.tk.call("tk", "scaling"))
+        except Exception:
+            tk_s = 1.0
+        init_ly = layout(800, 680, scaling=tk_s)
+
         self.dock_canvas = DockCanvas(
             self.root,
             palette=self.palette,
+            height=init_ly.dock_height,
             on_activity=lambda: self._set_notice("Dock Trigger: Activity"),
             on_routines=lambda: self._set_notice("Dock Trigger: Routines"),
             on_mic=self._toggle_mic_state,
@@ -97,6 +116,7 @@ class HudPreviewApp:
             get_voice_state=self._get_voice_state,
         )
         self.dock_canvas.pack(fill="x", padx=12, pady=(0, 6))
+        self.root.bind("<Configure>", self._on_window_configure, add="+")
 
         # Controls panel
         ctrl_frame = tk.Frame(self.root, bg=self.palette.panel, bd=1, relief="solid")
@@ -118,6 +138,15 @@ class HudPreviewApp:
             b = ttk.Button(btn_row, text=txt, command=cmd)
             b.pack(side="left", padx=3)
 
+        # Pulse buttons row
+        pulse_row = tk.Frame(ctrl_frame, bg=self.palette.panel, pady=4, padx=8)
+        pulse_row.pack(fill="x")
+        ttk.Button(pulse_row, text="Pulse (P)", command=self._trigger_full_pulse).pack(side="left", padx=2)
+        ttk.Button(pulse_row, text="Complete (C)", command=self._trigger_mild_pulse).pack(side="left", padx=2)
+        ttk.Button(pulse_row, text="Heartbeat (H)", command=self._trigger_heartbeat_pulse).pack(side="left", padx=2)
+        ttk.Button(pulse_row, text="Reply (S)", command=self._trigger_soft_pulse).pack(side="left", padx=2)
+        ttk.Button(pulse_row, text="Show Ref (R)", command=self._toggle_reference).pack(side="left", padx=2)
+
         # Mode toggles & mic slider
         slider_row = tk.Frame(ctrl_frame, bg=self.palette.panel, pady=6, padx=8)
         slider_row.pack(fill="x")
@@ -127,6 +156,9 @@ class HudPreviewApp:
 
         self.motion_btn = ttk.Button(slider_row, text="Motion (M): full", command=self._cycle_motion)
         self.motion_btn.pack(side="left", padx=4)
+
+        self.realism_btn = ttk.Button(slider_row, text="Realism (B): full", command=self._cycle_realism)
+        self.realism_btn.pack(side="left", padx=4)
 
         tk.Label(
             slider_row,
@@ -149,7 +181,7 @@ class HudPreviewApp:
         # Notice readout
         self.notice_lbl = tk.Label(
             ctrl_frame,
-            text="Ready. Keys: 1-6 (states), M (motion), T (theme), Arrows+Enter (dock)",
+            text="Ready. Keys: 1-6 (states), P/C/H/S (pulses), R (ref), M (motion), T (theme), B (realism)",
             bg=self.palette.panel,
             fg=self.palette.ok,
             font=("Segoe UI", 9, "italic"),
@@ -167,7 +199,63 @@ class HudPreviewApp:
         self.root.bind("<Key-t>", lambda e: self._cycle_theme())
         self.root.bind("<Key-T>", lambda e: self._cycle_theme())
         self.root.bind("<Key-m>", lambda e: self._cycle_motion())
+        self.root.bind("<Key-b>", lambda e: self._cycle_realism())
+        self.root.bind("<Key-B>", lambda e: self._cycle_realism())
         self.root.bind("<Key-M>", lambda e: self._cycle_motion())
+        self.root.bind("<Key-r>", lambda e: self._toggle_reference())
+        self.root.bind("<Key-R>", lambda e: self._toggle_reference())
+        self.root.bind("<Key-p>", lambda e: self._trigger_full_pulse())
+        self.root.bind("<Key-P>", lambda e: self._trigger_full_pulse())
+        self.root.bind("<Key-c>", lambda e: self._trigger_mild_pulse())
+        self.root.bind("<Key-C>", lambda e: self._trigger_mild_pulse())
+        self.root.bind("<Key-h>", lambda e: self._trigger_heartbeat_pulse())
+        self.root.bind("<Key-H>", lambda e: self._trigger_heartbeat_pulse())
+        self.root.bind("<Key-s>", lambda e: self._trigger_soft_pulse())
+        self.root.bind("<Key-S>", lambda e: self._trigger_soft_pulse())
+
+    def _trigger_full_pulse(self) -> None:
+        self.model.trigger_pulse("full", 1.0)
+        self._set_notice("Triggered FULL pulse (amplitude 1.0)")
+
+    def _trigger_mild_pulse(self) -> None:
+        self.model.trigger_pulse("mild", 0.45)
+        self._set_notice("Triggered MILD pulse for task completion (amplitude 0.45)")
+
+    def _trigger_heartbeat_pulse(self) -> None:
+        self.model.trigger_pulse("heartbeat", 0.25)
+        self._set_notice("Triggered HEARTBEAT pulse (amplitude 0.25)")
+
+    def _trigger_soft_pulse(self) -> None:
+        self.model.trigger_pulse("soft", 0.50)
+        self._set_notice("Triggered SOFT reply pulse (amplitude 0.50)")
+
+    def _toggle_reference(self) -> None:
+        if self._ref_visible:
+            self._ref_visible = False
+            if self.ref_label is not None:
+                self.ref_label.pack_forget()
+            self._set_notice("Reference image hidden")
+            return
+
+        ref_path = Path(__file__).resolve().parent.parent / "design_reference" / "reference.png"
+        if not ref_path.exists():
+            self._set_notice("design_reference/reference.png not found")
+            return
+
+        try:
+            from PIL import Image, ImageTk
+            img = Image.open(ref_path)
+            h = max(240, self.hud_canvas.winfo_height())
+            aspect = img.width / max(1, img.height)
+            w = int(h * aspect)
+            img = img.resize((w, h), Image.Resampling.LANCZOS)
+            self._ref_photo = ImageTk.PhotoImage(img)
+            self.ref_label.configure(image=self._ref_photo, bg=self.palette.bg)
+            self.ref_label.pack(side="left", padx=(0, 6), fill="y")
+            self._ref_visible = True
+            self._set_notice("Showing design reference beside live HUD")
+        except Exception as exc:
+            self._set_notice(f"Failed to load reference image: {exc}")
 
     def _set_idle(self) -> None:
         self._manual_state = "idle"
@@ -235,6 +323,23 @@ class HudPreviewApp:
         self.motion_btn.configure(text=f"Motion (M): {motion_name}")
         self._set_notice(f"Motion mode set to {motion_name}")
 
+    def _cycle_realism(self) -> None:
+        self.realism_idx = (self.realism_idx + 1) % len(self.REALISMS)
+        r_name = self.REALISMS[self.realism_idx]
+        self.hud_canvas.realism = r_name
+        self.hud_canvas._schedule_realism_build()
+        self.realism_btn.configure(text=f"Realism (B): {r_name}")
+        self._set_notice(f"Realism mode set to {r_name}")
+
+    def _on_window_configure(self, event: tk.Event) -> None:
+        if event.widget == self.root:
+            try:
+                tk_s = float(self.root.tk.call("tk", "scaling"))
+            except Exception:
+                tk_s = 1.0
+            ly = layout(event.width, event.height, scaling=tk_s)
+            self.dock_canvas.configure(height=ly.dock_height)
+
     def _on_scale_change(self, val_str: str) -> None:
         try:
             val = float(val_str)
@@ -260,9 +365,16 @@ class HudPreviewApp:
         st_name = self.model.state.value.upper()
         tier = self.model.tier.upper()
         avg_ft = self.model.average_frame_time * 1000.0
+        inst_ft = getattr(self.hud_canvas, "_last_frame_duration", 0.0) * 1000.0
         downgrades = self.model.downgrades_count
+        items_last = getattr(self.hud_canvas, "items_touched_last_frame", 0)
+        items_avg = getattr(self.hud_canvas, "items_touched_average", 0.0)
+        realism_mode = getattr(self.hud_canvas, "realism", "full").upper()
         self.telemetry_lbl.configure(
-            text=f"STATE: {st_name} | TIER: {tier} | FRAME: {avg_ft:.1f}ms | DROPS: {downgrades}"
+            text=(
+                f"STATE: {st_name} | TIER: {tier} | FRAME: {avg_ft:.1f}ms (last: {inst_ft:.1f}ms) | "
+                f"ITEMS: {items_last} (avg: {items_avg:.0f}) | REALISM: {realism_mode} | DROPS: {downgrades}"
+            )
         )
         self.root.after(200, self._update_telemetry)
 

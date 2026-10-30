@@ -34,6 +34,7 @@ class ConfirmRequest:
     args: dict
     warning: Optional[str]
     timeout_s: float
+    summary: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.args is not None:
@@ -277,7 +278,11 @@ class ChatController:
                 self._worker_thread = None
 
     def confirm_callback(
-        self, tool: str, args: dict, warning: Optional[str] = None
+        self,
+        tool: str,
+        args: dict,
+        warning: Optional[str] = None,
+        summary: Optional[str] = None,
     ) -> bool:
         """Prompt user for confirmation from the worker thread.
 
@@ -306,6 +311,7 @@ class ChatController:
             args=args,
             warning=warning,
             timeout_s=self.confirm_timeout_s,
+            summary=summary,
         )
 
         self._emit("confirm_request", {
@@ -314,6 +320,7 @@ class ChatController:
             "tool": tool,
             "args": req.args,
             "warning": warning,
+            "summary": summary,
             "timeout_s": self.confirm_timeout_s,
             "task": self._current_task,
         })

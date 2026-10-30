@@ -39,9 +39,9 @@ def make_plan(
     capabilities: list[str] = []
     if tools:
         if hasattr(tools, "list_tools"):
-            tool_items = tools.list_tools()
+            tool_items = tools.list_tools(model_visible_only=True)
         else:
-            tool_items = list(tools)
+            tool_items = [t for t in tools if getattr(t, "model_visible", True)]
 
         for t in tool_items:
             if hasattr(t, "name") and hasattr(t, "description"):

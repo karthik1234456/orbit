@@ -19,6 +19,9 @@ class Tool:
     untrusted_output: bool = False
     precheck: Callable[[dict], str | None] | None = None
     escalate_when_tainted: bool = False
+    model_visible: bool = True
+    block_when_tainted: bool = False
+    describe: Optional[Callable[..., str]] = None
 
 
 class ToolRegistry:
@@ -38,9 +41,12 @@ class ToolRegistry:
         """Retrieve a registered tool by name or return None if not found."""
         return self._tools.get(name)
 
-    def list_tools(self) -> list[Tool]:
-        """Return all currently registered tools."""
-        return list(self._tools.values())
+    def list_tools(self, model_visible_only: bool = False) -> list[Tool]:
+        """Return all currently registered tools, optionally filtering for model_visible=True only."""
+        tools = list(self._tools.values())
+        if model_visible_only:
+            return [t for t in tools if getattr(t, "model_visible", True)]
+        return tools
 
     @staticmethod
     def _is_valid_type(val: Any, expected_type: str) -> bool:

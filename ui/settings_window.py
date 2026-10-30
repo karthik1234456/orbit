@@ -133,6 +133,15 @@ class SettingsWindow(tk.Toplevel):
                     variable=var,
                 )
                 cb.pack(anchor="w")
+                if key == "TYPING_ENABLED":
+                    def _on_typing_toggle(*args, v=var) -> None:
+                        if v.get():
+                            messagebox.showwarning(
+                                "Typing Warning",
+                                "ORBIT will type the approved text into the chosen app. It never presses Enter.",
+                                parent=self,
+                            )
+                    var.trace_add("write", _on_typing_toggle)
             elif spec.type == "enum":
                 init_val = eff_val or ("empty" if key == "STT_LANGUAGE" and not eff_val else eff_val)
                 var = tk.StringVar(value=init_val)
@@ -146,6 +155,15 @@ class SettingsWindow(tk.Toplevel):
                     width=14,
                 )
                 combo.pack(anchor="w")
+                if key == "WHATSAPP_SEND_MODE":
+                    def _on_whatsapp_mode_changed(event: Optional[tk.Event] = None, v=var) -> None:
+                        if v.get() == "send":
+                            messagebox.showwarning(
+                                "WhatsApp Send Mode Warning",
+                                "Each approved message will be sent immediately by pressing Enter in WhatsApp. Use at your own responsibility and follow WhatsApp's terms.",
+                                parent=self,
+                            )
+                    combo.bind("<<ComboboxSelected>>", _on_whatsapp_mode_changed)
             elif spec.type == "int":
                 var = tk.StringVar(value=eff_val)
                 self.widget_vars[key] = var
@@ -248,6 +266,9 @@ class SettingsWindow(tk.Toplevel):
         cancel_btn = ttk.Button(btn_bar, text="Cancel", command=self.destroy)
         cancel_btn.pack(side="right", padx=(6, 0))
 
+        contacts_btn = ttk.Button(btn_bar, text="Manage Contacts...", command=self._on_manage_contacts)
+        contacts_btn.pack(side="left")
+
         save_btn = ttk.Button(btn_bar, text="Save Settings", command=self._on_save)
         save_btn.pack(side="right")
 
@@ -262,6 +283,11 @@ class SettingsWindow(tk.Toplevel):
             speaker = get_speaker()
         if speaker and hasattr(speaker, "speak"):
             speaker.speak("This is ORBIT. Voice check complete.", blocking=False)
+
+    def _on_manage_contacts(self) -> None:
+        from ui.contacts_window import ContactsWindow
+        c_store = getattr(self.controller, "contact_store", None)
+        ContactsWindow(self, contacts=c_store, controller=self.controller)
 
     def _on_save(self) -> None:
         from config.paths import is_demo_mode

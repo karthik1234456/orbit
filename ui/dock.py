@@ -44,7 +44,7 @@ class DockCanvas(tk.Canvas):
         self.get_voice_state = get_voice_state
 
         kwargs.setdefault("bg", self.palette.bg)
-        kwargs.setdefault("height", 64)
+        kwargs.setdefault("height", 110)
         kwargs.setdefault("highlightthickness", 0)
         kwargs.setdefault("takefocus", True)
         super().__init__(parent, **kwargs)
@@ -162,8 +162,33 @@ class DockCanvas(tk.Canvas):
         cy = h / 2.0
         cx = w / 2.0
 
+        try:
+            top = self.winfo_toplevel()
+            parent_w = float(top.winfo_width())
+            parent_h = float(top.winfo_height())
+        except Exception:
+            parent_w = 0.0
+            parent_h = 0.0
+
+        if parent_w >= 600.0 and parent_h >= 400.0:
+            from ui.hud_core import layout
+
+            try:
+                tk_scale = float(self.tk.call("tk", "scaling"))
+                if tk_scale < 0.5 or tk_scale > 4.0:
+                    tk_scale = 1.0
+            except Exception:
+                tk_scale = 1.0
+
+            ly = layout(parent_w, parent_h, scaling=tk_scale)
+            centers = []
+            for i, x_val in enumerate(ly.dock_xs):
+                r = ly.dock_mic_radius if i == 2 else ly.dock_side_radius
+                off = x_val - ly.cx
+                centers.append((cx + off, cy, r))
+            return centers
+
         spacing = 58.0
-        # Centers: -2*spacing, -1*spacing, 0, 1*spacing, 2*spacing
         centers = []
         for i in range(self.ICON_COUNT):
             x = cx + (i - 2) * spacing
@@ -245,14 +270,19 @@ class DockCanvas(tk.Canvas):
             is_focus = (i == self._focused_idx and self._has_keyboard_focus)
 
             # Background circle
-            bg_col = self.palette.panel_edge if is_hover else self.palette.panel
-            edge_col = self.palette.accent if is_hover else self.palette.panel_edge
+            if self.palette.name == "gold":
+                bg_col = "#262015" if i == 2 else self.palette.panel
+                edge_col = self.palette.accent if is_hover else "#C3A668"
+            else:
+                bg_col = self.palette.panel_edge if is_hover else self.palette.panel
+                edge_col = self.palette.accent if is_hover else self.palette.panel_edge
 
+            stroke_w = 2 if is_hover else (1.5 if self.palette.name == "gold" else 1)
             self.create_oval(
                 cx - r, cy - r, cx + r, cy + r,
                 fill=bg_col,
                 outline=edge_col,
-                width=2 if is_hover else 1,
+                width=stroke_w,
             )
 
             # Focus ring

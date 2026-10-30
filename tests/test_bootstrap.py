@@ -212,6 +212,49 @@ def test_all_expected_tools_registered_with_no_duplicates(tmp_path: Path):
         expected = expected | browser_tools
     if settings.system_controls_enabled():
         expected = expected | system_tools
+    messaging_tools = {
+        "send_whatsapp",
+        "open_email_draft",
+    }
+    if getattr(settings, "MESSAGING_ENABLED", True):
+        expected = expected | messaging_tools
+
+    window_tools = {
+        "focus_app",
+        "minimize_app",
+        "maximize_app",
+        "restore_app",
+        "snap_app",
+        "show_desktop",
+    }
+    if getattr(settings, "WINDOW_CONTROL_ENABLED", True):
+        expected = expected | window_tools
+
+    user_file_tools = {
+        "find_files",
+        "open_found_file",
+        "reveal_found_file",
+    }
+    if getattr(settings, "FILES_ENABLED", True):
+        expected = expected | user_file_tools
+
+    screenshot_tools = {
+        "take_screenshot",
+    }
+    if getattr(settings, "SCREENSHOTS_ENABLED", True):
+        expected = expected | screenshot_tools
+
+    typing_tools = {
+        "type_into_app",
+    }
+    if getattr(settings, "TYPING_ENABLED", False):
+        expected = expected | typing_tools
+
+    power_tools = {
+        "sleep_computer",
+    }
+    if getattr(settings, "SLEEP_ENABLED", False):
+        expected = expected | power_tools
 
     assert set(tool_names) == expected
 

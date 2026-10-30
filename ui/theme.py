@@ -34,26 +34,26 @@ class Palette:
 PALETTES: dict[str, Palette] = {
     "cyan": Palette(
         name="cyan",
-        bg="#040d12",          # Near-black deep teal
-        panel="#081b24",       # Dark teal panel
-        panel_edge="#0d4052",  # Subtle teal edge
+        bg="#05080c",          # Near-black deep teal
+        panel="#09141c",       # Dark teal panel
+        panel_edge="#154354",  # Subtle teal edge
         text="#e0f7fa",        # Bright icy white-cyan (>= 15:1 contrast)
-        text_dim="#80deea",    # Aqua secondary text (>= 11:1 contrast)
+        text_dim="#80deea",    # Aqua secondary text (>= 12:1 contrast)
         accent="#00e5ff",      # Electric cyan highlight
-        accent_dim="#00838f",  # Deep cyan glow
+        accent_dim="#007a87",  # Deep cyan glow
         ok="#00e676",          # Neon emerald
         warn="#ffb300",        # Warm amber
         danger="#ff1744",      # High-tech warning red
     ),
     "gold": Palette(
         name="gold",
-        bg="#0c0a06",          # Near-black warm obsidian
-        panel="#18140c",       # Warm graphite/gold panel
-        panel_edge="#382e18",  # Burnished bronze edge
+        bg="#08080d",          # Near-black warm obsidian with dark vignette
+        panel="#181510",       # Warm graphite/gold panel
+        panel_edge="#7a6640",  # Burnished bronze panel edge (#7A6640)
         text="#fff8e7",        # Champagne white (>= 17:1 contrast)
-        text_dim="#e6c687",    # Warm gold secondary text (>= 11:1 contrast)
-        accent="#ffd700",      # Pure gold highlight
-        accent_dim="#997a15",  # Antique gold glow
+        text_dim="#e6cc9a",    # Champagne secondary text (>= 12:1 contrast)
+        accent="#d6ae47",      # Accent gold highlight (#D6AE47)
+        accent_dim="#7e6c48",  # Dim bronze glow (#7E6C48)
         ok="#81c784",          # Soft sage green
         warn="#ffa000",        # Amber alert
         danger="#e53935",      # Deep crimson
@@ -110,7 +110,7 @@ def contrast_ratio(fg: str, bg: str) -> float:
     return (lighter + 0.05) / (darker + 0.05)
 
 
-def get_heading_font(root: Optional[Any] = None) -> tuple[str, int, str]:
+def get_heading_font(root: Optional[Any] = None, size: int = 11) -> tuple[str, int, str]:
     """Select modern heading font with graceful system fallback."""
     available: list[str] = []
     if root is not None:
@@ -120,10 +120,10 @@ def get_heading_font(root: Optional[Any] = None) -> tuple[str, int, str]:
         except Exception:
             pass
 
-    for candidate in ("bahnschrift semilight", "bahnschrift", "segoe ui", "helvetica", "arial"):
+    for candidate in ("bahnschrift light", "bahnschrift semilight", "bahnschrift", "segoe ui light", "segoe ui", "helvetica", "arial"):
         if not available or candidate in available:
-            return (candidate.title(), 11, "bold")
-    return ("Helvetica", 11, "bold")
+            return (candidate.title(), size, "bold")
+    return ("Helvetica", size, "bold")
 
 
 def get_data_font(root: Optional[Any] = None, size: int = 9) -> tuple[str, int]:
@@ -235,10 +235,12 @@ def apply_theme(root: Any, palette: Palette) -> None:
             borderwidth=0,
             tabmargins=[2, 2, 2, 0],
         )
+        tab_selected_fg = "#E6CC9A" if palette.name == "gold" else palette.accent
+        tab_idle_fg = "#6E5C3E" if palette.name == "gold" else palette.text_dim
         style.configure(
             "TNotebook.Tab",
             background=palette.panel,
-            foreground=palette.text_dim,
+            foreground=tab_idle_fg,
             padding=[8, 3],
             bordercolor=palette.panel_edge,
             lightcolor=palette.panel,
@@ -247,7 +249,7 @@ def apply_theme(root: Any, palette: Palette) -> None:
         style.map(
             "TNotebook.Tab",
             background=[("selected", palette.bg), ("active", palette.panel_edge)],
-            foreground=[("selected", palette.accent), ("active", palette.text)],
+            foreground=[("selected", tab_selected_fg), ("active", palette.text)],
             bordercolor=[("selected", palette.accent_dim)],
         )
 
@@ -297,6 +299,8 @@ def style_chat_tags(text_widget: Any, palette: Palette) -> None:
         text_widget.tag_configure("orbit", foreground=palette.text, font=("Segoe UI", 10))
         text_widget.tag_configure("system", foreground=palette.text_dim, font=("Segoe UI", 9, "italic"))
         text_widget.tag_configure("error", foreground=palette.danger, font=("Segoe UI", 10, "bold"))
+        bubble_bg = "#302B23" if palette.name == "gold" else palette.panel
+        text_widget.tag_configure("bubble", background=bubble_bg, foreground=palette.text)
     except Exception:
         pass
 
