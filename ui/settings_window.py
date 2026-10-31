@@ -12,6 +12,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Any, Callable, Optional, Union
 
+from config import settings
 from config.settings_store import (
     SPECS,
     SaveResult,
@@ -269,6 +270,9 @@ class SettingsWindow(tk.Toplevel):
         contacts_btn = ttk.Button(btn_bar, text="Manage Contacts...", command=self._on_manage_contacts)
         contacts_btn.pack(side="left")
 
+        verify_btn = ttk.Button(btn_bar, text="Verification...", command=self._on_verify)
+        verify_btn.pack(side="left", padx=(6, 0))
+
         save_btn = ttk.Button(btn_bar, text="Save Settings", command=self._on_save)
         save_btn.pack(side="right")
 
@@ -283,6 +287,13 @@ class SettingsWindow(tk.Toplevel):
             speaker = get_speaker()
         if speaker and hasattr(speaker, "speak"):
             speaker.speak("This is ORBIT. Voice check complete.", blocking=False)
+
+    def _on_verify(self) -> None:
+        try:
+            from ui.verify_window import VerificationWindow
+            VerificationWindow(self, palette=self.palette)
+        except Exception:
+            pass
 
     def _on_manage_contacts(self) -> None:
         from ui.contacts_window import ContactsWindow
@@ -335,6 +346,18 @@ class SettingsWindow(tk.Toplevel):
             proceed = messagebox.askyesno(
                 "Disable Routine Preview?",
                 "Routines will run without a preview dialog. Per-step approvals for apps and sites still apply.\n\nProceed with saving?",
+                parent=self,
+            )
+            if not proceed:
+                return
+
+        # Check HANDS_FREE=1 confirmation
+        if changes.get("HANDS_FREE") == "1":
+            phrase = changes.get("WAKE_PHRASE") or getattr(settings, "WAKE_PHRASE", "hey orbit")
+            proceed = messagebox.askokcancel(
+                "Enable Hands-free Listening",
+                f"ORBIT will listen locally for '{phrase}' using your microphone. Other speech is checked on this computer and discarded. Anyone nearby who says the wake phrase can trigger actions that do not need approval. Approvals still need a click or key.",
+                default="cancel",
                 parent=self,
             )
             if not proceed:

@@ -263,11 +263,19 @@ VOICE_ALIASES: int = _parse_int(os.getenv("VOICE_ALIASES"), 0)
 VOICE_REVIEW: str = _parse_voice_review(os.getenv("VOICE_REVIEW"), "auto")
 
 WAKE_PHRASE: str = os.getenv("WAKE_PHRASE", "hey orbit")
+WAKE_SENSITIVITY: float = _parse_float(os.getenv("WAKE_SENSITIVITY"), 0.80)
 WAKE_STT_MODEL: str = os.getenv("WAKE_STT_MODEL", "tiny.en")
 VAD_THRESHOLD: float = _parse_float(os.getenv("VAD_THRESHOLD"), 0.01)
 SILENCE_SECONDS: float = _parse_float(os.getenv("SILENCE_SECONDS"), 0.8)
 WAKE_COOLDOWN_SECONDS: float = _parse_float(os.getenv("WAKE_COOLDOWN_SECONDS"), 3.0)
 WAKE_LISTEN_TIMEOUT: float = _parse_float(os.getenv("WAKE_LISTEN_TIMEOUT"), 6.0)
+
+HANDS_FREE: int = _parse_int(os.getenv("HANDS_FREE"), 0)
+if os.getenv("ORBIT_EVAL") == "1" or os.getenv("DEMO_MODE") == "1":
+    HANDS_FREE = 0
+HANDS_FREE_IDLE_MINUTES: int = _parse_int(os.getenv("HANDS_FREE_IDLE_MINUTES"), 10)
+HANDS_FREE_FOLLOWUP_SECONDS: int = _parse_int(os.getenv("HANDS_FREE_FOLLOWUP_SECONDS"), 0)
+HANDS_FREE_CUES: int = _parse_int(os.getenv("HANDS_FREE_CUES"), 1)
 STREAM_REPLIES: bool = _parse_bool(os.getenv("STREAM_REPLIES"), True)
 COMMAND_SHORTCUTS: bool = _parse_bool(os.getenv("COMMAND_SHORTCUTS"), True)
 CHAINS_ENABLED: bool = _parse_bool(os.getenv("CHAINS_ENABLED"), True)
@@ -435,6 +443,9 @@ UI_MOTION: str = _parse_ui_motion(os.getenv("UI_MOTION"), "full")
 HUD_FPS: int = _parse_hud_fps(os.getenv("HUD_FPS"), 30)
 UI_REALISM: str = _parse_ui_realism(os.getenv("UI_REALISM"), "full")
 UI_INTERACTIVE: int = _parse_ui_interactive(os.getenv("UI_INTERACTIVE"), 1)
+INSIGHTS_ENABLED: int = _parse_ui_interactive(os.getenv("INSIGHTS_ENABLED"), 1)
+SYSTEM_TAB_GPU: int = _parse_ui_interactive(os.getenv("SYSTEM_TAB_GPU"), 1)
+UI_STATUS_CHIPS: int = _parse_ui_interactive(os.getenv("UI_STATUS_CHIPS"), 1)
 
 
 def __getattr__(name: str) -> Any:
@@ -500,6 +511,12 @@ def __getattr__(name: str) -> Any:
         return _parse_ui_realism(os.getenv("UI_REALISM"), "full")
     if name == "UI_INTERACTIVE":
         return _parse_ui_interactive(os.getenv("UI_INTERACTIVE"), 1)
+    if name == "INSIGHTS_ENABLED":
+        return _parse_ui_interactive(os.getenv("INSIGHTS_ENABLED"), 1)
+    if name == "SYSTEM_TAB_GPU":
+        return _parse_ui_interactive(os.getenv("SYSTEM_TAB_GPU"), 1)
+    if name == "UI_STATUS_CHIPS":
+        return _parse_ui_interactive(os.getenv("UI_STATUS_CHIPS"), 1)
     if name == "RAG_EMBEDDINGS":
         return _parse_bool(os.getenv("RAG_EMBEDDINGS"), False)
     if name == "RAG_EMBED_MODEL":
@@ -613,6 +630,9 @@ def __dir__() -> list[str]:
             "HUD_FPS",
         "UI_REALISM",
         "UI_INTERACTIVE",
+            "INSIGHTS_ENABLED",
+            "SYSTEM_TAB_GPU",
+            "UI_STATUS_CHIPS",
             "VOICES_DIR",
             "TTS_ENGINE",
             "PIPER_VOICE",

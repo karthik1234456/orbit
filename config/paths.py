@@ -204,6 +204,17 @@ def get_runs_log_path() -> Path:
     return (get_logs_dir() / "runs.jsonl").resolve()
 
 
+def get_verify_dir() -> Path:
+    """Return resolved verification results directory.
+
+    Precedence: VERIFY_DIR env var > data_dir / verify.
+    """
+    explicit = os.getenv("VERIFY_DIR")
+    if explicit and explicit.strip():
+        return Path(explicit.strip()).resolve()
+    return (get_data_dir() / "verify").resolve()
+
+
 def get_diag_dir() -> Path:
     """Return resolved diagnostics report output directory.
 
@@ -227,6 +238,7 @@ RECORDED_OLD_DEFAULTS: dict[str, Path] = {
     "audit_log": (REPO_ROOT / "logs" / "audit.jsonl").resolve(),
     "runs_log": (REPO_ROOT / "logs" / "runs.jsonl").resolve(),
     "diag_dir": (REPO_ROOT / "logs").resolve(),
+    "verify_dir": (REPO_ROOT / "data" / "verify").resolve(),
     "data_dir": (REPO_ROOT / "data").resolve(),
     "logs_dir": (REPO_ROOT / "logs").resolve(),
 }

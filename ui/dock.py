@@ -15,7 +15,7 @@ import math
 import tkinter as tk
 from typing import Any, Callable, Optional
 
-from ui.theme import Palette, get_palette
+from ui.theme import Palette, blend_color, get_palette
 
 
 class DockCanvas(tk.Canvas):
@@ -33,6 +33,7 @@ class DockCanvas(tk.Canvas):
         on_settings: Optional[Callable[[], None]] = None,
         on_doctor: Optional[Callable[[], None]] = None,
         get_voice_state: Optional[Callable[[], tuple[str, bool, str]]] = None,
+        on_toggle_handsfree: Optional[Callable[[], None]] = None,
         **kwargs: Any,
     ) -> None:
         self.palette = palette or get_palette("cyan")
@@ -42,6 +43,7 @@ class DockCanvas(tk.Canvas):
         self.on_settings = on_settings
         self.on_doctor = on_doctor
         self.get_voice_state = get_voice_state
+        self.on_toggle_handsfree = on_toggle_handsfree
 
         kwargs.setdefault("bg", self.palette.bg)
         kwargs.setdefault("height", 110)
@@ -53,6 +55,8 @@ class DockCanvas(tk.Canvas):
         self._hover_idx: Optional[int] = None
         self._has_keyboard_focus: bool = False
         self._mic_level: float = 0.0
+        self._circle_ids: list[int] = []
+        self._gear_items: list[int] = []
 
         # Tooltip state
         self._tip_window: Optional[tk.Toplevel] = None
@@ -67,6 +71,7 @@ class DockCanvas(tk.Canvas):
         self.bind("<Motion>", self._on_mouse_motion)
         self.bind("<Leave>", self._on_mouse_leave)
         self.bind("<Button-1>", self._on_mouse_click)
+        self.bind("<Button-3>", self._on_right_click)
 
         # Ctrl+1..5 global bindings on parent/root
         for i in range(1, 6):
@@ -228,6 +233,18 @@ class DockCanvas(tk.Canvas):
                 self._trigger_index(i)
                 break
 
+    def _on_right_click(self, event: tk.Event) -> None:
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label="Hands-free on/off", command=self._on_toggle_handsfree_cmd)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _on_toggle_handsfree_cmd(self) -> None:
+        if callable(self.on_toggle_handsfree):
+            self.on_toggle_handsfree()
+
     def _trigger_index(self, idx: int) -> None:
         """Dispatch action for the given icon index calling the existing handlers."""
         if idx == 0 and callable(self.on_activity):
@@ -257,6 +274,8 @@ class DockCanvas(tk.Canvas):
     def redraw(self) -> None:
         """Render all 5 vector icons with hover and focus effects."""
         self.delete("all")
+        self._circle_ids.clear()
+        self._gear_items.clear()
         centers = self._get_icon_centers()
 
         # Check voice state
@@ -269,21 +288,23 @@ class DockCanvas(tk.Canvas):
             is_hover = (i == self._hover_idx)
             is_focus = (i == self._focused_idx and self._has_keyboard_focus)
 
-            # Background circle
-            if self.palette.name == "gold":
-                bg_col = "#262015" if i == 2 else self.palette.panel
-                edge_col = self.palette.accent if is_hover else "#C3A668"
+            # Thin outline circle with theme stroke (no filled discs, glow only on hover/active)
+            if is_hover or is_focus:
+                bg_col = blend_color(self.palette.bg, self.palette.accent, 0.22)
+                edge_col = self.palette.accent
+                stroke_w = 2.0
             else:
-                bg_col = self.palette.panel_edge if is_hover else self.palette.panel
-                edge_col = self.palette.accent if is_hover else self.palette.panel_edge
+                bg_col = ""
+                edge_col = self.palette.panel_edge
+                stroke_w = 1.5
 
-            stroke_w = 2 if is_hover else (1.5 if self.palette.name == "gold" else 1)
-            self.create_oval(
+            cid = self.create_oval(
                 cx - r, cy - r, cx + r, cy + r,
                 fill=bg_col,
                 outline=edge_col,
                 width=stroke_w,
             )
+            self._circle_ids.append(cid)
 
             # Focus ring
             if is_focus:
@@ -367,16 +388,18 @@ class DockCanvas(tk.Canvas):
 
     def _draw_gear_icon(self, cx: float, cy: float, sz: float, color: str) -> None:
         # Gear body
-        self.create_oval(cx - sz * 0.7, cy - sz * 0.7, cx + sz * 0.7, cy + sz * 0.7, outline=color, width=1.5)
-        self.create_oval(cx - sz * 0.25, cy - sz * 0.25, cx + sz * 0.25, cy + sz * 0.25, fill=color, outline="")
-        # 6 Gear teeth
-        for k in range(6):
-            ang = (math.pi / 3.0) * k
+        g1 = self.create_oval(cx - sz * 0.7, cy - sz * 0.7, cx + sz * 0.7, cy + sz * 0.7, outline=color, width=1.5)
+        g2 = self.create_oval(cx - sz * 0.25, cy - sz * 0.25, cx + sz * 0.25, cy + sz * 0.25, fill=color, outline="")
+        self._gear_items.extend([g1, g2])
+        # 8 Gear teeth (B6)
+        for k in range(8):
+            ang = (2.0 * math.pi / 8.0) * k
             tx1 = cx + math.cos(ang) * (sz * 0.65)
             ty1 = cy + math.sin(ang) * (sz * 0.65)
             tx2 = cx + math.cos(ang) * (sz * 1.0)
             ty2 = cy + math.sin(ang) * (sz * 1.0)
-            self.create_line(tx1, ty1, tx2, ty2, fill=color, width=2.5)
+            t = self.create_line(tx1, ty1, tx2, ty2, fill=color, width=2.0)
+            self._gear_items.append(t)
 
     def _draw_doctor_icon(self, cx: float, cy: float, sz: float, color: str) -> None:
         # Heartbeat pulse line (EKG)

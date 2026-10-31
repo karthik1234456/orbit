@@ -7,6 +7,135 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.25.0] - 2026-10-31
+
+### Added & Enhanced
+- **Hands-Free Desktop Voice Controller (ui/handsfree.py, ui/app.py)**:
+  - **Local Wake Word Daemon**: One dedicated background worker thread owns the audio stream; UI thread never touches audio; listens locally for `hey orbit` using `tiny.en` (`WAKE_STT_MODEL`).
+  - **Strict Privacy Guarantees**: Segments between 0.3 s and 4.0 s are cropped to the first 3.0 s before the wake model; non-wake transcripts are discarded immediately and never stored, logged, emitted, or assigned to attributes.
+  - **Inline & Two-Turn Commands**: Supports inline command remainder (e.g. "hey orbit what time is it") or prompts for command capture with rising wake cue (timeout 6 s, silence 0.8 s, cap 30 s).
+  - **Quality Drop Gate**: Drops utterances with `avg_logprob < -1.0`, `no_speech_prob > 0.6`, fewer than 2 words, or empty text with descending error tones and notice "I didn't catch that".
+  - **Agent Command Routing**: Valid commands are emitted with source `"voice-handsfree"` and submitted via `controller.submit(text, source="voice-handsfree")` matching typed input security policies.
+  - **Optional Follow-Up Window**: `HANDS_FREE_FOLLOWUP_SECONDS` (default 0, max 10) accepts one conversational reply without repeating the wake phrase.
+- **Strict Gating, Muting & Dialog Security**:
+  - Stream is muted while speaking plus 1.0 s echo suppression, during open confirmation/plan dialogs and toasts, and while background tasks run (unless inside follow-up window).
+  - **Physical Confirmations Unchanged**: Voice input strictly produces text and can NEVER confirm, approve, or resolve security dialogs.
+  - **Click-to-Talk Priority**: Manual mic clicks pause hands-free, release the audio device completely, and resume once manual recording finishes.
+  - **Rate Limiting & Idle Protection**: Capped at 6 wake triggers/min with 30 s cooldown; automatically powers off after `HANDS_FREE_IDLE_MINUTES` (default 10) of silence; auto-disables after 3 consecutive audio errors.
+- **Audio Cue System (ui/cues.py)**:
+  - Background daemon thread plays short tones via `winsound.Beep`: wake (rising), done (soft), error (descending), attention (two quick alerts on dialog), off (low tone).
+  - Silently disabled when sound is unavailable or `HANDS_FREE_CUES=0`.
+- **UI Integration & Status**:
+  - Hands-free toggle available via `Ctrl+Shift+M`, dock context menu, command palette, and radial menu.
+  - HUD outer breathing ring and "HANDS-FREE" label while armed (static under `UI_MOTION="off"`).
+  - Status-bar chip "HANDS-FREE" with privacy tooltip.
+  - Mandatory privacy confirmation prompt on first enable in a session or after setting changes.
+- **Diagnostics & Doctor Checks (core/doctor.py, core/diagnostics.py)**:
+  - Doctor check for hands-free configuration, microphone availability, and Whisper model cache status.
+  - Diagnostics section `=== HANDS-FREE ===` reporting configuration and event counters without logging text or audio.
+- **Live Wake Evaluation Probe (scripts/wake_probe.py, docs/HANDS_FREE.md)**:
+  - Non-destructive 3-stage live probe evaluating wake detection accuracy (10 trials), ambient false-wake rejection (120 s), and process CPU utilization.
+
+---
+
+## [2.24.0] - 2026-10-31
+
+### Added & Enhanced
+- **Tab Rail & Navigation Architecture (ui/tabrail.py, ui/app.py)**:
+  - **TabRail Component**: 36px wide vertical rail on left edge of right panel with vector-drawn icons for all 13 tabs (Today, Activity, Context, Memories, Documents, Reminders, Routines, Contacts, Files, System, Insights, Verify, Last run).
+  - **Visual Indicators**: Active left accent bar and unread count badges (capped at "9+").
+  - **Interactive Tooltips & Shortcuts**: Hover tooltips showing full tab names and keyboard shortcuts.
+  - **Keyboard Navigation**: Direct `Alt+1`..`Alt+9` selection, Up/Down arrow keys + Enter/Space, and visible focus ring.
+  - **Vertical Scrolling**: Smooth mousewheel scrolling when tab rail exceeds viewport height.
+  - **Tabless Notebook Container**: Custom `Tabless.TNotebook` TTK style replacing tab strip with clean content frame while maintaining backwards-compatible `self.notebook` APIs.
+  - **Command Palette Integration**: Added "Show <Tab> tab" commands for all 13 tabs.
+- **New Live Tabs (ui/tab_views.py, core/insights.py, ui/app.py)**:
+  - **Today Tab**: Live clock updating 1/s while visible, battery status (injectable probe, hidden when unavailable), active reminders with live countdowns and next due highlight, quick routine buttons (up to 6), and recent audit events formatted strictly from tool, decision, outcome.
+  - **System Tab**: Real-time canvas sparklines (60s history) and stat gauges for CPU%, RAM%, and Disk Free; top 5 processes by CPU and memory from `core/procs.py` with access errors skipped; background GPU query via `nvidia-smi` (every 5s, 2s timeout) guarded by `SYSTEM_TAB_GPU` setting.
+  - **Insights Tab (core/insights.py)**: Off-UI-thread audit/run analytics capped at 5000 records (cached 10s); period selector (24 Hours, 7 Days, All); metrics for tool success rate, approved vs denied confirmations, blocked actions by type, top 8 tools, median & p95 task latency, and voice transcript review stats; canvas daily activity bar chart; graceful "No data yet" empty state; controlled by `INSIGHTS_ENABLED` setting.
+  - **Contacts Tab**: Displays stored contacts with masked phone numbers (`+1 555-***-0123`), total count, and Add/Edit buttons launching the contact management window.
+  - **Files Tab**: Displays candidate files found during search with name, folder, size, and date; Open/Reveal buttons with confirmation prompts; empty state "Say: find my latest download".
+  - **Verify Tab**: Guided verification checklist summary with launcher button.
+- **Rich Chat Panel Upgrade (ui/app.py, ui/theme.py)**:
+  - **Rich Text Tags**: Distinct user and assistant message styling, dim timestamps (`[HH:MM]`), monospace code blocks, inline code, search highlights, streaming caret, and thinking indicator.
+  - **500-Message Widget Cap**: Automatically prunes oldest lines in text widget when exceeding 500 messages without altering controller history.
+  - **Fenced Code Blocks**: Auto-formats markdown code blocks in dark monospace styling with syntax spacing.
+  - **Streaming Caret & Thinking Indicator**: Blinking streaming caret (` ▊`) during active stream chunks, cleanly removed on reply; animated thinking indicator synchronized with controller busy state (dots animation suppressed under `UI_MOTION="off"`).
+  - **In-Chat Search Bar (`Ctrl+F`)**: Interactive search bar with query highlighting, Next (Enter), Prev (Shift+Enter), and Close (Escape).
+  - **Auto-Scroll Pausing & Jump Pill**: Detects user scrolling up away from bottom, pauses auto-scroll, and displays "Jump to latest" floating pill button.
+  - **Per-Message Hover Actions**: Quick Copy, Speak, and Quote actions for the last 30 chat messages.
+  - **Raw Text Insertion**: Pure literal text insertion preventing markup execution and non-clickable URLs.
+- **Status Bar System Chips (ui/app.py)**:
+  - Compact CPU%, RAM%, and Battery chips updating every 2s, controlled by `UI_STATUS_CHIPS` setting (hidden under `UI_MOTION="off"`).
+- **Diagnostics & Privacy Enforcement (core/diagnostics.py)**:
+  - Added sanitized `=== UI TABS ===` section in `/diag` reporting tab names, active tab, and sampler active states only.
+  - Zero process names, zero metric values, and zero audit contents leaked to logs, diagnostics, or prompts.
+- **New Settings (config/settings.py, config/settings_store.py)**:
+  - `INSIGHTS_ENABLED` (default 1, restart required)
+  - `SYSTEM_TAB_GPU` (default 1, restart required)
+  - `UI_STATUS_CHIPS` (default 1, no restart required)
+
+---
+
+## [2.23.0] - 2026-10-31
+
+### Added & Enhanced
+- **HUD Performance & Two-Layer Architecture Overhaul (ui/hud.py, ui/hud_core.py, ui/hud_bitmap.py)**:
+  - **Two-Layer Canvas Architecture (A1)**: Decoupled rendering into `StaticLayer` (parent window canvas for baked bitmap, vignette, stars, panels, rings, ticks, title, state label, chips; redrawn strictly on resize, theme change, or state label change) and `OrbLayer` (child canvas placed at $0.74 H \cdot \text{scale}$ centered on the orb for all animated elements: wireframe, bloom, glass body, arcs, dust ring, and pulse).
+  - **Seamless Background Crop (A1)**: `crop_background_bitmap` extracts exact child canvas backdrop with 100% identical border pixels matching the parent bitmap.
+  - **Dynamic Frame Pacing & Idle Skipping (A2)**: Throttles animation ceiling to 15 FPS when state is idle and pulse is zero; maintains full `HUD_FPS` (30 FPS) when speaking, listening, thinking, or pulsing. Returns early when displacement $< 0.05$ px and no color changes.
+  - **Depth Color Bucketing (A3)**: 6 discrete depth buckets for sphere wireframe polylines; groups by bucket tags and skips `itemconfigure` calls unless a polyline changes bucket.
+  - **Struct-of-Arrays Dust Ring (A4)**: `DustRingSoA` with 600 particles on high tier, 300 on medium, 150 on low; vectorized NumPy rotation and projection with verified pure-Python fallback within 0.01 px; coordinate updates gated by displacement thresholding ($\ge 1.4$ px).
+  - **HUD Telemetry & Tools (A5)**: Per-frame `compute_ms`, `canvas_ms`, and `items_touched` tracking with rolling averages exported under `=== HUD ===` in `/diag`. Added layer toggle keys (`S`, `G`, `D`, `A`, `W`, `K`) to `scripts/hud_preview.py` and multi-tier benchmark matrix table to `scripts/hud_bench.py`.
+- **Fidelity & Theme Purity (ui/theme.py, ui/dock.py, ui/hud_bitmap.py, ui/app.py)**:
+  - **Palette Purity (B1)**: Strictly eliminated cyan and teal tones from the gold theme (no hues in $[150^\circ, 210^\circ]$ with saturation $> 0.20$); pure teal in cyan palette. Completely removed all `tk.Scrollbar` instances across the repository in favor of themed `ttk.Scrollbar`.
+  - **Pre-Rendered Core Bloom & Smoky Glass Body (B2)**: Pre-rendered smoothstep radial falloff over 256 levels with opaque core radius $\approx 0.16 r_s$ and zero outer border leakage; translucent smoky glass body with dark amber tint (gold) / dark teal (cyan), faint Fresnel rim, and soft specular highlight.
+  - **Segmented Arcs & Faint Rim (B3)**: Always draws all 44 arc blocks (24 Arc A, 20 Arc B) on band $[0.285 H, 0.310 H]$; renders unlit blocks as visible ghosts blended with 8% accent; renders faint circular rim line under arcs.
+  - **Dust Ring & Stars (B4, B5)**: Dual continuous elliptical dust ring bands (primary + secondary faint at half density); capped static stars at $\le 40$, 1 px size, $\le 35\%$ accent brightness.
+  - **Dock Icons (B6)**: Thin 1.5 px outline circles with theme strokes (no filled discs, hover/active glow), proper 8-tooth gear icon for Settings, and larger microphone icon ($0.060 H$).
+  - **Standard Widgets & Interim Tab Labels (B7, B8)**: Arrowless thin-trough ttk scrollbars, text selection and caret styling, combobox listbox popdown colors, treeview styling; shortened tab labels (`Act`, `Ctx`, `Mem`, `Docs`, `Rem`, `Rout`, `Run`) with 8pt font fitting comfortably at 1100 px window width with full names in tooltips.
+
+---
+
+## [2.22.0] - 2026-10-31
+
+### Added & Enhanced
+- **Structured Verification Suite & Guided Runner (erify/)**:
+  - **Checklist Schema & Validation (erify/schema.py, erify/items.json)**:
+    - Canonical JSON specification for all 123 live verification checklist items covering 14 functional areas.
+    - Strict schema verification enforcing closed sets for areas, risks, and evidence rule types.
+    - Ensured all 11 *_ENABLED settings in SPECS are referenced and tested.
+    - Added 9 negative security boundary items (NEG-01 to NEG-09) validating voice confirmation immunity, modal dialog mic gating, taint defense, allowlist checks, executable refusal, and secret redaction.
+    - Deterministic safe-first and area-grouped item ordering with SHA-256 verification.
+  - **Audit Evidence Evaluation Engine (erify/evidence.py)**:
+    - Pure metadata inspection engine supporting udit_tool_success, udit_tool_denied, udit_no_tool_success, udit_decision, udit_source, setting_equals, ile_exists_under_home, and ll_of.
+    - Strict privacy protection: reads only 	ool, decision, outcome, 	ainted, source, 	imestamp; never reads rgs or 
+esult.
+    - Non-authoritative advisory outcomes (ound, 
+ot_found, unavailable) preserving human-in-the-loop decision making.
+  - **Verification Session State Machine (erify/runner.py)**:
+    - Decoupled headless runner managing item progression, skip, back, retry, pass, and fail states.
+    - Automated prerequisite blocking with exact fix commands for missing settings, uninstalled packages, unsupported OS, and demo mode.
+    - Local note sanitization capping comments to 200 characters.
+  - **Atomic Results Store & Retention (erify/store.py)**:
+    - Atomic JSON persistence (data/verify/results-<timestamp>.json) using tempfile and rename.
+    - Records run metadata, git commit status with 2s timeout, items hash, settings snapshot, and per-item results.
+    - 20-file retention policy with confirmation prompt before pruning oldest files.
+  - **Markdown Export & Checklist Generation (erify/export.py)**:
+    - Privacy-guaranteed table export (docs/VERIFICATION_STATUS.md) omitting notes and raw values.
+    - Regression and improvement diff tracking across consecutive verification runs.
+    - Deterministic regeneration of docs/TEST_CHECKLIST.md with auto-generation header.
+  - **User Interfaces & Tooling**:
+    - Interactive terminal commands: /verify, /verify list, /verify status, /verify export.
+    - Non-modal desktop GUI window (ui/verify_window.py) with live 2s evidence polling badge, accessible via Command Palette (Ctrl+K), Settings window, and Doctor window.
+    - Standalone CLI utility (scripts/verify.py --list, --status, --export).
+    - Demo mode integration: --verify flag sets ORBIT_VERIFY=1, opening the verification window with sample data isolation and flagging real-mode items as blocked.
+  - **Diagnostics & Doctor Integration**:
+    - Added === VERIFICATION RESULTS === section to /diag reporting run dates, versions, and status counts.
+    - Added check_verification_results check to core/doctor.py.
+
+---
+
 ## [2.21.0] - 2026-10-30
 
 ### Added & Enhanced

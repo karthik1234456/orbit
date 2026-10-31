@@ -28,6 +28,7 @@ class Shortcut:
 SHORTCUTS: list[Shortcut] = [
     # Global shortcuts
     Shortcut("Ctrl+M", "global", "Toggle microphone listening", "_on_ctrl_m"),
+    Shortcut("Ctrl+Shift+M", "global", "Toggle hands-free listening", "_on_toggle_handsfree"),
     Shortcut("Ctrl+Space", "global", "Toggle microphone listening", "_on_ctrl_space"),
     Shortcut("Ctrl+K", "global", "Open command palette", "_on_ctrl_k"),
     Shortcut("F1", "global", "Show keyboard shortcuts overlay", "_on_f1"),

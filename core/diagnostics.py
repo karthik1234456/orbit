@@ -331,7 +331,21 @@ def build_diagnostics_text(
     bitmap_time = "n/a"
     fallback_val = False
 
+    compute_avg = "n/a"
+    canvas_avg = "n/a"
     if hud_obj is not None:
+        val_comp = getattr(hud_obj, "compute_ms_average", None)
+        if isinstance(val_comp, (int, float)):
+            compute_avg = f"{val_comp:.2f} ms"
+        elif val_comp is not None and not hasattr(val_comp, "_mock_return_value"):
+            compute_avg = str(val_comp)
+
+        val_canv = getattr(hud_obj, "canvas_ms_average", None)
+        if isinstance(val_canv, (int, float)):
+            canvas_avg = f"{val_canv:.2f} ms"
+        elif val_canv is not None and not hasattr(val_canv, "_mock_return_value"):
+            canvas_avg = str(val_canv)
+
         val_last = getattr(hud_obj, "items_touched_last_frame", None)
         if isinstance(val_last, (int, float)):
             items_last = str(val_last)
@@ -372,6 +386,8 @@ def build_diagnostics_text(
         f"Governor Downgrades: {downgrades}\n"
         f"Items Touched (Last): {items_last}\n"
         f"Items Touched (Avg): {items_avg}\n"
+        f"Compute Time (Avg): {compute_avg}\n"
+        f"Canvas Time (Avg): {canvas_avg}\n"
         f"Realism Sprites: {sprites}\n"
         f"Bitmap Build Time: {bitmap_time}\n"
         f"Realism Fallback: {fallback_val}"
@@ -410,6 +426,64 @@ def build_diagnostics_text(
         f"Radial Menu Opens: {radial_opens}\n"
         f"Palette Opens: {palette_opens}\n"
         f"Notices Shown: {notices_count}"
+    )
+
+    # 2g. UI Tabs (names, sampler active states, counts only)
+    tab_lines = [
+        "=== UI TABS ===",
+        "Tabs: Today, Activity, Context, Memories, Documents, Reminders, Routines, Contacts, Files, System, Insights, Verify, Last run",
+    ]
+    if app is not None and hasattr(app, "tab_rail"):
+        active_t = app.tab_rail.get_active_tab() if hasattr(app.tab_rail, "get_active_tab") else "unknown"
+        today_active = bool(getattr(getattr(app, "today_view", None), "_is_active", False))
+        sys_active = bool(getattr(getattr(app, "system_view", None), "_is_active", False))
+        tab_lines.append(f"Active Tab: {active_t}")
+        tab_lines.append(f"Samplers: today={'active' if today_active else 'inactive'}, system={'active' if sys_active else 'inactive'}")
+    sections.append("\n".join(tab_lines))
+
+    # Hands-Free Telemetry
+    hf_enabled = getattr(settings, "HANDS_FREE", 0)
+    wake_phrase = getattr(settings, "WAKE_PHRASE", "hey orbit")
+    wake_sensitivity = getattr(settings, "WAKE_SENSITIVITY", 0.80)
+    wake_model = getattr(settings, "WAKE_STT_MODEL", "tiny.en")
+    hf_home = os.getenv("HF_HOME")
+    hub_dir = (
+        Path(hf_home) / "hub"
+        if hf_home
+        else Path.home() / ".cache" / "huggingface" / "hub"
+    )
+    wake_patterns = [
+        hub_dir / f"models--Systran--faster-whisper-{wake_model}",
+        hub_dir / f"models--guillaumekln--faster-whisper-{wake_model}",
+        hub_dir / f"models--{wake_model}",
+    ]
+    wake_cached = any(p.is_dir() for p in wake_patterns)
+    mic_ok = False
+    try:
+        from voice.audio import list_input_devices
+        mic_ok = len(list_input_devices()) > 0
+    except Exception:
+        pass
+
+    hfc = getattr(app, "handsfree_controller", None) or getattr(chat_controller, "handsfree_controller", None)
+    counters = getattr(hfc, "counters", {}) if hfc else {}
+    wake_events = counters.get("wake_events", 0)
+    drops = counters.get("drops_low_confidence", 0)
+    cooldowns = counters.get("cooldowns", 0)
+    auto_offs = counters.get("auto_offs", 0)
+
+    sections.append(
+        "=== HANDS-FREE ===\n"
+        f"Hands-Free Enabled: {'yes' if hf_enabled else 'no'}\n"
+        f"Wake Phrase: {wake_phrase}\n"
+        f"Wake Sensitivity: {wake_sensitivity}\n"
+        f"Wake STT Model: {wake_model}\n"
+        f"Wake Model Cached: {'yes' if wake_cached else 'no'}\n"
+        f"Microphone Available: {'yes' if mic_ok else 'no'}\n"
+        f"Wake Events: {wake_events}\n"
+        f"Drops for Low Confidence: {drops}\n"
+        f"Cooldown Events: {cooldowns}\n"
+        f"Auto-Off Events: {auto_offs}"
     )
 
     # 3. Settings That Matter
@@ -590,6 +664,29 @@ def build_diagnostics_text(
         doc_lines.append(f"Summary: unavailable ({exc.__class__.__name__})")
         doc_lines.append("Failing Checks: none")
     sections.append("\n".join(doc_lines))
+
+    # 3b. Verification Results Summary (privacy protected)
+    verify_lines = ["=== VERIFICATION RESULTS ==="]
+    try:
+        from verify.store import VerificationStore
+        vstore = VerificationStore()
+        latest_run = vstore.get_latest_run()
+        if latest_run is not None:
+            v_sum = latest_run.summary()
+            verify_lines.append(f"Latest Run: {latest_run.finished_at}")
+            verify_lines.append(f"App Version: v{latest_run.app_version}")
+            verify_lines.append(f"Git Commit: {latest_run.git_commit or 'unknown'} (dirty: {latest_run.dirty})")
+            verify_lines.append(f"Pass: {v_sum.get('pass', 0)}")
+            verify_lines.append(f"Fail: {v_sum.get('fail', 0)}")
+            verify_lines.append(f"Skip: {v_sum.get('skip', 0)}")
+            verify_lines.append(f"Blocked: {v_sum.get('blocked', 0)}")
+            verify_lines.append(f"Total Items: {v_sum.get('total', 0)}")
+        else:
+            verify_lines.append("Latest Run: none")
+            verify_lines.append("Status: No verification runs recorded yet")
+    except Exception as exc:
+        verify_lines.append(f"Status: unavailable ({exc.__class__.__name__})")
+    sections.append("\n".join(verify_lines))
 
     # 4. Browser Status (host, page type, title sanitized)
     browser_ctrl = getattr(app, "browser_controller", None) if app else None

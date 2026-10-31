@@ -265,6 +265,153 @@ def handle_set_command(
         print_func("Setting unchanged.")
 
 
+def handle_verify_command(
+    command_str: str,
+    print_func: Callable[[str], None] = print,
+    input_func: Callable[[str], str] = input,
+) -> None:
+    """Handle /verify terminal commands: list, status, export, or interactive session."""
+    from config.paths import REPO_ROOT
+    from verify.export import export_markdown
+    from verify.runner import VerificationSession
+    from verify.schema import ChecklistItem, load_items_from_json
+    from verify.store import VerificationStore
+
+    parts = command_str.strip().split()
+    subcmd = parts[1].lower() if len(parts) > 1 else ""
+
+    items_path = REPO_ROOT / "verify" / "items.json"
+    items: list[ChecklistItem] = []
+    if items_path.is_file():
+        try:
+            items = load_items_from_json(items_path)
+        except Exception:
+            items = []
+
+    store = VerificationStore()
+
+    if subcmd == "list":
+        if not items:
+            print_func("No verification items found.")
+            return
+        print_func(f"ORBIT Verification Items ({len(items)} items):\n")
+        print_func(f"{'ID':<8} {'Area':<12} {'Risk':<14} {'Title'}")
+        print_func("-" * 75)
+        for it in items:
+            print_func(f"{it.id:<8} {it.area:<12} {it.risk:<14} {it.title}")
+        return
+
+    if subcmd == "status":
+        latest = store.get_latest_run()
+        if latest is None:
+            print_func("No verification runs recorded yet. Type /verify to start a verification run.")
+            return
+        summary = latest.summary()
+        print_func("=== ORBIT VERIFICATION STATUS ===")
+        print_func(f"Latest Run:  {latest.finished_at}")
+        print_func(f"App Version: v{latest.app_version}")
+        print_func(f"Git Commit:  {latest.git_commit or 'unknown'} (dirty: {latest.dirty})")
+        print_func(f"Pass:        {summary.get('pass', 0)}")
+        print_func(f"Fail:        {summary.get('fail', 0)}")
+        print_func(f"Skip:        {summary.get('skip', 0)}")
+        print_func(f"Blocked:     {summary.get('blocked', 0)}")
+        print_func(f"Total Items: {summary.get('total', 0)}")
+        return
+
+    if subcmd == "export":
+        latest = store.get_latest_run()
+        results = latest.results if latest is not None else {}
+        app_ver = latest.app_version if latest is not None else None
+        run_date = latest.finished_at[:10] if latest is not None and latest.finished_at else None
+
+        files = store.list_result_files()
+        prev_results = None
+        if len(files) >= 2:
+            prev_run = store.load_run(files[-2])
+            if prev_run is not None:
+                prev_results = prev_run.results
+
+        md = export_markdown(
+            results=results,
+            items=items,
+            previous_results=prev_results,
+            run_date=run_date,
+            app_version=app_ver,
+        )
+        out_file = REPO_ROOT / "docs" / "VERIFICATION_STATUS.md"
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(out_file, "w", encoding="utf-8", newline="") as f:
+            f.write(md)
+        print_func(f"Verification status successfully exported to: {out_file}")
+        return
+
+    # Default /verify: interactive session
+    if not items:
+        print_func("Error: No verification items available in verify/items.json.")
+        return
+
+    session = VerificationSession(items=items, store=store)
+    print_func("=== Starting ORBIT Guided Verification ===")
+    print_func(f"Total Items: {len(items)}. Enter 'p' (pass), 'f' (fail), 's' (skip), 'b' (back), 'r' (retry), 'q' (quit).\n")
+
+    while not session.is_finished():
+        it = session.current_item
+        if it is None:
+            break
+        idx = session.current_index
+        total = session.total_items
+        summary = session.get_summary()
+
+        print_func(f"\n--- [{idx + 1}/{total}] {it.id} ({it.area.upper()}) ---")
+        print_func(f"Title:    {it.title}")
+        print_func(f"Risk:     {it.risk.upper()}")
+        print_func("Steps:")
+        for step_idx, step in enumerate(it.steps, 1):
+            print_func(f"  {step_idx}. {step}")
+        print_func(f"Expected: {it.expected}")
+
+        block = session.check_blocking(it)
+        if block is not None:
+            print_func(f"[BLOCKED] {block.message}")
+            print_func(f"Suggested fix: {block.suggested_fix}")
+
+        if it.evidence:
+            ev = session.poll_evidence()
+            print_func(f"Evidence: [{ev.status.upper()}] {ev.reason}")
+
+        try:
+            choice = input_func("Decision [p/f/s/b/r/q]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print_func("\nVerification session interrupted.")
+            break
+
+        if choice in ("q", "quit", "exit"):
+            print_func("Exiting verification session.")
+            break
+        elif choice in ("p", "pass"):
+            note = input_func("Optional note (or press Enter): ").strip()
+            session.pass_current(notes=note)
+        elif choice in ("f", "fail"):
+            note = input_func("Failure note (or press Enter): ").strip()
+            session.fail_current(notes=note)
+        elif choice in ("s", "skip"):
+            session.skip_current()
+        elif choice in ("b", "back"):
+            if not session.back():
+                print_func("Already at the first item.")
+        elif choice in ("r", "retry"):
+            session.retry_current()
+        else:
+            print_func("Unrecognized option. Skipping item.")
+            session.skip_current()
+
+    saved_path = session.save()
+    if saved_path:
+        print_func(f"\nVerification results saved to: {saved_path}")
+    final_sum = session.get_summary()
+    print_func(f"Session Summary: {final_sum['pass']} PASS | {final_sum['fail']} FAIL | {final_sum['skip']} SKIP | {final_sum['blocked']} BLOCKED")
+
+
 def handle_contacts_command(user_input: str, store: Any) -> None:
     """Handle /contacts and /contact add/edit/delete commands."""
     from contacts.store import mask_phone
@@ -543,6 +690,10 @@ def main() -> None:
             try:
                 user_input = input("You: ").strip()
                 if not user_input:
+                    continue
+
+                if user_input.lower().startswith("/verify"):
+                    handle_verify_command(user_input)
                     continue
 
                 if user_input.lower() == "/doctor":
@@ -859,6 +1010,7 @@ def main() -> None:
                 if user_input.lower() in ("/help", "help", "/?"):
                     print("Available commands:")
                     print("  /help              - Show this help guide")
+                    print("  /verify [list|status|export] - Guided verification checklist and results")
                     print("  /doctor            - Run environment doctor checks")
                     print("  /diag              - Save and view diagnostic report")
                     print("  /settings          - Display editable configuration settings table")

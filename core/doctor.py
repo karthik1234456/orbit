@@ -1636,6 +1636,108 @@ def check_messaging(probes: Probes) -> Check:
     return Check(name="Messaging", status="OK", detail=detail, fix=None)
 
 
+def check_verification_results(probes: Optional[Probes] = None) -> Check:
+    """Check existence and summary of verification session results."""
+    try:
+        from verify.store import VerificationStore
+        store = VerificationStore()
+        latest = store.get_latest_run()
+        if latest is None:
+            return Check(
+                name="Verification results",
+                status="OK",
+                detail="No verification runs recorded yet",
+                fix="Run /verify in chat or 'python scripts/verify.py' to run checks",
+            )
+        summary = latest.summary()
+        fail_cnt = summary.get("fail", 0)
+        blocked_cnt = summary.get("blocked", 0)
+        pass_cnt = summary.get("pass", 0)
+        total = summary.get("total", 0)
+        date_str = latest.finished_at[:10] if latest.finished_at else "unknown"
+        if fail_cnt > 0:
+            return Check(
+                name="Verification results",
+                status="WARN",
+                detail=f"Latest run ({date_str} v{latest.app_version}): {fail_cnt} failed, {blocked_cnt} blocked out of {total}",
+                fix="Run /verify to inspect and resolve failing checks",
+            )
+        return Check(
+            name="Verification results",
+            status="OK",
+            detail=f"Latest run ({date_str} v{latest.app_version}): {pass_cnt} passed, {blocked_cnt} blocked out of {total}",
+            fix=None,
+        )
+    except Exception as exc:
+        return Check(
+            name="Verification results",
+            status="WARN",
+            detail=f"Unable to read verification store: {exc}",
+            fix="Check permissions on data/verify directory",
+        )
+
+def check_hands_free(probes: Probes) -> Check:
+    """Check hands-free listening configuration, wake model cache, and microphone."""
+    hf_enabled = _probe_env(probes, "HANDS_FREE", "0") in ("1", "true", "yes", "on")
+    wake_phrase = _probe_env(probes, "WAKE_PHRASE", "hey orbit")
+    wake_sens = _probe_env(probes, "WAKE_SENSITIVITY", "0.80")
+    wake_model = _probe_env(probes, "WAKE_STT_MODEL", "tiny.en")
+
+    hf_home = _probe_env(probes, "HF_HOME")
+    hub_dir = (
+        Path(hf_home) / "hub"
+        if hf_home
+        else Path.home() / ".cache" / "huggingface" / "hub"
+    )
+    candidate_patterns = [
+        hub_dir / f"models--Systran--faster-whisper-{wake_model}",
+        hub_dir / f"models--guillaumekln--faster-whisper-{wake_model}",
+        hub_dir / f"models--{wake_model}",
+    ]
+    cached = any(p.is_dir() for p in candidate_patterns)
+
+    # Check microphone availability
+    has_mic = False
+    if probes.find_spec("sounddevice") is not None:
+        try:
+            import sounddevice as sd
+            devs = sd.query_devices()
+            has_mic = any(d.get("max_input_channels", 0) > 0 for d in devs)
+        except Exception:
+            has_mic = False
+
+    if not hf_enabled:
+        return Check(
+            name="Hands-free listening",
+            status="OK",
+            detail=f"Disabled (phrase='{wake_phrase}', sensitivity={wake_sens}, model='{wake_model}', cached={'yes' if cached else 'no'})",
+            fix=None,
+        )
+
+    if not has_mic:
+        return Check(
+            name="Hands-free listening",
+            status="WARN",
+            detail=f"Enabled but no microphone detected (phrase='{wake_phrase}')",
+            fix="Connect a microphone or audio input device",
+        )
+
+    if not cached:
+        return Check(
+            name="Hands-free listening",
+            status="WARN",
+            detail=f"Enabled, mic OK, but wake model '{wake_model}' is not cached locally",
+            fix=f"Run once online to cache the '{wake_model}' Whisper model",
+        )
+
+    return Check(
+        name="Hands-free listening",
+        status="OK",
+        detail=f"Enabled and ready (phrase='{wake_phrase}', sensitivity={wake_sens}, model='{wake_model}')",
+        fix=None,
+    )
+
+
 def run_checks(probes: Optional[Probes] = None, fast: bool = False) -> list[Check]:
     """Run environment doctor checks inside isolated try/except blocks.
 
@@ -1716,6 +1818,8 @@ def run_checks(probes: Optional[Probes] = None, fast: bool = False) -> list[Chec
     _execute("System controls", lambda: check_system_controls(p))
     _execute("Messaging", lambda: check_messaging(p))
     _execute("Desktop controls", lambda: check_desktop_controls(p))
+    _execute("Verification results", lambda: check_verification_results(p))
+    _execute("Hands-free listening", lambda: check_hands_free(p))
 
     return checks
 

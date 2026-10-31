@@ -18,6 +18,7 @@ from config.paths import (
     get_reminders_db_path,
     get_routines_db_path,
     get_runs_log_path,
+    get_verify_dir,
     get_workspace_dir,
 )
 from core.agent import Agent
@@ -70,6 +71,7 @@ class AppPaths:
     reminders_db: Path = Path("data/reminders.db")
     routines_db: Path = Path("data/routines.db")
     contacts_db: Path = Path("data/contacts.db")
+    verify_dir: Path = Path("data/verify")
 
     def __post_init__(self) -> None:
         self.workspace = Path(self.workspace)
@@ -81,6 +83,7 @@ class AppPaths:
         self.reminders_db = Path(self.reminders_db)
         self.routines_db = Path(self.routines_db)
         self.contacts_db = Path(self.contacts_db)
+        self.verify_dir = Path(self.verify_dir)
 
     @classmethod
     def from_settings(cls) -> "AppPaths":
@@ -95,6 +98,7 @@ class AppPaths:
             reminders_db=get_reminders_db_path(),
             routines_db=get_routines_db_path(),
             contacts_db=get_contacts_db_path(),
+            verify_dir=get_verify_dir(),
         )
 
     @classmethod
@@ -111,6 +115,7 @@ class AppPaths:
             reminders_db=r / "data" / "reminders.db",
             routines_db=r / "data" / "routines.db",
             contacts_db=r / "data" / "contacts.db",
+            verify_dir=r / "data" / "verify",
         )
 
 

@@ -30,6 +30,10 @@ class Palette:
     warn: str
     danger: str
 
+    @property
+    def dim(self) -> str:
+        return self.text_dim
+
 
 PALETTES: dict[str, Palette] = {
     "cyan": Palette(
@@ -86,6 +90,23 @@ def _channel_luminance(val: float) -> float:
     if val <= 0.04045:
         return val / 12.92
     return ((val + 0.055) / 1.055) ** 2.4
+
+
+def blend_color(hex1: str, hex2: str, t: float) -> str:
+    """Linearly blend between hex1 (t=0) and hex2 (t=1), returning #rrggbb."""
+    t = max(0.0, min(1.0, float(t)))
+    c1 = hex1.strip().lstrip("#")
+    if len(c1) == 3:
+        c1 = "".join(c * 2 for c in c1)
+    c2 = hex2.strip().lstrip("#")
+    if len(c2) == 3:
+        c2 = "".join(c * 2 for c in c2)
+    r1, g1, b1 = int(c1[0:2], 16), int(c1[2:4], 16), int(c1[4:6], 16)
+    r2, g2, b2 = int(c2[0:2], 16), int(c2[2:4], 16), int(c2[4:6], 16)
+    r = int(r1 + (r2 - r1) * t)
+    g = int(g1 + (g2 - g1) * t)
+    b = int(b1 + (b2 - b1) * t)
+    return f"#{r:02x}{g:02x}{b:02x}"
 
 
 def relative_luminance(hex_code: str) -> float:
@@ -188,7 +209,7 @@ def apply_theme(root: Any, palette: Palette) -> None:
             foreground=[("disabled", palette.text_dim)],
         )
 
-        # Entry and Combobox
+        # Entry, Combobox, and Spinbox
         style.configure(
             "TEntry",
             fieldbackground=palette.panel,
@@ -206,14 +227,68 @@ def apply_theme(root: Any, palette: Palette) -> None:
             arrowcolor=palette.accent,
             bordercolor=palette.panel_edge,
         )
+        style.configure(
+            "TSpinbox",
+            fieldbackground=palette.panel,
+            background=palette.panel,
+            foreground=palette.text,
+            arrowcolor=palette.accent,
+            bordercolor=palette.panel_edge,
+            insertcolor=palette.accent,
+        )
 
-        # Scrollbars
+        # Checkbutton indicator states
+        style.map(
+            "TCheckbutton",
+            indicatorcolor=[
+                ("selected", palette.accent),
+                ("active", palette.panel_edge),
+                ("!disabled", palette.panel),
+            ],
+            foreground=[("disabled", palette.text_dim)],
+        )
+
+        # Scrollbars - thin trough, arrowless
+        try:
+            style.layout(
+                "Vertical.TScrollbar",
+                [
+                    (
+                        "Vertical.Scrollbar.trough",
+                        {
+                            "sticky": "ns",
+                            "children": [
+                                ("Vertical.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})
+                            ],
+                        },
+                    )
+                ],
+            )
+            style.layout(
+                "Horizontal.TScrollbar",
+                [
+                    (
+                        "Horizontal.Scrollbar.trough",
+                        {
+                            "sticky": "ew",
+                            "children": [
+                                ("Horizontal.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})
+                            ],
+                        },
+                    )
+                ],
+            )
+        except Exception:
+            pass
+
         style.configure(
             "TScrollbar",
             troughcolor=palette.bg,
             background=palette.panel,
             bordercolor=palette.panel_edge,
-            arrowcolor=palette.text_dim,
+            arrowcolor="",
+            arrowsize=0,
+            borderwidth=0,
         )
         style.map("TScrollbar", background=[("active", palette.panel_edge)])
 
@@ -228,20 +303,21 @@ def apply_theme(root: Any, palette: Palette) -> None:
         # Separator
         style.configure("TSeparator", background=palette.panel_edge)
 
-        # Notebook & Tabs
+        # Notebook & Tabs - compact interim styling (8pt font, compact padding)
         style.configure(
             "TNotebook",
             background=palette.bg,
             borderwidth=0,
             tabmargins=[2, 2, 2, 0],
         )
-        tab_selected_fg = "#E6CC9A" if palette.name == "gold" else palette.accent
-        tab_idle_fg = "#6E5C3E" if palette.name == "gold" else palette.text_dim
+        tab_selected_fg = palette.text_dim if palette.name == "gold" else palette.accent
+        tab_idle_fg = palette.accent_dim if palette.name == "gold" else palette.text_dim
         style.configure(
             "TNotebook.Tab",
             background=palette.panel,
             foreground=tab_idle_fg,
-            padding=[8, 3],
+            padding=[4, 2],
+            font=("Segoe UI", 8),
             bordercolor=palette.panel_edge,
             lightcolor=palette.panel,
             darkcolor=palette.panel,
@@ -280,6 +356,21 @@ def apply_theme(root: Any, palette: Palette) -> None:
             background=[("active", palette.panel)],
             foreground=[("active", palette.text)],
         )
+
+        # Standard widget option defaults on root window
+        try:
+            root.option_add("*TCombobox*Listbox.background", palette.panel)
+            root.option_add("*TCombobox*Listbox.foreground", palette.text)
+            root.option_add("*TCombobox*Listbox.selectBackground", palette.panel_edge)
+            root.option_add("*TCombobox*Listbox.selectForeground", palette.accent)
+            root.option_add("*Text.insertBackground", palette.accent)
+            root.option_add("*Entry.insertBackground", palette.accent)
+            root.option_add("*Text.selectBackground", palette.panel_edge)
+            root.option_add("*Text.selectForeground", palette.text)
+            root.option_add("*Entry.selectBackground", palette.panel_edge)
+            root.option_add("*Entry.selectForeground", palette.text)
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -294,13 +385,20 @@ def style_chat_tags(text_widget: Any, palette: Palette) -> None:
             selectbackground=palette.panel_edge,
             selectforeground=palette.text,
         )
-        text_widget.tag_configure("user", foreground=palette.accent, font=("Segoe UI", 10, "bold"))
-        text_widget.tag_configure("orbit_prefix", foreground=palette.ok, font=("Segoe UI", 10, "bold"))
-        text_widget.tag_configure("orbit", foreground=palette.text, font=("Segoe UI", 10))
-        text_widget.tag_configure("system", foreground=palette.text_dim, font=("Segoe UI", 9, "italic"))
+        text_widget.tag_configure("user", foreground=palette.accent, font=("Segoe UI", 10, "bold"), spacing1=4, spacing3=2)
+        text_widget.tag_configure("orbit_prefix", foreground=palette.ok, font=("Segoe UI", 10, "bold"), spacing1=4)
+        text_widget.tag_configure("orbit", foreground=palette.text, font=("Segoe UI", 10), spacing3=4)
+        text_widget.tag_configure("system", foreground=palette.text_dim, font=("Segoe UI", 9, "italic"), spacing1=2, spacing3=2)
         text_widget.tag_configure("error", foreground=palette.danger, font=("Segoe UI", 10, "bold"))
-        bubble_bg = "#302B23" if palette.name == "gold" else palette.panel
+        bubble_bg = blend_color(palette.bg, palette.accent, 0.15) if palette.name == "gold" else palette.panel
         text_widget.tag_configure("bubble", background=bubble_bg, foreground=palette.text)
+        text_widget.tag_configure("dim_ts", foreground=palette.text_dim, font=("Segoe UI", 8))
+        text_widget.tag_configure("code_block", background="#0c111a", foreground=palette.accent, font=("Consolas", 9), lmargin1=16, lmargin2=16, rmargin=16, spacing1=4, spacing3=4)
+        text_widget.tag_configure("code_inline", background="#121824", foreground=palette.accent, font=("Consolas", 9))
+        text_widget.tag_configure("search_highlight", background="#d97706", foreground="#000000")
+        text_widget.tag_configure("search_current", background="#38bdf8", foreground="#000000")
+        text_widget.tag_configure("streaming_caret", foreground=palette.accent, font=("Segoe UI", 10, "bold"))
+        text_widget.tag_configure("thinking", foreground=palette.accent, font=("Segoe UI", 9, "italic"))
     except Exception:
         pass
 

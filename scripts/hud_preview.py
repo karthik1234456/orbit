@@ -48,6 +48,14 @@ class HudPreviewApp:
         self.model = HudModel()
         self._manual_state: str = "auto"
 
+        # Layer toggles (A5)
+        self.show_stars: bool = True
+        self.show_glass: bool = True
+        self.show_dust: bool = True
+        self.show_arcs: bool = True
+        self.show_wireframe: bool = True
+        self.show_core: bool = True
+
         self._ref_visible: bool = False
         self._ref_photo = None
         self.ref_label = None
@@ -210,8 +218,20 @@ class HudPreviewApp:
         self.root.bind("<Key-C>", lambda e: self._trigger_mild_pulse())
         self.root.bind("<Key-h>", lambda e: self._trigger_heartbeat_pulse())
         self.root.bind("<Key-H>", lambda e: self._trigger_heartbeat_pulse())
-        self.root.bind("<Key-s>", lambda e: self._trigger_soft_pulse())
-        self.root.bind("<Key-S>", lambda e: self._trigger_soft_pulse())
+
+        # Layer toggles (A5)
+        self.root.bind("<Key-s>", lambda e: self._toggle_stars())
+        self.root.bind("<Key-S>", lambda e: self._toggle_stars())
+        self.root.bind("<Key-g>", lambda e: self._toggle_glass())
+        self.root.bind("<Key-G>", lambda e: self._toggle_glass())
+        self.root.bind("<Key-d>", lambda e: self._toggle_dust())
+        self.root.bind("<Key-D>", lambda e: self._toggle_dust())
+        self.root.bind("<Key-a>", lambda e: self._toggle_arcs())
+        self.root.bind("<Key-A>", lambda e: self._toggle_arcs())
+        self.root.bind("<Key-w>", lambda e: self._toggle_wireframe())
+        self.root.bind("<Key-W>", lambda e: self._toggle_wireframe())
+        self.root.bind("<Key-k>", lambda e: self._toggle_core())
+        self.root.bind("<Key-K>", lambda e: self._toggle_core())
 
     def _trigger_full_pulse(self) -> None:
         self.model.trigger_pulse("full", 1.0)
@@ -228,6 +248,56 @@ class HudPreviewApp:
     def _trigger_soft_pulse(self) -> None:
         self.model.trigger_pulse("soft", 0.50)
         self._set_notice("Triggered SOFT reply pulse (amplitude 0.50)")
+
+    def _toggle_stars(self) -> None:
+        self.show_stars = not self.show_stars
+        st = "normal" if self.show_stars else "hidden"
+        for sid in getattr(self.hud_canvas, "_static_star_items", []):
+            self.hud_canvas.itemconfigure(sid, state=st)
+        self._set_notice(f"Layer: Stars {'ON' if self.show_stars else 'OFF'}")
+
+    def _toggle_glass(self) -> None:
+        self.show_glass = not self.show_glass
+        st = "normal" if self.show_glass else "hidden"
+        bid = getattr(self.hud_canvas, "_sphere_body_image_id", None)
+        if bid is not None:
+            self.hud_canvas.itemconfigure(bid, state=st)
+        self._set_notice(f"Layer: Glass Body {'ON' if self.show_glass else 'OFF'}")
+
+    def _toggle_dust(self) -> None:
+        self.show_dust = not self.show_dust
+        st = "normal" if self.show_dust else "hidden"
+        for pid in getattr(self.hud_canvas, "_dust_back_items", []):
+            self.hud_canvas.itemconfigure(pid, state=st)
+        for pid in getattr(self.hud_canvas, "_dust_front_items", []):
+            self.hud_canvas.itemconfigure(pid, state=st)
+        self._set_notice(f"Layer: Dust Particles {'ON' if self.show_dust else 'OFF'}")
+
+    def _toggle_arcs(self) -> None:
+        self.show_arcs = not self.show_arcs
+        st = "normal" if self.show_arcs else "hidden"
+        for aid in getattr(self.hud_canvas, "_arc_a_items", []):
+            self.hud_canvas.itemconfigure(aid, state=st)
+        for bid in getattr(self.hud_canvas, "_arc_b_items", []):
+            self.hud_canvas.itemconfigure(bid, state=st)
+        self._set_notice(f"Layer: Arcs {'ON' if self.show_arcs else 'OFF'}")
+
+    def _toggle_wireframe(self) -> None:
+        self.show_wireframe = not self.show_wireframe
+        st = "normal" if self.show_wireframe else "hidden"
+        for sid in getattr(self.hud_canvas, "_sphere_line_items", []):
+            self.hud_canvas.itemconfigure(sid, state=st)
+        self._set_notice(f"Layer: Wireframe {'ON' if self.show_wireframe else 'OFF'}")
+
+    def _toggle_core(self) -> None:
+        self.show_core = not self.show_core
+        st = "normal" if self.show_core else "hidden"
+        bid = getattr(self.hud_canvas, "_bloom_image_id", None)
+        if bid is not None:
+            self.hud_canvas.itemconfigure(bid, state=st)
+        for cid in getattr(self.hud_canvas, "_core_circle_items", []):
+            self.hud_canvas.itemconfigure(cid, state=st)
+        self._set_notice(f"Layer: Core Bloom {'ON' if self.show_core else 'OFF'}")
 
     def _toggle_reference(self) -> None:
         if self._ref_visible:
@@ -362,18 +432,25 @@ class HudPreviewApp:
         self.notice_lbl.configure(text=msg)
 
     def _update_telemetry(self) -> None:
-        st_name = self.model.state.value.upper()
         tier = self.model.tier.upper()
-        avg_ft = self.model.average_frame_time * 1000.0
-        inst_ft = getattr(self.hud_canvas, "_last_frame_duration", 0.0) * 1000.0
-        downgrades = self.model.downgrades_count
         items_last = getattr(self.hud_canvas, "items_touched_last_frame", 0)
         items_avg = getattr(self.hud_canvas, "items_touched_average", 0.0)
-        realism_mode = getattr(self.hud_canvas, "realism", "full").upper()
+        comp_ms = getattr(self.hud_canvas, "compute_ms", 0.0)
+        canv_ms = getattr(self.hud_canvas, "canvas_ms", 0.0)
+
+        layers_str = "".join([
+            "S" if self.show_stars else "-",
+            "G" if self.show_glass else "-",
+            "D" if self.show_dust else "-",
+            "A" if self.show_arcs else "-",
+            "W" if self.show_wireframe else "-",
+            "K" if self.show_core else "-",
+        ])
+
         self.telemetry_lbl.configure(
             text=(
-                f"STATE: {st_name} | TIER: {tier} | FRAME: {avg_ft:.1f}ms (last: {inst_ft:.1f}ms) | "
-                f"ITEMS: {items_last} (avg: {items_avg:.0f}) | REALISM: {realism_mode} | DROPS: {downgrades}"
+                f"TIER: {tier} | COMPUTE: {comp_ms:.1f}ms | CANVAS: {canv_ms:.1f}ms | "
+                f"ITEMS: {items_last} (avg: {items_avg:.0f}) | LAYERS: {layers_str}"
             )
         )
         self.root.after(200, self._update_telemetry)

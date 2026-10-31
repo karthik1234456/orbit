@@ -1,0 +1,2531 @@
+[
+  {
+    "id": "D1",
+    "area": "smoke",
+    "version_added": "2.8.0",
+    "title": "Doctor: Merged .env Line",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Add a merged line KEY=OTHER_KEY=val to .env.",
+      "Run python scripts/doctor.py."
+    ],
+    "expected": "Detects bad line, flags line number and key name only (KEY), reports FAIL with fix suggestion.",
+    "negative": false
+  },
+  {
+    "id": "D2",
+    "area": "smoke",
+    "version_added": "2.8.0",
+    "title": "Doctor: Stale ORBIT_MOCK",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Set ORBIT_MOCK=1 in environment.",
+      "Run python scripts/doctor.py."
+    ],
+    "expected": "Flags ORBIT_MOCK present as WARN explaining mock mode is forced.",
+    "negative": false
+  },
+  {
+    "id": "D3",
+    "area": "smoke",
+    "version_added": "2.8.0",
+    "title": "Doctor: Missing Package Detection",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Run doctor in an environment lacking optional package.",
+      "Inspect doctor output."
+    ],
+    "expected": "Detects absent package via find_spec, reports WARN with exact install command.",
+    "negative": false
+  },
+  {
+    "id": "D4",
+    "area": "smoke",
+    "version_added": "2.8.0",
+    "title": "Doctor: Ollama Reachability",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Run doctor with Ollama stopped.",
+      "Observe timeout behavior."
+    ],
+    "expected": "Reports Ollama unreachable with status FAIL and fast 2s timeout without hanging.",
+    "negative": false
+  },
+  {
+    "id": "D5",
+    "area": "smoke",
+    "version_added": "2.8.0",
+    "title": "Doctor: Secret Redaction",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Set fake secret in .env (MY_API_KEY=supersecret123).",
+      "Run python scripts/doctor.py and inspect."
+    ],
+    "expected": "Report shows 'set' or 'not set'; secret value never appears anywhere.",
+    "negative": false
+  },
+  {
+    "id": "T1",
+    "area": "smoke",
+    "version_added": "2.7.0",
+    "title": "Routing: Probe Baseline",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Run intent probe baseline on dev split."
+    ],
+    "expected": "Runs test phrases with all tools offered and generates report.",
+    "negative": false
+  },
+  {
+    "id": "T2",
+    "area": "smoke",
+    "version_added": "2.7.0",
+    "title": "Routing: Probe with Routing",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Run intent probe with --routing flag on dev split."
+    ],
+    "expected": "Runs phrases with narrowed tool groups; tools offered drops significantly.",
+    "negative": false
+  },
+  {
+    "id": "T3",
+    "area": "smoke",
+    "version_added": "2.7.0",
+    "title": "Routing: Test Split Gate",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Attempt to run intent probe against test split without --final-test."
+    ],
+    "expected": "Immediately refuses execution with error indicating final-test flag is required.",
+    "negative": true
+  },
+  {
+    "id": "T4",
+    "area": "smoke",
+    "version_added": "2.7.0",
+    "title": "Routing: Final Test Lock",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Run final test twice in a row."
+    ],
+    "expected": "First run succeeds and writes marker; second run refuses without --force.",
+    "negative": false
+  },
+  {
+    "id": "T5",
+    "area": "smoke",
+    "version_added": "2.7.0",
+    "title": "Routing: Miss Recovery",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Trigger narrowed tool prompt where model replies with inability.",
+      "Check execution trace."
+    ],
+    "expected": "Agent detects inability phrasing, retries turn once with full tool set, and records routing_retry in trace.",
+    "negative": false
+  },
+  {
+    "id": "HF1",
+    "area": "voice",
+    "version_added": "2.25.0",
+    "title": "Hands-Free: Privacy Gate and Activation",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Open Settings panel or click hands-free toggle in GUI or press Ctrl+Shift+M.",
+      "Observe confirmation dialog explaining microphone stays open and no audio is stored.",
+      "Accept confirmation to arm hands-free mode."
+    ],
+    "expected": "Hands-free is armed only after explicit user confirmation; status chip displays HANDS-FREE.",
+    "negative": false
+  },
+  {
+    "id": "HF10",
+    "area": "voice",
+    "version_added": "2.25.0",
+    "title": "Hands-Free: Ephemeral Processing and Zero Audio Persistence",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Arm hands-free and process multiple ambient utterances.",
+      "Inspect workspace, logs/, and data/ directory."
+    ],
+    "expected": "Non-wake transcripts and audio frames are strictly discarded immediately; zero audio files or ambient transcripts are stored.",
+    "negative": false
+  },
+  {
+    "id": "HF2",
+    "area": "voice",
+    "version_added": "2.25.0",
+    "title": "Hands-Free: Wake Phrase Detection with Inline Command",
+    "risk": "safe",
+    "needs_real_mode": true,
+    "requires": {
+      "packages": [
+        "faster_whisper"
+      ]
+    },
+    "steps": [
+      "With hands-free armed, speak: 'Hey orbit what time is it?'.",
+      "Observe wake sound cue and submission."
+    ],
+    "expected": "Wake phrase activates immediately, wake chime plays, and inline remainder 'what time is it' executes.",
+    "negative": false
+  },
+  {
+    "id": "HF3",
+    "area": "voice",
+    "version_added": "2.25.0",
+    "title": "Hands-Free: Wake Phrase Followed by Command",
+    "risk": "safe",
+    "needs_real_mode": true,
+    "requires": {
+      "packages": [
+        "faster_whisper"
+      ]
+    },
+    "steps": [
+      "With hands-free armed, speak: 'Hey orbit'.",
+      "Hear wake cue, then speak 'show reminders'.",
+      "Wait for silence endpoint."
+    ],
+    "expected": "Wake cue sounds on wake phrase, second utterance captures command, and command executes.",
+    "negative": false
+  },
+  {
+    "id": "HF4",
+    "area": "voice",
+    "version_added": "2.25.0",
+    "title": "Hands-Free: Low Confidence and Silence Dropped",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Produce background mumble or audio below confidence threshold while armed.",
+      "Observe hands-free reaction."
+    ],
+    "expected": "Audio below confidence threshold or without clear wake phrase is dropped with error cue; zero submission or storage occurs.",
+    "negative": false
+  },
+  {
+    "id": "HF5",
+    "area": "voice",
+    "version_added": "2.25.0",
+    "title": "Hands-Free: Dialog Security and Voice Confirmation Immunity",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Trigger an action requiring confirmation or plan approval.",
+      "With dialog active, speak wake phrase or command aloud.",
+      "Say 'yes' or 'confirm' aloud."
+    ],
+    "expected": "Attention cue sounds; speech is muted during active dialog; voice never confirms, approves, or dismisses dialogs.",
+    "negative": false
+  },
+  {
+    "id": "HF6",
+    "area": "voice",
+    "version_added": "2.25.0",
+    "title": "Hands-Free: Click-to-Talk Single-Stream Arbitration",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "With hands-free armed, click Mic button or press Ctrl+M to start push-to-talk.",
+      "Complete speech and click mic to submit."
+    ],
+    "expected": "Hands-free pauses cleanly during push-to-talk without stream collisions and resumes armed state afterward.",
+    "negative": false
+  },
+  {
+    "id": "HF7",
+    "area": "voice",
+    "version_added": "2.25.0",
+    "title": "Hands-Free: Echo Guard Muting During Speech",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Trigger an agent reply with TTS speech enabled.",
+      "Observe hands-free controller recording state during audio playback."
+    ],
+    "expected": "Hands-free audio input is muted while TTS is speaking plus 1.0s buffer to prevent agent self-triggering.",
+    "negative": false
+  },
+  {
+    "id": "HF8",
+    "area": "voice",
+    "version_added": "2.25.0",
+    "title": "Hands-Free: Idle Inactivity Auto-Off",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Leave hands-free armed without speech for configured idle timeout (default 10 min)."
+    ],
+    "expected": "Hands-free controller automatically powers off, status chip clears, and auto-off notice is displayed.",
+    "negative": false
+  },
+  {
+    "id": "HF9",
+    "area": "voice",
+    "version_added": "2.25.0",
+    "title": "Hands-Free: Keyboard Shortcut and Status Chip",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Press Ctrl+Shift+M or click HANDS-FREE status chip in GUI footer.",
+      "Observe hands-free toggle behavior."
+    ],
+    "expected": "Shortcut and status chip cleanly toggle hands-free armed/off state with instant visual and audio feedback.",
+    "negative": false
+  },
+  {
+    "id": "V1",
+    "area": "voice",
+    "version_added": "2.5.0",
+    "title": "Voice: Click-to-Talk",
+    "risk": "safe",
+    "needs_real_mode": true,
+    "requires": {
+      "packages": [
+        "faster_whisper"
+      ]
+    },
+    "steps": [
+      "Click Mic button or press Ctrl+M in GUI.",
+      "Speak: 'What time is it?'",
+      "Click Mic again to stop."
+    ],
+    "expected": "Status shows Listening with RMS level, switches to Transcribing, and inputs transcript.",
+    "negative": false
+  },
+  {
+    "id": "V2",
+    "area": "voice",
+    "version_added": "2.5.0",
+    "title": "Voice: Heard Line",
+    "risk": "safe",
+    "needs_real_mode": true,
+    "requires": {
+      "packages": [
+        "faster_whisper"
+      ]
+    },
+    "steps": [
+      "Complete a voice transcription in the GUI."
+    ],
+    "expected": "Chat display renders Heard line in italics before agent reply begins.",
+    "negative": false
+  },
+  {
+    "id": "V3",
+    "area": "voice",
+    "version_added": "2.5.0",
+    "title": "Voice: Speak Replies & Stop",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "SPEAK_REPLIES": "1"
+      }
+    },
+    "steps": [
+      "Check Speak replies.",
+      "Ask a question.",
+      "While audio is speaking, click red Stop button."
+    ],
+    "expected": "Subprocess TTS speaks reply aloud; clicking Stop immediately silences output.",
+    "negative": false,
+    "evidence": {
+      "type": "setting_equals",
+      "key": "SPEAK_REPLIES",
+      "value": "1"
+    }
+  },
+  {
+    "id": "V4",
+    "area": "voice",
+    "version_added": "2.5.0",
+    "title": "Voice: Dialog Immunity",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Trigger action requiring ConfirmDialog.",
+      "Say 'yes' or 'allow' into microphone."
+    ],
+    "expected": "Nothing happens. Dialog does not close or approve. Allow button remains gated by mouse/keyboard.",
+    "negative": true,
+    "evidence": {
+      "type": "audit_no_tool_success"
+    }
+  },
+  {
+    "id": "V5",
+    "area": "voice",
+    "version_added": "2.5.0",
+    "title": "Voice: Mic Refusal When Busy",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Open a confirmation dialog or start a busy task.",
+      "Try clicking Mic or pressing Ctrl+M."
+    ],
+    "expected": "Microphone is refused; status or notice indicates mic is disabled while busy.",
+    "negative": true
+  },
+  {
+    "id": "V6",
+    "area": "voice",
+    "version_added": "2.5.0",
+    "title": "Voice: Muted / Missing Mic",
+    "risk": "safe",
+    "needs_real_mode": true,
+    "requires": {},
+    "steps": [
+      "Disconnect microphone or configure invalid device index.",
+      "Attempt voice input."
+    ],
+    "expected": "GUI displays clear warning that microphone is unavailable; app does not crash.",
+    "negative": false
+  },
+  {
+    "id": "V7",
+    "area": "voice",
+    "version_added": "2.5.0",
+    "title": "Voice: Chained Voice Command",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "CHAINS_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Click Mic.",
+      "Say: 'Open notepad and then wait 5 seconds'.",
+      "Click Mic to stop."
+    ],
+    "expected": "System parses input into a plan preview (PlanDialog) displaying numbered steps.",
+    "negative": false,
+    "evidence": {
+      "type": "setting_equals",
+      "key": "CHAINS_ENABLED",
+      "value": "1"
+    }
+  },
+  {
+    "id": "V8",
+    "area": "voice",
+    "version_added": "2.5.0",
+    "title": "Voice: Privacy Telemetry",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Type /diag or inspect System Info.",
+      "Inspect === VOICE === section."
+    ],
+    "expected": "Reports model and telemetry; strictly zero transcript text or audio arrays exist.",
+    "negative": false
+  },
+  {
+    "id": "VE1",
+    "area": "voice",
+    "version_added": "2.14.0",
+    "title": "Voice: DSP Enhancement Pipeline",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Feed synthetic noisy audio with 50Hz hum into voice enhancer.",
+      "Inspect output audio properties."
+    ],
+    "expected": "Highpass removes hum, AGC normalizes RMS to 0.08 target, spectral noise gate suppresses quiet floor.",
+    "negative": false
+  },
+  {
+    "id": "VE2",
+    "area": "voice",
+    "version_added": "2.14.0",
+    "title": "Voice: Vocabulary Prompt & Beam Size",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "packages": [
+        "faster_whisper"
+      ]
+    },
+    "steps": [
+      "Call WhisperTranscriber.transcribe() with STT_PROMPT=1 and STT_BEAM=5."
+    ],
+    "expected": "Passes bounded vocabulary prompt to model hotwords and sets beam size to 5.",
+    "negative": false
+  },
+  {
+    "id": "VE3",
+    "area": "voice",
+    "version_added": "2.14.0",
+    "title": "Voice: Deterministic Alias Resolution",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Pass multi-token split phrases (e.g. 'open note pad') to alias resolver."
+    ],
+    "expected": "Resolves to single parsed candidate ('open notepad') when unique; ambiguous matches left untouched.",
+    "negative": false
+  },
+  {
+    "id": "VE4",
+    "area": "voice",
+    "version_added": "2.14.0",
+    "title": "Voice: Review Step & Source Tracking",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Transcribe noisy speech under VOICE_REVIEW=auto.",
+      "Submit reviewed text."
+    ],
+    "expected": "Displays review warning banner and populates input box; pressing Enter submits with source voice-reviewed.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_source",
+      "source": "voice-reviewed"
+    }
+  },
+  {
+    "id": "VE5",
+    "area": "voice",
+    "version_added": "2.14.0",
+    "title": "Voice: Dev/Test Split Isolation",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Attempt configuration sweep on test split.",
+      "Run --final-test on candidate config."
+    ],
+    "expected": "Sweep on test split is refused; final test records marker and blocks second run without --force.",
+    "negative": true
+  },
+  {
+    "id": "VE6",
+    "area": "voice",
+    "version_added": "2.14.0",
+    "title": "Voice: Scientific Acceptance Verdict",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Run voice verdict evaluation across reports."
+    ],
+    "expected": "Requires all 5 pre-registered acceptance criteria simultaneously; reports explicit metric diffs.",
+    "negative": false
+  },
+  {
+    "id": "HUD1",
+    "area": "hud",
+    "version_added": "2.13.0",
+    "title": "HUD: 3D Wireframe Sphere & Math",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Launch GUI with HUD enabled.",
+      "Observe rotating wireframe sphere."
+    ],
+    "expected": "3D wireframe sphere renders smoothly; 3D rotation strictly preserves Euclidean vector lengths.",
+    "negative": false
+  },
+  {
+    "id": "HUD10",
+    "area": "hud",
+    "version_added": "2.24.0",
+    "title": "HUD: System Tab GPU Probe & Battery Visibility",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "SYSTEM_TAB_GPU": "1"
+      }
+    },
+    "steps": [
+      "Switch to System tab with SYSTEM_TAB_GPU=1.",
+      "Observe 60-second sparklines, resource gauges, top processes, and GPU probe.",
+      "Check battery status display when battery hardware is present or absent."
+    ],
+    "expected": "System samplers run only while tab is visible; GPU probe enforces 2s timeout and falls back to 'not available'; battery gauge hides gracefully if absent.",
+    "negative": false
+  },
+  {
+    "id": "HUD11",
+    "area": "hud",
+    "version_added": "2.24.0",
+    "title": "HUD: Status Bar Chips & Tab Rail Navigation",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "UI_STATUS_CHIPS": "1"
+      }
+    },
+    "steps": [
+      "Launch ORBIT desktop window with UI_STATUS_CHIPS=1.",
+      "Switch between tabs using 36px Tab Rail icons and Alt+1..Alt+9 hotkeys.",
+      "Observe status bar chips for CPU%, Mem%, and Battery."
+    ],
+    "expected": "Status bar updates system chips every 2s (hidden if UI_MOTION='off'); Tab Rail shows left accent bar, badges, and focus rings.",
+    "negative": false
+  },
+  {
+    "id": "HUD2",
+    "area": "hud",
+    "version_added": "2.13.0",
+    "title": "HUD: State Priority Hierarchy",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Trigger confirming dialog, error, speaking, listening, and busy states.",
+      "Observe HUD visual state."
+    ],
+    "expected": "Resolves states strictly: Confirming > Error > Speaking > Listening > Thinking > Idle.",
+    "negative": false
+  },
+  {
+    "id": "HUD3",
+    "area": "hud",
+    "version_added": "2.13.0",
+    "title": "HUD: Quality Governor & Dynamic Tiers",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Record frame times exceeding 25ms threshold over 20 frames."
+    ],
+    "expected": "Governor automatically downgrades fidelity tier (high -> medium -> low -> static) with cooldown.",
+    "negative": false
+  },
+  {
+    "id": "HUD4",
+    "area": "hud",
+    "version_added": "2.13.0",
+    "title": "HUD: Theme Contrast Verification",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Switch themes (cyan, gold, mono) via settings.",
+      "Inspect color contrast."
+    ],
+    "expected": "All text and dim text colors achieve WCAG 2.1 relative contrast ratios >= 4.5:1 against background.",
+    "negative": false
+  },
+  {
+    "id": "HUD5",
+    "area": "hud",
+    "version_added": "2.13.0",
+    "title": "HUD: Canvas Item Pooling",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Run HUD animation and inspect Canvas item IDs."
+    ],
+    "expected": "Visual items are pre-allocated once; zero canvas items created or deleted per frame.",
+    "negative": false
+  },
+  {
+    "id": "HUD6",
+    "area": "hud",
+    "version_added": "2.13.0",
+    "title": "HUD: Bottom Dock Navigation",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Use Left/Right arrow keys and Space/Enter on dock.",
+      "Test Ctrl+1..5 shortcuts."
+    ],
+    "expected": "Focus moves visibly with distinct ring; Space/Enter triggers docked items cleanly.",
+    "negative": false
+  },
+  {
+    "id": "HUD7",
+    "area": "hud",
+    "version_added": "2.13.0",
+    "title": "HUD: Dialog Topmost & Voice Immunity",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Trigger sensitive action requiring approval while HUD animates."
+    ],
+    "expected": "ConfirmDialog maintains -topmost True, modal grabbing, and auto-deny timer above canvas.",
+    "negative": false
+  },
+  {
+    "id": "HUD8",
+    "area": "hud",
+    "version_added": "2.13.0",
+    "title": "HUD: Graceful Fallback on Canvas Exception",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Simulate canvas initialization exception under UI_STYLE=hud."
+    ],
+    "expected": "App catches error, logs to LAST_HUD_ERROR, prints notice, and falls back to classic layout without crashing.",
+    "negative": false
+  },
+  {
+    "id": "HUD9",
+    "area": "hud",
+    "version_added": "2.24.0",
+    "title": "HUD: Insights Off-UI-Thread Reads",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "INSIGHTS_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Navigate to Insights tab on Tab Rail with INSIGHTS_ENABLED=1.",
+      "Inspect aggregation of audit log entries and run traces."
+    ],
+    "expected": "Reads and aggregates up to 5000 audit entries off the UI thread asynchronously with 10s caching; UI remains responsive without stutter.",
+    "negative": false
+  },
+  {
+    "id": "M1",
+    "area": "messaging",
+    "version_added": "2.19.0",
+    "title": "Messaging: Add Fake Contacts",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "MESSAGING_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "In Contacts window or terminal, add contact 'Self' with phone 15550100123.",
+      "Add contact 'Bob Work' with email fakebob@example.com."
+    ],
+    "expected": "Contacts created with normalized names; phone numbers appear masked as ••••0123.",
+    "negative": false,
+    "evidence": {
+      "type": "setting_equals",
+      "key": "MESSAGING_ENABLED",
+      "value": "1"
+    }
+  },
+  {
+    "id": "M10",
+    "area": "messaging",
+    "version_added": "2.19.0",
+    "title": "Messaging: Rate Limit Protection",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "MESSAGING_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Attempt to send more than 5 messages within 10 minutes."
+    ],
+    "expected": "Excess requests rejected by MessagingRateLimiter with cooldown notices.",
+    "negative": true
+  },
+  {
+    "id": "M11",
+    "area": "messaging",
+    "version_added": "2.19.0",
+    "title": "Messaging: Demo Mode Refusal",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "MESSAGING_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Run in demo mode.",
+      "Attempt a messaging command."
+    ],
+    "expected": "Refused with message: 'Messaging is disabled in demo mode.'",
+    "negative": true,
+    "evidence": {
+      "type": "audit_no_tool_success"
+    }
+  },
+  {
+    "id": "M12",
+    "area": "messaging",
+    "version_added": "2.19.0",
+    "title": "Messaging: Contacts Window GUI",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "MESSAGING_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Press Ctrl+K and select Contacts, or open from Settings."
+    ],
+    "expected": "Themed Contacts window opens; lists contacts with masked numbers; Add, Edit, Delete work.",
+    "negative": false
+  },
+  {
+    "id": "M3",
+    "area": "messaging",
+    "version_added": "2.19.0",
+    "title": "Messaging: Exact Text in Dialog",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "MESSAGING_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Review confirmation dialog for message send request."
+    ],
+    "expected": "Dialog shows exact plain-text preview; Enter defaults to Deny; Allow enables after 800ms cooldown.",
+    "negative": false
+  },
+  {
+    "id": "M4",
+    "area": "messaging",
+    "version_added": "2.19.0",
+    "title": "Messaging: Deny Behavior",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "MESSAGING_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Trigger text Self saying hello.",
+      "In ConfirmDialog, click Deny."
+    ],
+    "expected": "Operation cancelled immediately; WhatsApp is not opened; history records user cancelled.",
+    "negative": true,
+    "evidence": {
+      "type": "audit_decision",
+      "decision": "deny",
+      "tool": "send_whatsapp"
+    }
+  },
+  {
+    "id": "M7",
+    "area": "messaging",
+    "version_added": "2.19.0",
+    "title": "Messaging: Tainted Turn Blocking",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "MESSAGING_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Read untrusted external document or web page.",
+      "Attempt messaging shortcut in same turn."
+    ],
+    "expected": "Action strictly refused with error indicating messaging is blocked in tainted turns.",
+    "negative": true,
+    "evidence": {
+      "type": "audit_tool_denied",
+      "tool": "send_whatsapp"
+    }
+  },
+  {
+    "id": "M8",
+    "area": "messaging",
+    "version_added": "2.19.0",
+    "title": "Messaging: Unknown Contact Refusal",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "MESSAGING_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Type: 'text NonExistentContact saying hi'."
+    ],
+    "expected": "Agent replies directly that contact does not exist without calling model or opening app.",
+    "negative": true,
+    "evidence": {
+      "type": "audit_no_tool_success"
+    }
+  },
+  {
+    "id": "M9",
+    "area": "messaging",
+    "version_added": "2.19.0",
+    "title": "Messaging: Duplicate Alias Refusal",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "MESSAGING_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Attempt to add second contact with existing alias or normalized name."
+    ],
+    "expected": "Rejected with ContactConflictError informing user name/alias is already in use.",
+    "negative": true
+  },
+  {
+    "id": "R1",
+    "area": "reminders",
+    "version_added": "2.6.0",
+    "title": "Reminders: Set with Dialog",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "REMINDERS_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "In chat, enter: 'remind me in 1 minute to check tea'.",
+      "Click Allow on ConfirmDialog."
+    ],
+    "expected": "ConfirmDialog appears with exact arguments; after Allow, reminder is saved.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_tool_success",
+      "tool": "create_reminder"
+    }
+  },
+  {
+    "id": "R2",
+    "area": "reminders",
+    "version_added": "2.6.0",
+    "title": "Reminders: Focus Isolation",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "REMINDERS_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "While typing in input field, let reminder fire."
+    ],
+    "expected": "ReminderToast appears in corner; keyboard focus is not stolen.",
+    "negative": false
+  },
+  {
+    "id": "R3",
+    "area": "reminders",
+    "version_added": "2.6.0",
+    "title": "Reminders: Timer & Snooze",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "REMINDERS_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Enter: 'set a timer for 10 seconds'.",
+      "Approve dialog.",
+      "When toast appears, click Snooze 5 min."
+    ],
+    "expected": "Timer fires after 10s; clicking Snooze updates reminder due time to +300s.",
+    "negative": false
+  },
+  {
+    "id": "R4",
+    "area": "reminders",
+    "version_added": "2.6.0",
+    "title": "Reminders: List & Cancel",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "REMINDERS_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Enter: 'what reminders do i have'.",
+      "Enter: 'cancel reminder 1'.",
+      "Approve dialog."
+    ],
+    "expected": "Active reminders listed; cancellation confirms deletion and removes it from store.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_tool_success",
+      "tool": "cancel_reminder"
+    }
+  },
+  {
+    "id": "R5",
+    "area": "reminders",
+    "version_added": "2.6.0",
+    "title": "Reminders: Chain Isolation",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "REMINDERS_ENABLED": "1",
+        "CHAINS_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Enter: 'remind me in 2 minutes to stretch then pause'."
+    ],
+    "expected": "Stays as single reminder with text 'stretch then pause'; does not split into chain.",
+    "negative": false
+  },
+  {
+    "id": "R6",
+    "area": "reminders",
+    "version_added": "2.6.0",
+    "title": "Reminders: Missed on Restart",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "REMINDERS_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Set reminder for 10s ahead.",
+      "Close ORBIT.",
+      "Wait 30s and reopen."
+    ],
+    "expected": "On startup, missed-while-closed notice is displayed in chat.",
+    "negative": false
+  },
+  {
+    "id": "R7",
+    "area": "reminders",
+    "version_added": "2.6.0",
+    "title": "Reminders: Dialog Collision",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "REMINDERS_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Open a confirmation dialog.",
+      "Let reminder become due while dialog is open."
+    ],
+    "expected": "Reminder does not pop conflicting toast over modal dialog; logs cleanly as chat line.",
+    "negative": false
+  },
+  {
+    "id": "R8",
+    "area": "reminders",
+    "version_added": "2.6.0",
+    "title": "Reminders: Denied Reminder",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "REMINDERS_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Enter: 'remind me in 5 minutes to submit report'.",
+      "Click Deny on ConfirmDialog."
+    ],
+    "expected": "No reminder created; store count unchanged; does not appear in Reminders tab.",
+    "negative": true,
+    "evidence": {
+      "type": "audit_decision",
+      "decision": "deny",
+      "tool": "create_reminder"
+    }
+  },
+  {
+    "id": "RT1",
+    "area": "routines",
+    "version_added": "2.10.0",
+    "title": "Routines: Create with Approval",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "ROUTINES_ENABLED": "1",
+        "CHAINS_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Enter: 'create a routine morning: open notepad then open calculator'."
+    ],
+    "expected": "PlanDialog appears with title Save Routine, heading, steps, and Save button with 800ms cooldown.",
+    "negative": false,
+    "evidence": {
+      "type": "setting_equals",
+      "key": "ROUTINES_ENABLED",
+      "value": "1"
+    }
+  },
+  {
+    "id": "RT2",
+    "area": "routines",
+    "version_added": "2.10.0",
+    "title": "Routines: Save Last Plan",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "ROUTINES_ENABLED": "1",
+        "CHAINS_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Execute a multi-step chain.",
+      "Enter: 'save that as a routine dev'."
+    ],
+    "expected": "Confirmation dialog appears for saving last plan; approving saves steps under name dev.",
+    "negative": false
+  },
+  {
+    "id": "RT4",
+    "area": "routines",
+    "version_added": "2.10.0",
+    "title": "Routines: Stop & Cancellation",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "ROUTINES_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Run a multi-step routine.",
+      "While running, click the red Stop button."
+    ],
+    "expected": "Plan runner immediately halts after current step and cancels pending steps cleanly.",
+    "negative": false
+  },
+  {
+    "id": "RT5",
+    "area": "routines",
+    "version_added": "2.10.0",
+    "title": "Routines: Desktop Routines Tab",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "ROUTINES_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Open Routines tab in desktop GUI."
+    ],
+    "expected": "Displays table with Name, Steps, Last Run, Runs; Run, Show steps, and Delete buttons work.",
+    "negative": false
+  },
+  {
+    "id": "RT6",
+    "area": "routines",
+    "version_added": "2.10.0",
+    "title": "Routines: Stale Allowlist Safety",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "ROUTINES_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Remove app from ALLOWED_APPS after saving routine that uses it.",
+      "Attempt to run routine."
+    ],
+    "expected": "Pre-execution re-validation detects stale app and refuses before step 1; zero steps execute.",
+    "negative": true,
+    "evidence": {
+      "type": "audit_no_tool_success"
+    }
+  },
+  {
+    "id": "RT7",
+    "area": "routines",
+    "version_added": "2.10.0",
+    "title": "Routines: Model & Safety Isolation",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "ROUTINES_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Save and run routines.",
+      "Inspect LLM prompts, memory, and /diag."
+    ],
+    "expected": "Model is never invoked for routine operations; /diag reports routine count only.",
+    "negative": false
+  },
+  {
+    "id": "S1",
+    "area": "settings",
+    "version_added": "2.9.0",
+    "title": "Settings: Single-Line In-Place Diff",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "In terminal, run /set SPEAK_REPLIES 1.",
+      "Confirm y.",
+      "Inspect git diff .env."
+    ],
+    "expected": ".env diff shows strictly that single line modified; comments and blank lines preserved; .env.bak created.",
+    "negative": false,
+    "evidence": {
+      "type": "setting_equals",
+      "key": "SPEAK_REPLIES",
+      "value": "1"
+    }
+  },
+  {
+    "id": "S2",
+    "area": "settings",
+    "version_added": "2.9.0",
+    "title": "Settings: Stale ORBIT_MOCK Source",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Set ORBIT_MOCK=1 in terminal environment.",
+      "Run /settings or open Settings window."
+    ],
+    "expected": "ORBIT_MOCK is displayed with effective value 1 and source environment.",
+    "negative": false
+  },
+  {
+    "id": "S3",
+    "area": "settings",
+    "version_added": "2.9.0",
+    "title": "Settings: Environment Override Flagged",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Define setting in .env, but override it via terminal environment before launching."
+    ],
+    "expected": "Source shows environment (overridden); GUI row displays orange warning note.",
+    "negative": false
+  },
+  {
+    "id": "S4",
+    "area": "settings",
+    "version_added": "2.9.0",
+    "title": "Settings: Merged-Line Refusal",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Introduce merged line in .env.",
+      "Attempt to update setting via /set."
+    ],
+    "expected": "Refuses to write with clear error naming line number and key name only; .env unchanged.",
+    "negative": true
+  },
+  {
+    "id": "S5",
+    "area": "settings",
+    "version_added": "2.9.0",
+    "title": "Settings: CRLF Preservation",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Save setting in .env formatted with CRLF line endings.",
+      "Check line endings of updated file."
+    ],
+    "expected": "Resulting .env file retains CRLF line endings throughout with no conversion to LF.",
+    "negative": false
+  },
+  {
+    "id": "SC6",
+    "area": "system",
+    "version_added": "2.18.0",
+    "title": "System: Rate Limiting Protection",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "SYSTEM_CONTROLS_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Attempt volume adjustments exceeding 30/min or media controls > 10/min."
+    ],
+    "expected": "Returns rate limit error and rejects excessive keystrokes.",
+    "negative": true
+  },
+  {
+    "id": "SC7",
+    "area": "system",
+    "version_added": "2.18.0",
+    "title": "System: Taint Escalation",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "SYSTEM_CONTROLS_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Read untrusted external file or page.",
+      "Issue system control command in same turn."
+    ],
+    "expected": "Safe system tools escalate to confirmation with TAINT_WARNING.",
+    "negative": false
+  },
+  {
+    "id": "L10",
+    "area": "laptop",
+    "version_added": "2.21.0",
+    "title": "Laptop: File Symlink Refusal",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "FILES_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Attempt to find or open a symlink or junction point."
+    ],
+    "expected": "Refused; symlinks and reparse points are strictly excluded from results.",
+    "negative": true
+  },
+  {
+    "id": "L11",
+    "area": "laptop",
+    "version_added": "2.21.0",
+    "title": "Laptop: File Double-Extension Refusal",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "FILES_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Attempt to search for or open report.pdf.exe or invoice.txt.vbs."
+    ],
+    "expected": "Refused with security error: files with multiple or double extensions not allowed.",
+    "negative": true
+  },
+  {
+    "id": "L14",
+    "area": "laptop",
+    "version_added": "2.21.0",
+    "title": "Laptop: Out of Range Index",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "FILES_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Type 'open file 9' or attempt to open candidate after TTL expires."
+    ],
+    "expected": "Refused with clear error: No search result available.",
+    "negative": true
+  },
+  {
+    "id": "L15",
+    "area": "laptop",
+    "version_added": "2.21.0",
+    "title": "Laptop: Screenshot Capture",
+    "risk": "safe",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "SCREENSHOTS_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Type 'take a screenshot'."
+    ],
+    "expected": "PNG saved to workspace/screenshots/ with timestamp; path returned; model-invisible.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_tool_success",
+      "tool": "take_screenshot"
+    }
+  },
+  {
+    "id": "L16",
+    "area": "laptop",
+    "version_added": "2.21.0",
+    "title": "Laptop: Screenshot Disk & Rate Limit",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "SCREENSHOTS_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Attempt capture with <100MB disk or trigger 21st screenshot within 1 hour."
+    ],
+    "expected": "Refused with disk space error or rate limit message (20 per hour).",
+    "negative": true
+  },
+  {
+    "id": "L18",
+    "area": "laptop",
+    "version_added": "2.21.0",
+    "title": "Laptop: Typing Non-Allowlist Refusal",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "TYPING_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Type 'type hello into chrome'."
+    ],
+    "expected": "Deterministically refused: I only type into notepad, whatsapp.",
+    "negative": true,
+    "evidence": {
+      "type": "audit_tool_denied",
+      "tool": "type_into_window"
+    }
+  },
+  {
+    "id": "L19",
+    "area": "laptop",
+    "version_added": "2.21.0",
+    "title": "Laptop: Typing Focus Loss Abort",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "TYPING_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Switch active window mid-typing (>20 chars)."
+    ],
+    "expected": "Typing loop detects foreground window changed and immediately aborts further strokes.",
+    "negative": true
+  },
+  {
+    "id": "L20",
+    "area": "laptop",
+    "version_added": "2.21.0",
+    "title": "Laptop: Typing Rate Limit & Default Off",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "TYPING_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Run typing 6 times within 10 minutes, or test default setting."
+    ],
+    "expected": "Excess calls refused by rate limiter (max 5/10min); disabled by default.",
+    "negative": true
+  },
+  {
+    "id": "L5",
+    "area": "laptop",
+    "version_added": "2.21.0",
+    "title": "Laptop: Elevation Refusal",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "WINDOW_CONTROL_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Attempt to focus an elevated admin window or protected process."
+    ],
+    "expected": "Refused with error indicating window is running with elevated privileges.",
+    "negative": true,
+    "evidence": {
+      "type": "audit_tool_denied",
+      "tool": "window_focus"
+    }
+  },
+  {
+    "id": "L6",
+    "area": "laptop",
+    "version_added": "2.21.0",
+    "title": "Laptop: Non-Allowlist Refusal",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "WINDOW_CONTROL_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Type 'focus cmd' or attempt to control non-allowlisted process."
+    ],
+    "expected": "Deterministically refused; only apps registered in ALLOWED_APPS can be controlled.",
+    "negative": true,
+    "evidence": {
+      "type": "audit_tool_denied",
+      "tool": "window_focus"
+    }
+  },
+  {
+    "id": "L7",
+    "area": "laptop",
+    "version_added": "2.21.0",
+    "title": "Laptop: File Search by Query & Kind",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "FILES_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Type 'find pdfs named report' or 'find photos of sunset'."
+    ],
+    "expected": "Searches allowed user folders up to depth 4; returns top 5 sorted by mtime.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_tool_success",
+      "tool": "find_files"
+    }
+  },
+  {
+    "id": "L8",
+    "area": "laptop",
+    "version_added": "2.21.0",
+    "title": "Laptop: File Search Recent & Downloads",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "FILES_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Type 'find my latest download' or 'find recent documents'."
+    ],
+    "expected": "Scans Downloads or user folders, returning recent files with newest first.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_tool_success",
+      "tool": "find_files"
+    }
+  },
+  {
+    "id": "L9",
+    "area": "laptop",
+    "version_added": "2.21.0",
+    "title": "Laptop: File Search Depth & Budget",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "FILES_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Search deep directory tree or exceed 2-second time budget."
+    ],
+    "expected": "Scanning halts at depth 4 without traversing deeper subdirectories or exceeding budget.",
+    "negative": false
+  },
+  {
+    "id": "RET1",
+    "area": "retrieval",
+    "version_added": "2.17.0",
+    "title": "Retrieval: Embedding Model Check",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Run doctor to inspect RAG embeddings check."
+    ],
+    "expected": "Doctor reports embedding model reachability status.",
+    "negative": false
+  },
+  {
+    "id": "RET2",
+    "area": "retrieval",
+    "version_added": "2.17.0",
+    "title": "Retrieval: Settings Configuration",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "RAG_EMBEDDINGS": "1",
+        "RAG_AUTO_SCORING": "hybrid"
+      }
+    },
+    "steps": [
+      "Enable RAG_EMBEDDINGS=1 and RAG_AUTO_SCORING=hybrid in settings."
+    ],
+    "expected": "Effective settings report hybrid scoring enabled.",
+    "negative": false,
+    "evidence": {
+      "type": "setting_equals",
+      "key": "RAG_EMBEDDINGS",
+      "value": "1"
+    }
+  },
+  {
+    "id": "RET3",
+    "area": "retrieval",
+    "version_added": "2.17.0",
+    "title": "Retrieval: Document Indexing",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Run /index in terminal to index documents."
+    ],
+    "expected": "Indexes document passages and generates chunk embeddings without error.",
+    "negative": false
+  },
+  {
+    "id": "RET4",
+    "area": "retrieval",
+    "version_added": "2.17.0",
+    "title": "Retrieval: Diagnostics Telemetry",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Run /diag and inspect === RAG EMBEDDINGS === section."
+    ],
+    "expected": "Shows embeddings enabled status, model name, chunk counts, and fallback reasons.",
+    "negative": false
+  },
+  {
+    "id": "RET5",
+    "area": "retrieval",
+    "version_added": "2.17.0",
+    "title": "Retrieval: Lexical Fallback on Outage",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Configure invalid embedding model name.",
+      "Query document topic in chat."
+    ],
+    "expected": "Answers returned via BM25 lexical fallback without errors; diag records fallback reason.",
+    "negative": false
+  },
+  {
+    "id": "RET6",
+    "area": "retrieval",
+    "version_added": "2.17.0",
+    "title": "Retrieval: Prompt Citation Enforcement",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Ask question answered by workspace document.",
+      "Inspect response format."
+    ],
+    "expected": "Cites document sources like [file#n] based strictly on retrieved passages.",
+    "negative": false
+  },
+  {
+    "id": "O1",
+    "area": "offline",
+    "version_added": "2.1.0",
+    "title": "Offline: Wi-Fi Disconnected Startup",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Launch ORBIT with ORBIT_OFFLINE=1."
+    ],
+    "expected": "App starts immediately without hanging or attempting outbound HTTP connections.",
+    "negative": false
+  },
+  {
+    "id": "O2",
+    "area": "offline",
+    "version_added": "2.1.0",
+    "title": "Offline: Local Ollama Q&A",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "While offline, ask arithmetic question and create local note."
+    ],
+    "expected": "Local execution succeeds with zero network egress.",
+    "negative": false
+  },
+  {
+    "id": "O3",
+    "area": "offline",
+    "version_added": "2.1.0",
+    "title": "Offline: Network Egress Block",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "While offline, attempt an external API call."
+    ],
+    "expected": "Fails immediately with OfflineModeError without hanging on DNS timeouts.",
+    "negative": true
+  },
+  {
+    "id": "DM1",
+    "area": "demo",
+    "version_added": "2.11.0",
+    "title": "Demo: Window Title & Status Chip",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Launch demo mode via scripts/demo.py."
+    ],
+    "expected": "Window title displays DEMO MODE (sample data); status bar displays orange DEMO badge.",
+    "negative": false
+  },
+  {
+    "id": "DM2",
+    "area": "demo",
+    "version_added": "2.11.0",
+    "title": "Demo: Storage Isolation",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "In demo mode, create file 'notes/demo_test.txt'.",
+      "Inspect workspace/ and demo_home/workspace/."
+    ],
+    "expected": "File created strictly in demo_home/workspace/; real workspace/ remains clean.",
+    "negative": false
+  },
+  {
+    "id": "DM3",
+    "area": "demo",
+    "version_added": "2.11.0",
+    "title": "Demo: Settings Protection",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "In demo mode, attempt /set SPEAK_REPLIES 1 or save settings in GUI."
+    ],
+    "expected": "Rejection message: Settings can't be changed in demo mode; .env is not written.",
+    "negative": true
+  },
+  {
+    "id": "DM4",
+    "area": "demo",
+    "version_added": "2.11.0",
+    "title": "Demo: Marker Reset Safety",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Pass non-empty directory without .orbit_demo marker to scripts/demo.py --home."
+    ],
+    "expected": "Execution stops with error and deletes nothing (refusing to delete).",
+    "negative": true
+  },
+  {
+    "id": "DM5",
+    "area": "demo",
+    "version_added": "2.11.0",
+    "title": "Demo: Path Invariance Unset",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Launch ORBIT without ORBIT_HOME.",
+      "Query paths via config.paths."
+    ],
+    "expected": "All storage and log paths resolve to standard defaults; no redirection occurs.",
+    "negative": false
+  },
+  {
+    "id": "DM6",
+    "area": "demo",
+    "version_added": "2.11.0",
+    "title": "Demo: Browser Profile Isolation",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "In demo mode, open browser tool.",
+      "Inspect browser profile directory."
+    ],
+    "expected": "Playwright uses clean demo_home/data/browser_profile/; personal cookies absent.",
+    "negative": false
+  },
+  {
+    "id": "NEG-01",
+    "area": "security",
+    "version_added": "2.22.0",
+    "title": "Security: Voice Confirmation Immunity",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Trigger a dangerous action requiring confirmation (e.g. open notepad).",
+      "When the confirmation dialog appears, speak 'yes', 'allow', or 'confirm' into the microphone."
+    ],
+    "expected": "Voice input does nothing. Dialog does not close, approve, or execute the tool.",
+    "negative": true,
+    "evidence": {
+      "type": "audit_no_tool_success"
+    }
+  },
+  {
+    "id": "NEG-02",
+    "area": "security",
+    "version_added": "2.22.0",
+    "title": "Security: Microphone Refused During Dialog",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Open any modal confirmation or plan dialog.",
+      "Attempt to activate the microphone via the Mic button or Ctrl+M shortcut."
+    ],
+    "expected": "Microphone activation is strictly refused and a busy warning is surfaced.",
+    "negative": true
+  },
+  {
+    "id": "NEG-03",
+    "area": "security",
+    "version_added": "2.22.0",
+    "title": "Security: Taint Blocking for Sensitive Tools",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "MESSAGING_ENABLED": "1",
+        "TYPING_ENABLED": "1",
+        "SLEEP_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Instruct the agent to read an untrusted document or web page.",
+      "In the same turn, attempt to trigger messaging, typing, or computer sleep."
+    ],
+    "expected": "The tool call is blocked with an error explaining that sensitive actions cannot execute in tainted turns.",
+    "negative": true,
+    "evidence": {
+      "type": "audit_tool_denied",
+      "tool": "send_whatsapp"
+    }
+  },
+  {
+    "id": "NEG-04",
+    "area": "security",
+    "version_added": "2.22.0",
+    "title": "Security: Non-Allowlisted Typing Refusal",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "TYPING_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Enable typing controls.",
+      "Attempt to send keystrokes into a non-allowlisted window (e.g. cmd.exe or chrome.exe)."
+    ],
+    "expected": "Typing is deterministically refused before any keystrokes are dispatched.",
+    "negative": true,
+    "evidence": {
+      "type": "audit_tool_denied",
+      "tool": "type_into_window"
+    }
+  },
+  {
+    "id": "NEG-05",
+    "area": "security",
+    "version_added": "2.22.0",
+    "title": "Security: Executable Refusal in File Opener",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "FILES_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Attempt to open or reveal an executable file (.exe, .bat, .cmd, .ps1, or double extension)."
+    ],
+    "expected": "The file opener refuses the request immediately with an untrusted file type security error.",
+    "negative": true,
+    "evidence": {
+      "type": "audit_no_tool_success"
+    }
+  },
+  {
+    "id": "NEG-06",
+    "area": "security",
+    "version_added": "2.22.0",
+    "title": "Security: Unknown Contact Message Refusal",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "MESSAGING_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Request sending a WhatsApp message to an unregistered contact name."
+    ],
+    "expected": "Refused deterministically without invoking the LLM or opening external applications.",
+    "negative": true,
+    "evidence": {
+      "type": "audit_no_tool_success"
+    }
+  },
+  {
+    "id": "NEG-07",
+    "area": "security",
+    "version_added": "2.22.0",
+    "title": "Security: Model-Invisible Tool Refusal",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {
+      "settings": {
+        "SCREENSHOTS_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Attempt to invoke a model-invisible tool (e.g. take_screenshot) directly via LLM tool-calling schema."
+    ],
+    "expected": "Tool is omitted from model-visible tool offerings; model cannot call it autonomously.",
+    "negative": true
+  },
+  {
+    "id": "NEG-08",
+    "area": "security",
+    "version_added": "2.22.0",
+    "title": "Security: Demo Settings Protection",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Run ORBIT in demo mode.",
+      "Attempt to modify settings via /set or the Settings GUI."
+    ],
+    "expected": "Settings modification is blocked; .env and .env.bak remain untouched.",
+    "negative": true
+  },
+  {
+    "id": "NEG-09",
+    "area": "security",
+    "version_added": "2.22.0",
+    "title": "Security: No Secrets in /diag Output",
+    "risk": "safe",
+    "needs_real_mode": false,
+    "requires": {},
+    "steps": [
+      "Run /diag in terminal or click System Info in GUI.",
+      "Examine diagnostics text for phone numbers, contact names, secret tokens, or personal file names."
+    ],
+    "expected": "Diagnostics contains zero private contact data, unmasked phone numbers, or secret tokens.",
+    "negative": true
+  },
+  {
+    "id": "B1",
+    "area": "browser",
+    "version_added": "2.3.0",
+    "title": "Browser: Step 1 (Search)",
+    "risk": "touches_apps",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "BROWSER_ENABLED": "1"
+      },
+      "packages": [
+        "playwright"
+      ]
+    },
+    "steps": [
+      "Enter: 'search wikipedia for Python' with BROWSER_ENABLED=1."
+    ],
+    "expected": "Controlled Playwright browser opens, navigates to search, and extracts numbered results.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_tool_success",
+      "tool": "browser_open"
+    }
+  },
+  {
+    "id": "B2",
+    "area": "browser",
+    "version_added": "2.3.0",
+    "title": "Browser: Step 2 (Click)",
+    "risk": "touches_apps",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "BROWSER_ENABLED": "1"
+      },
+      "packages": [
+        "playwright"
+      ]
+    },
+    "steps": [
+      "Enter: 'click the first result'."
+    ],
+    "expected": "Browser navigates to target page, verifies URL change, and updates session context.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_tool_success",
+      "tool": "browser_click"
+    }
+  },
+  {
+    "id": "B3",
+    "area": "browser",
+    "version_added": "2.3.0",
+    "title": "Browser: Step 3 (Read)",
+    "risk": "touches_apps",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "BROWSER_ENABLED": "1"
+      },
+      "packages": [
+        "playwright"
+      ]
+    },
+    "steps": [
+      "Enter: 'read the page summary'."
+    ],
+    "expected": "Extracts visible text, truncates to safe length, and marks turn as tainted.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_tool_success",
+      "tool": "browser_read"
+    }
+  },
+  {
+    "id": "B4",
+    "area": "browser",
+    "version_added": "2.3.0",
+    "title": "Browser: Step 4 (Scroll)",
+    "risk": "touches_apps",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "BROWSER_ENABLED": "1"
+      },
+      "packages": [
+        "playwright"
+      ]
+    },
+    "steps": [
+      "Enter: 'scroll down 500 pixels'."
+    ],
+    "expected": "Dispatches scroll delta and confirms vertical page movement.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_tool_success",
+      "tool": "browser_scroll"
+    }
+  },
+  {
+    "id": "B5",
+    "area": "browser",
+    "version_added": "2.3.0",
+    "title": "Browser: Step 5 (Media)",
+    "risk": "touches_apps",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "BROWSER_ENABLED": "1"
+      },
+      "packages": [
+        "playwright"
+      ]
+    },
+    "steps": [
+      "Navigate to approved media page.",
+      "Enter: 'pause the video'."
+    ],
+    "expected": "Controller reads video DOM state and pauses playback without error.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_tool_success",
+      "tool": "browser_media"
+    }
+  },
+  {
+    "id": "B6",
+    "area": "browser",
+    "version_added": "2.3.0",
+    "title": "Browser: Step 6 (Close)",
+    "risk": "touches_apps",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "BROWSER_ENABLED": "1"
+      },
+      "packages": [
+        "playwright"
+      ]
+    },
+    "steps": [
+      "Enter: 'close the browser'.",
+      "Enter: 'what was the last site I visited?'."
+    ],
+    "expected": "Browser closes cleanly; session context recalls last site from memory.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_tool_success",
+      "tool": "browser_close"
+    }
+  },
+  {
+    "id": "M13",
+    "area": "messaging",
+    "version_added": "2.19.0",
+    "title": "Messaging: Mailto Draft",
+    "risk": "touches_apps",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "MESSAGING_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Type: 'email Bob Work about Project Update'.",
+      "Approve dialog."
+    ],
+    "expected": "Default email client opens with draft addressed to fakebob@example.com with subject.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_tool_success",
+      "tool": "send_email"
+    }
+  },
+  {
+    "id": "M2",
+    "area": "messaging",
+    "version_added": "2.19.0",
+    "title": "Messaging: Draft to Self",
+    "risk": "touches_apps",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "MESSAGING_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Type: 'text Self saying hello from orbit'.",
+      "Inspect confirmation dialog."
+    ],
+    "expected": "ConfirmDialog opens with preview indicating WhatsApp will be DRAFTED only without pressing Enter.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_decision",
+      "decision": "allow",
+      "tool": "send_whatsapp"
+    }
+  },
+  {
+    "id": "M5",
+    "area": "messaging",
+    "version_added": "2.19.0",
+    "title": "Messaging: Send Mode to Self",
+    "risk": "sends_data",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "MESSAGING_ENABLED": "1",
+        "WHATSAPP_SEND_MODE": "send"
+      }
+    },
+    "steps": [
+      "Set WHATSAPP_SEND_MODE=send.",
+      "Type 'text Self saying automated test'.",
+      "Approve dialog."
+    ],
+    "expected": "Verifies active window title and process, waits settle delay, re-verifies, and sends.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_tool_success",
+      "tool": "send_whatsapp"
+    }
+  },
+  {
+    "id": "M6",
+    "area": "messaging",
+    "version_added": "2.19.0",
+    "title": "Messaging: Page-Derived Link",
+    "risk": "touches_apps",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "MESSAGING_ENABLED": "1",
+        "BROWSER_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "In browser, navigate to a video.",
+      "Type 'send this link to Self'."
+    ],
+    "expected": "Link to current video resolved and attached to WhatsApp draft preview.",
+    "negative": false
+  },
+  {
+    "id": "RT3",
+    "area": "routines",
+    "version_added": "2.10.0",
+    "title": "Routines: Run with Preview",
+    "risk": "touches_apps",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "ROUTINES_ENABLED": "1",
+        "CHAINS_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Enter: 'run routine morning'."
+    ],
+    "expected": "Upfront preview dialog displays header, lists steps, and Run button; runs through plan runner.",
+    "negative": false
+  },
+  {
+    "id": "SC1",
+    "area": "system",
+    "version_added": "2.18.0",
+    "title": "System: Volume Adjustment",
+    "risk": "touches_apps",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "SYSTEM_CONTROLS_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Issue command 'volume up' or 'turn volume up by 4'."
+    ],
+    "expected": "Sends volume key strokes in 1-10 steps (~2% per step) with feedback notice.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_tool_success",
+      "tool": "volume_up"
+    }
+  },
+  {
+    "id": "SC2",
+    "area": "system",
+    "version_added": "2.18.0",
+    "title": "System: Volume Mute Toggle",
+    "risk": "touches_apps",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "SYSTEM_CONTROLS_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Issue command 'mute volume'."
+    ],
+    "expected": "Sends mute key stroke and reports unobservable state notice.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_tool_success",
+      "tool": "volume_mute_toggle"
+    }
+  },
+  {
+    "id": "SC3",
+    "area": "system",
+    "version_added": "2.18.0",
+    "title": "System: Media Playback Controls",
+    "risk": "touches_apps",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "SYSTEM_CONTROLS_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Issue command 'pause music' or 'next track'."
+    ],
+    "expected": "Sends corresponding media key strokes without error.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_tool_success",
+      "tool": "media_play_pause"
+    }
+  },
+  {
+    "id": "SC4",
+    "area": "system",
+    "version_added": "2.18.0",
+    "title": "System: Screen Lock Confirmation",
+    "risk": "touches_apps",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "SYSTEM_CONTROLS_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Issue command 'lock the screen'."
+    ],
+    "expected": "Prompts for confirmation (CONFIRM); locks workstation only upon approval.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_decision",
+      "decision": "allow",
+      "tool": "lock_screen"
+    }
+  },
+  {
+    "id": "SC5",
+    "area": "system",
+    "version_added": "2.18.0",
+    "title": "System: Settings Pages Opening",
+    "risk": "touches_apps",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "SYSTEM_CONTROLS_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Issue command 'open bluetooth settings'."
+    ],
+    "expected": "Prompts confirmation, opens ms-settings:bluetooth upon approval.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_tool_success",
+      "tool": "open_settings_page"
+    }
+  },
+  {
+    "id": "L1",
+    "area": "laptop",
+    "version_added": "2.21.0",
+    "title": "Laptop: Window Focus & Restore",
+    "risk": "touches_apps",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "WINDOW_CONTROL_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Type 'switch to notepad' while Notepad is minimized."
+    ],
+    "expected": "Notepad is restored if minimized and brought to active foreground.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_tool_success",
+      "tool": "window_focus"
+    }
+  },
+  {
+    "id": "L12",
+    "area": "laptop",
+    "version_added": "2.21.0",
+    "title": "Laptop: Open Found File with CONFIRM",
+    "risk": "touches_apps",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "FILES_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "After searching, type 'open the first one'."
+    ],
+    "expected": "Modal ConfirmDialog opens asking approval; clicking Allow opens file via default handler.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_decision",
+      "decision": "allow",
+      "tool": "open_file"
+    }
+  },
+  {
+    "id": "L13",
+    "area": "laptop",
+    "version_added": "2.21.0",
+    "title": "Laptop: Reveal File in Explorer",
+    "risk": "touches_apps",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "FILES_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Type 'reveal file 2 in explorer'."
+    ],
+    "expected": "Modal ConfirmDialog opens; clicking Allow opens explorer.exe /select,path.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_decision",
+      "decision": "allow",
+      "tool": "reveal_in_explorer"
+    }
+  },
+  {
+    "id": "L17",
+    "area": "laptop",
+    "version_added": "2.21.0",
+    "title": "Laptop: Guarded Typing into Notepad",
+    "risk": "touches_apps",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "TYPING_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Enable TYPING_ENABLED=1.",
+      "Type 'type hello world into notepad'."
+    ],
+    "expected": "Dialog asks confirmation; focuses Notepad; types in 20-char chunks via SendInput.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_decision",
+      "decision": "allow",
+      "tool": "type_into_window"
+    }
+  },
+  {
+    "id": "L2",
+    "area": "laptop",
+    "version_added": "2.21.0",
+    "title": "Laptop: Window Minimize & Maximize",
+    "risk": "touches_apps",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "WINDOW_CONTROL_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Type 'minimize notepad' followed by 'maximize notepad'."
+    ],
+    "expected": "Notepad minimizes to taskbar then expands to maximized state.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_tool_success",
+      "tool": "window_minimize"
+    }
+  },
+  {
+    "id": "L21",
+    "area": "laptop",
+    "version_added": "2.21.0",
+    "title": "Laptop: Computer Sleep Confirmation",
+    "risk": "touches_apps",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "SLEEP_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Enable SLEEP_ENABLED=1.",
+      "Type 'put computer to sleep'."
+    ],
+    "expected": "Modal ConfirmDialog opens asking approval; clicking Allow invokes SetSuspendState.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_decision",
+      "decision": "allow",
+      "tool": "sleep_computer"
+    }
+  },
+  {
+    "id": "L3",
+    "area": "laptop",
+    "version_added": "2.21.0",
+    "title": "Laptop: Window Snap",
+    "risk": "touches_apps",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "WINDOW_CONTROL_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Type 'snap notepad left' and 'snap notepad right'."
+    ],
+    "expected": "Notepad repositioned to fill exactly left or right half of monitor area.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_tool_success",
+      "tool": "window_snap"
+    }
+  },
+  {
+    "id": "L4",
+    "area": "laptop",
+    "version_added": "2.21.0",
+    "title": "Laptop: Show Desktop",
+    "risk": "touches_apps",
+    "needs_real_mode": true,
+    "requires": {
+      "settings": {
+        "WINDOW_CONTROL_ENABLED": "1"
+      }
+    },
+    "steps": [
+      "Type 'show desktop' or 'minimize all windows'."
+    ],
+    "expected": "Minimizes open application windows to reveal desktop cleanly.",
+    "negative": false,
+    "evidence": {
+      "type": "audit_tool_success",
+      "tool": "window_show_desktop"
+    }
+  }
+]

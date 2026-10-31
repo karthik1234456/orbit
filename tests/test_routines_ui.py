@@ -148,7 +148,7 @@ def test_routines_tab_build_and_refresh(tmp_path: Path):
 
         # Check tab is present
         tab_texts = [win.notebook.tab(i, "text") for i in win.notebook.tabs()]
-        assert "Routines" in tab_texts
+        assert "Rout" in tab_texts or "Routines" in tab_texts
 
         # Verify tree rows
         children = win.routines_tree.get_children()

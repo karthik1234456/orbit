@@ -1,7 +1,7 @@
 # ORBIT Sci-Fi HUD Interface Design Specification
 
-Version: 2.17.0  
-Date: 2026-10-30  
+Version: 2.23.0  
+Date: 2026-10-31  
 Status: Approved Reference Implementation
 
 ## 1. Overview & Architectural Goals
@@ -29,6 +29,7 @@ c_y &= 0.43 \cdot H
 | Component / Metric | Formula | 1100 × 700 ($S = 1.0$) | 1280 × 800 ($S = 1.0$) | 1920 × 1080 ($S = 1.0$) | 1100 × 900 ($S \approx 0.8781$) |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Clearance Scale Factor** $S$ | $\min\left(1.0, \frac{c_x - 12 - x_{\text{chat,left}} - 260}{0.31 \cdot H}\right)$ | 1.0000 | 1.0000 | 1.0000 | 0.8781 |
+| **OrbLayer Box Size** | $0.74 \cdot H \cdot S$ | 518.0 px | 592.0 px | 799.2 px | 584.8 px |
 | **Sphere Radius** $R_{\text{sph}}$ | $0.21 \cdot H \cdot S$ | 147.0 px | 168.0 px | 226.8 px | 166.0 px |
 | **Core Radii (5 tiers)** | $[0.12, 0.20, 0.30, 0.42, 0.55] \cdot R_{\text{sph}}$ | 17.6, 29.4, 44.1, 61.7, 80.9 px | 20.2, 33.6, 50.4, 70.6, 92.4 px | 27.2, 45.4, 68.0, 95.3, 124.7 px | 19.9, 33.2, 49.8, 69.7, 91.3 px |
 | **Inner Ring Radius** | $0.262 \cdot H \cdot S$ | 183.4 px | 209.6 px | 283.0 px | 207.1 px |
@@ -75,10 +76,12 @@ The center core features 5 concentric circles with stepped radial falls:
   - **Arc B**: +8° to -72° (20 blocks).
 - **Brightness Profile**: Bell-shaped brightness peaking at 55% of the angular arc length, interpolating between bright champagne `#F2D8A1` and dim bronze `#7E6C48`.
 - **Idle Drift**: Arc A drifts counter-clockwise at $+3^\circ/\text{s}$, Arc B drifts clockwise at $-2^\circ/\text{s}$.
+- **Unlit Blocks**: Always rendered as visible ghosts blended with 8% accent color.
+- **Faint Rim**: Faint outer circular rim line rendered underneath the arc band.
 
 ### 3.4 Tilted Dust Ring & Depth Occlusion
 - **Geometry**: Ellipse tilted $-22^\circ$ in the screen plane with an orbital plane inclination of approximately $70^\circ$ (semi-major axis $0.31 \cdot H$, semi-minor axis $0.10 \cdot H$).
-- **Particles**: 350 particles with Gaussian radial jitter around the central orbital path. An exact 1.5 px gold guide ellipse is drawn through the center of the dust band.
+- **Particles**: 600 particles on tier high, 300 on medium, 150 on low. Dual elliptical rings (primary and secondary faint ring at half density). 1 px size.
 - **Depth-Correct Z-Ordering**:
   - Particles and ellipse points with $z \ge 0$ (front half) are drawn in front of the sphere wireframe.
   - Particles and ellipse points with $z < 0$ (back half) are drawn behind the sphere core and wireframe, and are geometrically occluded when their projected $(x, y)$ coordinates fall within $R_{\text{sph}}$.
@@ -117,7 +120,7 @@ Key evaluation checkpoints:
 - **Equaliser Bar Stretching**: Segmented arc blocks stretch radially:
   $$\text{length}_i = \text{base} + \text{pulse} \cdot \text{gain} \cdot w_i$$
   where $w_i \in [0.4, 1.0]$ is a fixed per-block deterministic weight, producing an equaliser-like flare.
-- **Dust Ring Expansion**: Dust ring radius dilates toward a circle of radius $0.36 \cdot H$ at peak pulse, then relaxes smoothly back to the elliptical orbit.
+- **Dust Ring Expansion**: Dust ring radius dilates smoothly during peak pulse, then relaxes back to the elliptical orbit.
 - **Pulse Drivers**:
   - Model reply: Soft pulse (amplitude 0.50).
   - Task completion: Mild pulse (amplitude 0.45, blocks thicken rather than stretch).
@@ -136,7 +139,6 @@ In translating the artistic visual concept into a clean, professional, and acces
 3. **Static Dust Specks & Compression Noise**: Video compression artifacts, static speckling, and non-orbital visual noise are excluded. The dust ring consists strictly of clean, mathematically tracked orbital particles.
 4. **Trademarked Logos and Characters**: No trademarked helmets, fictional AI monikers, or proprietary character assets are used. The interface is branded strictly and consistently as **ORBIT**.
 5. **Low Contrast Text Elements**: Unreadable low-contrast gold-on-gray decorative text is upgraded to high-contrast palette values ensuring strict WCAG 2.1 AA (≥ 4.5:1) compliance.
-
 
 ---
 
@@ -168,19 +170,6 @@ Because points on the unit sphere satisfy $x^2 + y^2 + z^2 = 1$, the projected r
 ### 6.4 Segmented Equaliser Arc Quads
 Equaliser arc segments are rendered as true 4-vertex quads (`create_polygon`) spanning the radial band $[0.285 H, 0.310 H]$ with $3.2^\circ$ block width and $0.8^\circ$ gap ($4.0^\circ$ pitch). Arc A comprises 24 blocks ($92^\circ$ to $188^\circ$, drifting $+3^\circ/\text{s}$) and Arc B comprises 20 blocks ($+8^\circ$ to $-72^\circ$, drifting $-2^\circ/\text{s}$), with Gaussian brightness weighting centered at 55% along each arc.
 
-### 6.5 Motion Mode Parity
-- **Full (`UI_MOTION="full"`)**: Normal 30 FPS animation with full particle systems (350 dust particles, 60 parallax dust, continuous wireframe rotation, active arc pulsing).
-- **Reduced (`UI_MOTION="reduced"`)**: 8 FPS update interval, particle count halved, slower drift velocity ($0.3\times$), with full wireframe and equaliser arcs retained.
-- **Off (`UI_MOTION="off"`)**: Zero-tick static mode rendering a single static frame containing the orthographic wireframe, 5-tier core, segmented arcs, graduation ticks, and static dust particles.
-
-### 6.6 Equal-Advance Typography
-To guarantee perfect optical balance and symmetry around the center line $c_x$, the "ORBIT" title and status text are rendered using equal-advance character cells:
-$$cell = widest\_glyph + tracking$$
-Glyphs are positioned symmetrically around $c_x$ so that $x_i = c_x + (i - (N - 1) / 2.0) \cdot cell$.
-
-### 6.7 54-Polyline Wireframe Optimization
-The wireframe consists of 27 3D curves (11 closed latitudes and 16 meridian semicircles). By partitioning rotated 3D curves across the $z = 0$ horizon plane and interpolating zero-crossings, curves are rendered as at most 1 front polyline and 1 back polyline (max 54 polylines total). Combined with integer coordinate caching and itemconfigure diffing, per-frame touched canvas items are reduced from over 1,200 to $<450$ on high tier, with zero memory allocations during animation.
-
 ---
 
 ## 7. Cinematic Realism & Pure Python Bitmaps (Part B)
@@ -201,19 +190,45 @@ A deterministic (seed 42) background image combines:
 - **Dither Grain**: High-frequency pseudorandom noise ($\pm 1.5$ levels) eliminating 8-bit banding artifacts.
 
 ### 7.3 Bloom Sprites & Translucent Glass Body
-- **Bloom Sprites**: Pre-rendered $S = 2.4 \cdot r_s$ square sprites for 5 pulse levels containing inner core halo and limb rim bloom. Sprite borders strictly match background pixels to prevent edge seams.
+- **Bloom Sprites**: Pre-rendered $S = 2.4 \cdot r_s$ square sprites over up to 256 pulse levels containing inner core halo and limb rim bloom with smoothstep falloff. Sprite borders strictly match background pixels to prevent edge seams.
 - **Glass Body Sprite**: Pre-rendered sphere disc featuring volumetric absorption darkening toward center, Fresnel rim lightening near limb, and an upper-left specular highlight.
 
 ### 7.4 Multi-Plane Cursor Parallax
-60 ambient dust particles are distributed across three distinct depth layers:
-- Deep (30 particles, weight 0.005)
-- Mid (20 particles, weight 0.015)
-- Near (10 particles, weight 0.035)
-Particles track mouse cursor movement relative to canvas center with smooth damping and continuous slow horizontal drift.
+Ambient dust particles track cursor movement relative to canvas center with smooth damping and continuous slow horizontal drift.
 
-### 7.5 Memory Budget & Resilience
-- **Memory Footprint**: Total image allocation at $1920 \times 1080$ is $\approx 13.55\text{ MB}$, well within the $48\text{ MB}$ budget.
-- **Build Performance**: Generation completes in $<500\text{ ms}$ on worker thread (budget $\le 2.0\text{ s}$).
-- **Resize Debounce**: 200 ms debounce prevents worker thrashing during window resize.
-- **Fallback Guarantee**: If PhotoImage instantiation fails for any reason, the system automatically falls back to pure vector drawing without throwing exceptions or degrading functionality.
-- **Setting**: Controlled via `UI_REALISM = "full" | "lite" | "off"` (default `"full"`).
+---
+
+## 8. Two-Layer Architecture & Fidelity Overhaul (v2.23.0)
+
+### 8.1 Two-Layer Rendering Architecture
+Rendering is decoupled into two independent Tkinter Canvas layers:
+1. **StaticLayer (Parent Canvas)**: Covers the full application window. Renders the baked background bitmap, vignette fallback, up to 40 static stars (1 px, $\le 35\%$ accent brightness), panel outlines, double rings, boundary graduation ticks, "ORBIT" title, state label, and bottom chips. It is redrawn **strictly on resize, theme change, or state label change**; it receives zero redraw calls during steady-state animation.
+2. **OrbLayer (Child Canvas)**: Positioned via `place()` centered at $(c_x, c_y)$ with an analytical square bounding box of size $0.74 \cdot H \cdot \text{scale}$, with `highlightthickness=0` and `bd=0`. Renders all animated elements: sphere wireframe polylines, pre-rendered core bloom and smoky glass sprites, segmented equaliser arcs, dust ring particles, pulse ripples, and up to 12 foreground stars. Its background is a seamless crop of the parent background bitmap, guaranteed to match border pixels identically.
+
+### 8.2 Frame Pacing & Idle Skipping
+- **Dynamic Pacing**: When the state is `IDLE` with no active audio/task pulse and no dragging, the animation ceiling throttles automatically to 15 FPS ($\approx 66\text{ ms}$ delay). When active (`SPEAKING`, `LISTENING`, `THINKING`, or active pulse), it runs at full `HUD_FPS` (default 30 FPS).
+- **Frame Skipping**: If angular displacement between successive frames is $< 0.05\text{ px}$ and no color or pulse changes occur, the frame computation returns early.
+
+### 8.3 Depth Color Bucketing
+Sphere wireframe polylines quantize depth $z \in [-1.0, 1.0]$ into 6 discrete buckets. Polylines are tagged by depth bucket, and `itemconfigure` is called **only when a polyline crosses into a different bucket**. During continuous rotation, only coordinate updates occur for steady polylines.
+
+### 8.4 Struct-of-Arrays Dust Ring (`DustRingSoA`)
+Dust particles are represented in a Struct-of-Arrays layout:
+- 600 particles on tier `high`, 300 on `medium`, 150 on `low`.
+- Vectorized 3D rotation and projection with NumPy when available, with a pure-Python fallback strictly verified to match within $0.01\text{ px}$.
+- Coordinate updates to Tk canvas items are gated by displacement thresholding ($\ge 1.4\text{ px}$), ensuring that only particles crossing integer boundaries are touched. This bounds per-frame touched items to $\le 450$ on high tier.
+
+### 8.5 Performance Telemetry Targets
+Per-frame performance is tracked in rolling history buffers:
+- `compute_ms`: Pure mathematical simulation and projection time.
+- `canvas_ms`: Time spent in Tkinter widget and canvas calls.
+- `items_touched`: Count of canvas items configured or repositioned in each frame.
+
+Telemetry rolling averages are exported under `=== HUD ===` in `/diag`. Target benchmarks to be measured by the user in their hardware environment:
+- **Tier High**: Target $\le 25\text{ ms}$ average frame time at $1280 \times 800$.
+- **Tier Medium**: Target $\le 33\text{ ms}$ average frame time at $1920 \times 1080$.
+
+### 8.6 Fidelity & Theme Purity
+- **Palette Purity**: Every pixel drawn in a frame derives strictly from the active theme palette ramps. In the `gold` theme, all cyan and teal tones (hue $150^\circ$ to $210^\circ$ with saturation $> 0.20$) are eliminated. In `cyan`, all elements adhere to the cyan/teal ramp. All standard scrollbars use `ttk.Scrollbar` with thin arrowless troughs; zero `tk.Scrollbar` instances exist.
+- **Dock Icons**: Thin 1.5 px outline circles with theme strokes (no filled discs, glow only on hover/active), with an 8-tooth gear icon for Settings.
+- **Interim Tab Labels**: Tab labels use compact forms (`Act`, `Ctx`, `Mem`, `Docs`, `Rem`, `Rout`, `Run`) with 8pt Segoe UI font to ensure zero tab truncation or clipping at 1100 px window width, with full names displayed in tooltips.

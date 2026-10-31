@@ -219,6 +219,17 @@ python scripts/voice_record.py --split dev --kind real_noise
 - **Acoustic Echo**: Spoken feedback through open speakers while the microphone is listening requires headphones or hardware acoustic echo cancellation (AEC).
 
 
+### Hands-free Listening in the Desktop Window (v2.25)
+- Continuous hands-free listening inside the desktop window (`HANDS_FREE=1`, default `0`), powered by lightweight local wake phrase detection (`WAKE_PHRASE="hey orbit"`, `WAKE_SENSITIVITY=0.80`, `WAKE_STT_MODEL="tiny.en"`).
+- **Privacy Contract & Ephemerality**: Microphone frames are processed locally in RAM on a background daemon worker thread. Non-wake transcripts are strictly ephemeral and discarded immediately. No raw audio arrays or ambient transcripts are written to disk, telemetry, or audit logs.
+- **Explicit Activation**: Enabling hands-free requires explicit acknowledgment of the privacy disclosure dialog. Forced to `0` under `ORBIT_EVAL=1` or `DEMO_MODE=1`.
+- **Audio Cues**: Distinctive audio feedback via `winsound.Beep` (`HANDS_FREE_CUES=1`): wake chime (rising tone), command recognized (soft chime), low-confidence drop (two descending tones), dialog attention (two quick tones), and off tone.
+- **Zero Confirmation via Voice**: Voice input strictly produces text; it NEVER confirms, approves, or resolves any dialog (`ConfirmDialog`, `PlanDialog`). Destructive and sensitive actions require physical keyboard or mouse approval.
+- **Echo Guard & Single-Stream Arbitration**: Input is automatically muted while ORBIT speaks TTS plus a 1.0 s post-speech buffer to prevent self-triggering. Push-to-talk (`Ctrl+M` or Mic button) pauses hands-free cleanly without audio driver contention.
+- **Safety Limits & Timeouts**: Rate-limited to 6 wake events per minute (triggers a 30 s cooldown); automatically turns off after 10 minutes of silence (`HANDS_FREE_IDLE_MINUTES=10`) or 3 consecutive audio device errors.
+- **Live Verification Probe**: Evaluated via `python scripts/wake_probe.py` (10 prompted trials, 120 s ambient silence, zero audio retention). Complete architecture and threat mitigation details are documented in `docs/HANDS_FREE.md` and `docs/THREAT_MODEL.md` (Section 25).
+
+
 ### Tool Routing (Optional)
 - Opt-in tool filtering (`TOOL_ROUTING=1` or `settings.TOOL_ROUTING = True`, disabled by default) reducing prompt token overhead and improving precision for local small models.
 - Centralized group definitions (`core/routing.py`) mapping 9 functional areas: `system`, `notes`, `files`, `apps`, `web`, `browser`, `memory`, `docs`, and `reminders`.
@@ -412,6 +423,38 @@ ORBIT v2.18 introduces responsive direct manipulation and accessibility controls
 ### Layout Styles & Fail-Safe Fallback
 - Configurable via `UI_STYLE` setting: `"hud"` (default, 1180x760 minsize 960x640) or `"classic"` (preserves legacy two-pane layout).
 - Fail-safe fallback: If HUD canvas initialization encounters an exception on resource-constrained platforms, the error is logged to diagnostics (`LAST_HUD_ERROR`), a single-line notification is printed to chat, and the UI cleanly falls back to the classic layout.
+
+### Panels and Tabs (v2.24)
+
+ORBIT v2.24 replaces the traditional horizontal notebook tab bar with a sleek 36 px wide vertical **Tab Rail** on the left edge of the right-hand panel, giving direct access to 13 specialized operational panels:
+
+1. **Today**: Live clock and date, system battery indicator (hidden when absent), active reminders and countdown timers, next due item, up to 6 one-click routine trigger buttons, and recent audit events (last 20 events presented as safe plain-text sentences showing tool, decision, and outcome only—strictly zero message text, contact data, or file names).
+2. **Activity**: Real-time plan execution steps, tool invocations, and approval states.
+3. **Context**: Active agent conversation context and working state.
+4. **Memories**: Semantic and episodic memories stored in SQLite with retrieval inspection.
+5. **Documents**: Ingested local files, documents, and reference passages.
+6. **Reminders**: Active and scheduled reminders, timer snooze, and management.
+7. **Routines**: Configured multi-step automated user routines and creation interface.
+8. **Contacts**: Stored messaging contacts with masked phone numbers (`+1555***0123`) and safe management dialog trigger.
+9. **Files**: Discovered files in user workspace with confirmation-guarded Open and Reveal actions.
+10. **System**: Real-time gauges and 60-second sparklines for CPU, memory, disk free, network up/down deltas, battery, and uptime; top 5 processes by CPU and memory; and optional GPU metrics (name, utilization, memory, temperature via fixed `nvidia-smi` queries on a background worker with strict 2-second timeout, fallback to "not available"). Samplers run strictly while the tab is visible (`SYSTEM_TAB_GPU=1`).
+11. **Insights**: Off-UI-thread analytics summarizing audit history and task runs over 24-hour, 7-day, or all-time periods (success rate, confirmation approvals vs denials, blocked decisions, top 8 tools, median and p95 latency, voice reviews, and daily activity chart; capped at 5000 records, cached 10s while visible; `INSIGHTS_ENABLED=1`).
+12. **Verify**: Test checklist progress counts with one-click guided verification launcher.
+13. **Last Run**: Detailed execution trace and diagnostics for the previous task turn.
+
+#### Tab Rail Navigation & Privacy
+- **Vertical Vector Rail (`ui/tabrail.py`)**: 36 px wide rail with vector-drawn circular icons, 3 px cyan active indicator bar, hover tooltips, and unread counter badges (capped at `"9+"`).
+- **Keyboard & Palette Navigation**: Instant switching via `Alt+1` through `Alt+9` for the first 9 tabs, Up/Down arrow keys with Enter or Space, mouse wheel scrolling, and Command Palette actions (`"Show <Tab> tab"`).
+- **Strict Privacy & Isolation**: Hidden tabs suspend all polling and sampling. System and insights telemetry remain strictly local in memory and are never transmitted, logged to disk, or included in diagnostics exports.
+
+### Rich Chat Panel Upgrade (v2.24)
+- **Distinct Message Bubbles**: User and assistant messages styled with distinct backgrounds, padding, and dim timestamps (`[HH:MM]`).
+- **Fenced Code Blocks**: Darker background blocks rendered in monospace Consolas font with a one-click **Copy** button.
+- **Per-Message Quick Actions**: Hovering over any of the last 30 messages reveals quick action pills (**Copy**, **Speak**, **Quote**).
+- **In-Chat Search (`Ctrl+F`)**: Non-modal search bar with real-time match highlighting and stepping (`Enter` for next, `Shift+Enter` for previous).
+- **Streaming Caret & Thinking Indicator**: Animated pulsing indicator during model reasoning and streaming cursor during token generation that cleanly clears upon completion.
+- **Smart Auto-Scroll**: Automatically scrolls to the bottom during generation; pausing or scrolling up suspends auto-scroll and displays a "Jump to latest" pill.
+- **Status Bar System Chips**: Compact system chips (CPU%, Mem%, Battery) refreshed every 2 seconds in the footer bar (`UI_STATUS_CHIPS=1`, hidden when `UI_MOTION="off"`).
 
 ---
 
@@ -961,6 +1004,8 @@ Verification status for features introduced from v2.5 onward, strictly distingui
 | Voice in Noisy Rooms | v2.14 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items VE1–VE6) |
 | Neural Text-to-Speech | v2.15 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items NT1–NT6) |
 | Windows System Controls | v2.16 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items SC1–SC7) |
+| Tab Rail, System & Insights | v2.24 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items HUD9–HUD11) |
+| Hands-free Listening | v2.25 | Passed | PASS | `docs/TEST_CHECKLIST.md` (items HF1–HF10) |
 
 ---
 
@@ -971,7 +1016,7 @@ Verification status for features introduced from v2.5 onward, strictly distingui
 - **Keyword Retrieval with a Conservative Threshold**: The auto-retrieval engine uses SQLite FTS5 BM25 text search with a conservative threshold (`fraction@0.5`). On challenging dev questions with synonyms, chatty wording, or conflicting policies, recall is 50.0% (8/16) and paraphrased questions can be missed. We evaluated looser retrieval methods that increased recall but placed irrelevant document passages into 1 in 3 unrelated queries (40% to 45% false injection rate on unrelated and guard queries). We chose to keep the conservative setting to prioritize zero false injections.
 - **Site Layouts Can Break Browser Selectors**: The controlled browser uses site-specific CSS selectors (`config/browser_sites.py`) to click search results and inspect items on YouTube, Google, Wikipedia, and GitHub. If external platforms change their DOM structure or class names, selectors can break until updated.
 - **Google Verification Pages on Automated Browsers**: Google may present a verification or "unusual traffic" page (`/sorry/`) to automated browser sessions. ORBIT does not attempt to solve CAPTCHAs or bypass verification. When detected, the backend initiates a 30-minute block cooldown (`settings.BROWSER_BLOCK_COOLDOWN_MINUTES`), rolls back navigation history (`history("back")`) to protect session state, and raises `BrowserRefused("Google showed a verification page for automated browsing, so I stopped. I will not try to get around it.")`. In addition, general Google web searches default to opening in the user's system default browser (`GOOGLE_SEARCH_IN_CONTROLLED_BROWSER = False`), where ORBIT cannot click or scroll.
-- **Voice Depends on Local Whisper and a Microphone**: Voice capture requires working microphone hardware and the `sounddevice` and `faster_whisper` packages. Voice in the desktop window is click-to-talk (push-to-talk) rather than continuous listening. There is no wake word ("hey orbit") detection in the window; capture must be explicitly started via the mic button or `Ctrl+M`. The "Speak replies" feature is opt-in and off by default. Continuous voice interaction with wake phrase detection remains exclusive to the interactive terminal CLI (`main.py`).
+- **Voice Depends on Local Whisper and a Microphone**: Voice capture requires working microphone hardware and the `sounddevice` and `faster_whisper` packages. Voice in the desktop window defaults to click-to-talk (push-to-talk via mic button or `Ctrl+M`). Continuous hands-free listening with local wake detection ("hey orbit") is opt-in (`HANDS_FREE=1`), disabled by default, requires explicit privacy confirmation, and strictly refuses to confirm or approve destructive actions aloud. The "Speak replies" feature is opt-in and off by default.
 - **Windows Only**: System integration, audio device capture via PyAudio, and non-blocking keyboard interrupt detection via `msvcrt` rely on Windows-specific operating system APIs and libraries.
 - **ORBIT_OFFLINE Scope**: Setting `ORBIT_OFFLINE=1` enforces an in-process socket guard on ORBIT's own Python process, preventing network calls by the agent. It does not sandbox or restrict external browser windows or third-party desktop processes launched by the user or assistant.
 - **AI-Assisted Development**: The ORBIT codebase was designed, implemented, and refined through AI-assisted pair programming and automated test validation.
@@ -1033,7 +1078,7 @@ pytest
 ```
 
 **Current Test Count**:
-- **1482 passed, 2 skipped** (1484 collected tests)
+- **1570 passed, 2 skipped** (1572 collected tests)
 
 ---
 

@@ -270,6 +270,27 @@ SPECS: dict[str, SettingSpec] = {
         description="Enable interactive HUD pointer and keyboard actions",
         restart_required=False,
     ),
+    "INSIGHTS_ENABLED": SettingSpec(
+        key="INSIGHTS_ENABLED",
+        type="bool",
+        default="1" if getattr(settings, "INSIGHTS_ENABLED", 1) else "0",
+        description="Enable Insights tab analytics",
+        restart_required=True,
+    ),
+    "SYSTEM_TAB_GPU": SettingSpec(
+        key="SYSTEM_TAB_GPU",
+        type="bool",
+        default="1" if getattr(settings, "SYSTEM_TAB_GPU", 1) else "0",
+        description="Enable GPU monitoring in System tab",
+        restart_required=True,
+    ),
+    "UI_STATUS_CHIPS": SettingSpec(
+        key="UI_STATUS_CHIPS",
+        type="bool",
+        default="1" if getattr(settings, "UI_STATUS_CHIPS", 1) else "0",
+        description="Show system status chips in HUD status bar",
+        restart_required=False,
+    ),
     "UI_REALISM": SettingSpec(
         key="UI_REALISM",
         type="enum",
@@ -360,6 +381,54 @@ SPECS: dict[str, SettingSpec] = {
         default=str(getattr(settings, "TTS_ENGINE", "sapi")),
         description="Text-to-speech engine backend (sapi: Windows SAPI5, piper: local neural ONNX)",
         restart_required=True,
+    ),
+    "HANDS_FREE": SettingSpec(
+        key="HANDS_FREE",
+        type="bool",
+        default="1" if getattr(settings, "HANDS_FREE", 0) else "0",
+        description="Enable hands-free listening inside desktop window (requires privacy confirmation)",
+        restart_required=False,
+    ),
+    "HANDS_FREE_IDLE_MINUTES": SettingSpec(
+        key="HANDS_FREE_IDLE_MINUTES",
+        type="int",
+        min_val=1,
+        max_val=60,
+        default=str(getattr(settings, "HANDS_FREE_IDLE_MINUTES", 10)),
+        description="Minutes of idle silence before hands-free turns off (1-60)",
+        restart_required=False,
+    ),
+    "HANDS_FREE_FOLLOWUP_SECONDS": SettingSpec(
+        key="HANDS_FREE_FOLLOWUP_SECONDS",
+        type="int",
+        min_val=0,
+        max_val=10,
+        default=str(getattr(settings, "HANDS_FREE_FOLLOWUP_SECONDS", 0)),
+        description="Seconds after an assistant reply to accept follow-up without wake phrase (0-10)",
+        restart_required=False,
+    ),
+    "HANDS_FREE_CUES": SettingSpec(
+        key="HANDS_FREE_CUES",
+        type="bool",
+        default="1" if getattr(settings, "HANDS_FREE_CUES", 1) else "0",
+        description="Play audio cue tones for hands-free state transitions",
+        restart_required=False,
+    ),
+    "WAKE_PHRASE": SettingSpec(
+        key="WAKE_PHRASE",
+        type="text",
+        default=str(getattr(settings, "WAKE_PHRASE", "hey orbit")),
+        description="Wake phrase for hands-free activation (2-3 lowercase words, 6-24 chars)",
+        restart_required=False,
+    ),
+    "WAKE_SENSITIVITY": SettingSpec(
+        key="WAKE_SENSITIVITY",
+        type="float",
+        min_float=0.75,
+        max_float=0.90,
+        default=str(getattr(settings, "WAKE_SENSITIVITY", 0.80)),
+        description="Fuzzy matching sensitivity threshold for wake phrase (0.75-0.90)",
+        restart_required=False,
     ),
     "PIPER_VOICE": SettingSpec(
         key="PIPER_VOICE",
@@ -527,6 +596,21 @@ def validate(key: str, raw: Any) -> str:
         return norm
 
     if spec.type == "text":
+        if key == "WAKE_PHRASE":
+            if not stripped:
+                raise SettingsError("WAKE_PHRASE cannot be empty.")
+            if not re.fullmatch(r"^[a-z ]+$", stripped):
+                raise SettingsError("WAKE_PHRASE must contain only lowercase letters and spaces.")
+            if len(stripped) < 6:
+                raise SettingsError(f"WAKE_PHRASE must be at least 6 characters, got {len(stripped)}.")
+            if len(stripped) > 24:
+                raise SettingsError(f"WAKE_PHRASE must be at most 24 characters, got {len(stripped)}.")
+            words = stripped.split()
+            if len(words) < 2:
+                raise SettingsError(f"WAKE_PHRASE must be at least 2 words, got {len(words)}.")
+            if len(words) > 3:
+                raise SettingsError(f"WAKE_PHRASE must be at most 3 words, got {len(words)}.")
+            return " ".join(words)
         if key == "PIPER_VOICE":
             if not stripped:
                 return ""
@@ -672,6 +756,15 @@ def read_effective(
             )
 
     return results
+
+
+def get_effective_setting(
+    key: str,
+    env_path: Optional[Union[str, Path]] = None,
+    environ: Optional[Mapping[str, str]] = None,
+) -> Optional[EffectiveSetting]:
+    """Retrieve the EffectiveSetting for a single whitelisted key."""
+    return read_effective(env_path=env_path, environ=environ).get(key)
 
 
 @dataclass

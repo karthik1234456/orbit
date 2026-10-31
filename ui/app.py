@@ -20,7 +20,17 @@ from core.version import VERSION
 from ui.dock import DockCanvas
 from ui.hud import HudCanvas
 from ui.hud_core import HudModel
+from ui.tabrail import TabRail, TAB_DEFINITIONS
+from ui.tab_views import (
+    TodayTabView,
+    SystemTabView,
+    InsightsTabView,
+    ContactsTabView,
+    FilesTabView,
+    VerifyTabView,
+)
 from ui.theme import apply_theme, get_data_font, get_heading_font, get_palette, style_chat_tags
+import psutil
 
 LAST_HUD_ERROR: Optional[str] = None
 from ui.controller import ChatController, ConfirmRequest, UiEvent
@@ -421,6 +431,65 @@ class PlanDialog(tk.Toplevel):
         if self.dock_canvas is not None:
             self.dock_canvas.set_palette(self.palette)
 
+
+    # --- Hands-free Controls ---
+
+    def _show_handsfree_privacy_prompt(self) -> bool:
+        if callable(getattr(self, "_confirm_handsfree_privacy_fn", None)):
+            return bool(self._confirm_handsfree_privacy_fn())
+        from tkinter import messagebox
+        phrase = getattr(self.handsfree_controller, "wake_phrase", "hey orbit")
+        msg = (
+            f"ORBIT will listen locally for '{phrase}' using your microphone. "
+            "Other speech is checked on this computer and discarded. "
+            "Anyone nearby who says the wake phrase can trigger actions that do not need approval. "
+            "Approvals still need a click or key."
+        )
+        return messagebox.askokcancel(
+            title="Enable Hands-free Listening",
+            message=msg,
+            default="cancel",
+        )
+
+    def _on_toggle_handsfree(self) -> None:
+        if not hasattr(self, "handsfree_controller"):
+            return
+        hfc = self.handsfree_controller
+        if hfc.is_active and hfc.state != "off":
+            hfc.turn_off()
+            self._update_handsfree_ui()
+        else:
+            if not getattr(self, "_handsfree_privacy_accepted", False):
+                approved = self._show_handsfree_privacy_prompt()
+                if not approved:
+                    return
+                self._handsfree_privacy_accepted = True
+            hfc.start()
+            self._update_handsfree_ui()
+
+    def _update_handsfree_ui(self) -> None:
+        if not hasattr(self, "handsfree_controller"):
+            return
+        hfc = self.handsfree_controller
+        is_armed = hfc.state == "armed"
+        is_act = hfc.is_active and hfc.state != "off"
+
+        if hasattr(self, "hud_model") and self.hud_model is not None:
+            self.hud_model.set_handsfree_armed(is_armed)
+
+        if hasattr(self, "handsfree_chip"):
+            if is_act:
+                if self.handsfree_chip.winfo_manager() != "pack":
+                    try:
+                        self.handsfree_chip.pack(side="left", padx=(0, 6), before=self.chip_cpu.master)
+                    except Exception:
+                        self.handsfree_chip.pack(side="left", padx=(0, 6))
+                chip_text = f"HANDS-FREE ({hfc.state.upper()})" if hfc.state != "armed" else "HANDS-FREE"
+                self.handsfree_chip.configure(text=chip_text)
+            else:
+                if self.handsfree_chip.winfo_manager() == "pack":
+                    self.handsfree_chip.pack_forget()
+
     def _open_radial_menu(self, cx: float, cy: float) -> bool:
         if self.hud_canvas is None:
             return False
@@ -428,6 +497,7 @@ class PlanDialog(tk.Toplevel):
         actions = [
             RadialAction("New conversation", self._on_new_conversation, icon="new"),
             RadialAction("Toggle speak replies", self._on_toggle_speak_replies, icon="speak"),
+            RadialAction("Hands-free on/off", self._on_toggle_handsfree, icon="handsfree"),
             RadialAction("Interrupt / Stop", self._on_stop, icon="stop"),
             RadialAction("Doctor", self._on_doctor_click, icon="doc"),
             RadialAction("Settings", self._on_settings_click, icon="gear"),
@@ -447,13 +517,20 @@ class PlanDialog(tk.Toplevel):
         static_items = [
             PaletteItem("New conversation", "System", self._on_new_conversation),
             PaletteItem("Toggle speak replies", "Voice", self._on_toggle_speak_replies),
+            PaletteItem("Hands-free on/off", "Voice", self._on_toggle_handsfree),
             PaletteItem("Interrupt / Stop speaking", "Voice", self._on_stop),
             PaletteItem("Doctor diagnostics", "System", self._on_doctor_click),
             PaletteItem("Open Settings", "System", self._on_settings_click),
             PaletteItem("Contacts", "Tools", self._on_contacts_click),
+            PaletteItem("Verification", "Tools", self._on_verify_click),
             PaletteItem("Cycle UI Theme", "Display", self._cycle_theme),
             PaletteItem("Copy last assistant answer", "Chat", self._on_copy_last_answer),
         ]
+
+        for tab_id, label, _, _ in TAB_DEFINITIONS:
+            def _make_show_tab(tid=tab_id):
+                return lambda: self._select_tab_by_id(tid)
+            static_items.append(PaletteItem(f"Show {label} tab", "Tabs", _make_show_tab(tab_id)))
 
         routine_names: list[str] = []
         try:
@@ -829,8 +906,18 @@ class DoctorWindow(tk.Toplevel):
         self.copy_btn = ttk.Button(btn_box, text="Copy report", command=self._on_copy)
         self.copy_btn.pack(side="left")
 
+        self.verify_btn = ttk.Button(btn_box, text="Verification", command=self._on_verify)
+        self.verify_btn.pack(side="left", padx=(6, 0))
+
         self.close_btn = ttk.Button(btn_box, text="Close", command=self.destroy)
         self.close_btn.pack(side="right")
+
+    def _on_verify(self) -> None:
+        try:
+            from ui.verify_window import VerificationWindow
+            VerificationWindow(self)
+        except Exception:
+            pass
 
     def _on_copy(self) -> None:
         try:
@@ -852,6 +939,7 @@ class OrbitWindow:
         mode_label: str,
         notice: Optional[str] = None,
         voice_controller: Optional[Any] = None,
+        handsfree_controller: Optional[Any] = None,
     ) -> None:
         self.root = root
         self.controller = controller
@@ -900,11 +988,28 @@ class OrbitWindow:
         self._shortcuts_overlay: Optional[Any] = None
         self._last_assistant_answer: str = ""
 
+        # Probes and chat upgrade state
+        self._battery_probe = getattr(psutil, "sensors_battery", lambda: None)
+        self._cpu_probe = getattr(psutil, "cpu_percent", lambda interval=None: 0.0)
+        self._mem_probe = lambda: getattr(psutil.virtual_memory(), "percent", 0.0) if hasattr(psutil, "virtual_memory") else 0.0
+        self._disk_probe = lambda: (getattr(psutil.disk_usage("/"), "free", 0) / (1024**3)) if hasattr(psutil, "disk_usage") else 0.0
+        self._uptime_probe = lambda: (time.time() - getattr(psutil, "boot_time", lambda: time.time())())
+        self._gpu_probe = None
+        self._process_probe = None
+        self._chat_message_count = 0
+        self._recent_chat_messages = []
+        self._auto_scroll_enabled = True
+        self._caret_mark = None
+        self._thinking_mark = None
+        self._thinking_dots_step = 0
+
         # Wire shutdown protocols
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.bind("<Destroy>", self._on_root_destroyed)
 
         # Wire global shortcuts
+        self.root.bind("<Control-Shift-M>", lambda e: self._on_toggle_handsfree())
+        self.root.bind("<Control-Shift-m>", lambda e: self._on_toggle_handsfree())
         self.root.bind("<Control-k>", self._on_ctrl_k)
         self.root.bind("<Control-K>", self._on_ctrl_k)
         self.root.bind("<Control-space>", self._on_ctrl_space)
@@ -989,6 +1094,64 @@ class OrbitWindow:
         if hasattr(self.voice_controller, "speak_replies"):
             self.voice_controller.speak_replies = self._speak_replies
 
+        # Hands-free Controller setup
+        self._handsfree_privacy_accepted = False
+        if handsfree_controller is not None:
+            self.handsfree_controller = handsfree_controller
+        elif getattr(self.controller, "handsfree_controller", None) is not None:
+            self.handsfree_controller = self.controller.handsfree_controller
+        else:
+            from ui.cues import Beeper
+            from ui.handsfree import HandsFreeController
+            beeper = Beeper(enabled=lambda: bool(getattr(settings, "HANDS_FREE_CUES", 1)))
+            self.beeper = beeper
+
+            if is_mock:
+                wake_trans_fac = lambda: FakeTranscriber(default_text=f"{getattr(settings, 'WAKE_PHRASE', 'hey orbit')} what time is it")
+                cmd_trans_fac = lambda: FakeTranscriber(default_text="what time is it")
+                hf_rec_fac = lambda: None
+            else:
+                from voice.audio import Recorder
+                from voice.stt import WhisperTranscriber
+                wake_trans_fac = lambda: WhisperTranscriber(
+                    model_name=getattr(settings, "WAKE_STT_MODEL", "tiny.en"),
+                    language=getattr(settings, "STT_LANGUAGE", "en"),
+                )
+                cmd_trans_fac = lambda: WhisperTranscriber(
+                    model_name=getattr(settings, "STT_MODEL", "base.en"),
+                    language=getattr(settings, "STT_LANGUAGE", "en"),
+                )
+                hf_rec_fac = None
+
+            audit_log = getattr(self.controller, "audit", None)
+            if audit_log is None and hasattr(self.controller, "app"):
+                audit_log = getattr(self.controller.app, "audit", None)
+
+            self.handsfree_controller = HandsFreeController(
+                recorder_factory=hf_rec_fac,
+                wake_transcriber_factory=wake_trans_fac,
+                command_transcriber_factory=cmd_trans_fac,
+                emit=emit_fn,
+                is_blocked=self._is_blocked,
+                clock=time.monotonic,
+                beeper=beeper,
+                audit_logger=audit_log,
+            )
+
+        try:
+            self.controller.handsfree_controller = self.handsfree_controller
+        except Exception:
+            pass
+
+        self.handsfree_controller.is_speaking_fn = lambda: getattr(self.voice_controller, "is_speaking", lambda: False)()
+        self.handsfree_controller.is_dialog_open_fn = self._is_dialog_open
+        self.handsfree_controller.is_toast_open_fn = lambda: bool(getattr(self, "_active_toasts", []))
+        self.handsfree_controller.is_task_running_fn = lambda: bool(self.controller.is_busy) if hasattr(self.controller, "is_busy") else False
+
+        if bool(getattr(settings, "HANDS_FREE", 0)):
+            self._handsfree_privacy_accepted = True
+            self.handsfree_controller.start()
+
         # Wire reminder store and scheduler
         self.reminder_store = getattr(self.controller, "reminder_store", None)
         if self.reminder_store is None and hasattr(self.controller, "app"):
@@ -1028,6 +1191,7 @@ class OrbitWindow:
 
         # Build UI layout
         self._build_layout()
+        self._tick_status_chips()
 
         # Migration notice flag
         self._migration_notified = False
@@ -1049,6 +1213,11 @@ class OrbitWindow:
         # Fast startup doctor check (background thread)
         if getattr(settings, "DOCTOR_ON_START", True):
             self._start_doctor_startup_check()
+
+        # Check ORBIT_VERIFY environment variable
+        import os
+        if os.getenv("ORBIT_VERIFY") in ("1", "true", "yes", "on"):
+            self.root.after(300, self._on_verify_click)
 
     # --- Voice Helpers & Callbacks ---
 
@@ -1135,6 +1304,8 @@ class OrbitWindow:
         """Handle mic button click or Ctrl+M shortcut."""
         if getattr(self, "voice_controller", None) is None:
             return
+        if getattr(self, "handsfree_controller", None) is not None and self.handsfree_controller.is_active:
+            self.handsfree_controller.pause_for_click_to_talk()
         if self.voice_controller.state == "listening":
             self.voice_controller.stop_listening()
         else:
@@ -1234,6 +1405,7 @@ class OrbitWindow:
             on_settings=self._on_settings_click,
             on_doctor=self._on_doctor_click,
             get_voice_state=self._get_dock_voice_state,
+            on_toggle_handsfree=self._on_toggle_handsfree,
         )
 
         # 3. Chat Panel (overlaying HUD canvas via place inset by 10px)
@@ -1287,6 +1459,9 @@ class OrbitWindow:
         )
         self.history.pack(fill="both", expand=True, padx=4, pady=(0, 4))
         style_chat_tags(self.history, self.palette)
+        self._setup_chat_search()
+        self._setup_scroll_detection()
+        self._setup_message_hover_actions()
 
         # Voice status bar (above input frame, packed when active)
         self.voice_bar = tk.Frame(self.left_frame, bg=self.palette.panel, padx=0, pady=2)
@@ -1379,16 +1554,7 @@ class OrbitWindow:
             bd=0,
         )
 
-        self.notebook = ttk.Notebook(self.right_frame)
-        self.notebook.pack(fill="both", expand=True, padx=4, pady=4)
-
-        self._build_activity_tab()
-        self._build_context_tab()
-        self._build_memories_tab()
-        self._build_documents_tab()
-        self._build_reminders_tab()
-        self._build_routines_tab()
-        self._build_last_run_tab()
+        self._setup_tab_rail_and_notebook(self.right_frame)
 
         # 5. Build status bar widgets (kept accessible for tests & status updates)
         self._build_status_bar(main_container)
@@ -1496,6 +1662,9 @@ class OrbitWindow:
 
         # Color and style tags
         style_chat_tags(self.history, self.palette)
+        self._setup_chat_search()
+        self._setup_scroll_detection()
+        self._setup_message_hover_actions()
 
         # Voice status bar (above input frame, packed when active)
         self.voice_bar = ttk.Frame(self.left_frame, padding=(0, 2))
@@ -1573,16 +1742,7 @@ class OrbitWindow:
         self.right_frame = ttk.Frame(self.paned, padding=4)
         self.paned.add(self.right_frame, weight=2)
 
-        self.notebook = ttk.Notebook(self.right_frame)
-        self.notebook.pack(fill="both", expand=True)
-
-        self._build_activity_tab()
-        self._build_context_tab()
-        self._build_memories_tab()
-        self._build_documents_tab()
-        self._build_reminders_tab()
-        self._build_routines_tab()
-        self._build_last_run_tab()
+        self._setup_tab_rail_and_notebook(self.right_frame)
 
         # --- Status Bar ---
         self._build_status_bar(main_container)
@@ -1636,9 +1796,373 @@ class OrbitWindow:
             vc_state = getattr(self.voice_controller, "state", "idle")
         return (vc_state, False, "")
 
+    def _setup_tab_rail_and_notebook(self, parent_frame: tk.Widget) -> None:
+        style = ttk.Style()
+        try:
+            style.layout("Tabless.TNotebook", [("Notebook.client", {"sticky": "nswe"})])
+            style.configure("Tabless.TNotebook", borderwidth=0, highlightthickness=0)
+        except Exception:
+            pass
+
+        self.tab_rail = TabRail(
+            parent_frame,
+            palette=self.palette,
+            on_select=self._select_tab_by_id,
+        )
+        self.tab_rail.pack(side="left", fill="y")
+
+        self.notebook = ttk.Notebook(parent_frame, style="Tabless.TNotebook")
+        self.notebook.pack(side="left", fill="both", expand=True, padx=2, pady=2)
+
+        self._build_today_tab()
+        self._build_activity_tab()
+        self._build_context_tab()
+        self._build_memories_tab()
+        self._build_documents_tab()
+        self._build_reminders_tab()
+        self._build_routines_tab()
+        self._build_contacts_tab()
+        self._build_files_tab()
+        self._build_system_tab()
+        self._build_insights_tab()
+        self._build_verify_tab()
+        self._build_last_run_tab()
+
+        self._tab_frames = {
+            "today": self.today_frame,
+            "activity": self.activity_frame,
+            "context": self.context_frame,
+            "memories": self.memories_frame,
+            "documents": self.docs_frame,
+            "reminders": self.reminders_frame,
+            "routines": self.routines_frame,
+            "contacts": self.contacts_frame,
+            "files": self.files_frame,
+            "system": self.system_frame,
+            "insights": self.insights_frame,
+            "verify": self.verify_frame,
+            "last_run": self.last_run_frame,
+        }
+        self._frame_to_tab_id = {str(f): tid for tid, f in self._tab_frames.items()}
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_notebook_tab_changed, add="+")
+
+        # Select initial tab (today)
+        self._select_tab_by_id("today")
+
+        # Keyboard shortcuts Alt+1 .. Alt+9
+        for num in range(1, 10):
+            def _bind_tab(n=num):
+                tabs = self.tab_rail.get_tabs()
+                tid = tabs[n - 1] if n - 1 < len(tabs) else None
+                return lambda e: self._select_tab_by_id(tid) if tid else None
+
+            self.root.bind(f"<Alt-Key-{num}>", _bind_tab(num))
+
+        self._setup_notebook_tooltips()
+
+    def _build_today_tab(self) -> None:
+        self.today_frame = ttk.Frame(self.notebook, padding=6)
+        self.notebook.add(self.today_frame, text="Today")
+        self.today_view = TodayTabView(self.today_frame, self, self.palette, battery_probe=self._battery_probe)
+
+    def _build_contacts_tab(self) -> None:
+        self.contacts_frame = ttk.Frame(self.notebook, padding=6)
+        self.notebook.add(self.contacts_frame, text="Contacts")
+        self.contacts_view = ContactsTabView(self.contacts_frame, self, self.palette)
+
+    def _build_files_tab(self) -> None:
+        self.files_frame = ttk.Frame(self.notebook, padding=6)
+        self.notebook.add(self.files_frame, text="Files")
+        self.files_view = FilesTabView(self.files_frame, self, self.palette)
+
+    def _build_system_tab(self) -> None:
+        self.system_frame = ttk.Frame(self.notebook, padding=6)
+        self.notebook.add(self.system_frame, text="System")
+        gpu_probe = self._gpu_probe
+        if gpu_probe is None:
+            import os
+            if os.environ.get("PYTEST_CURRENT_TEST") or "MOCK" in self.mode_label:
+                gpu_probe = lambda: {"available": False}
+        self.system_view = SystemTabView(
+            self.system_frame,
+            self,
+            self.palette,
+            cpu_probe=self._cpu_probe,
+            mem_probe=self._mem_probe,
+            disk_probe=self._disk_probe,
+            gpu_probe=gpu_probe,
+            process_probe=self._process_probe,
+        )
+
+    def _build_insights_tab(self) -> None:
+        self.insights_frame = ttk.Frame(self.notebook, padding=6)
+        self.notebook.add(self.insights_frame, text="Insights")
+        self.insights_view = InsightsTabView(self.insights_frame, self, self.palette)
+
+    def _build_verify_tab(self) -> None:
+        self.verify_frame = ttk.Frame(self.notebook, padding=6)
+        self.notebook.add(self.verify_frame, text="Verify")
+        self.verify_view = VerifyTabView(self.verify_frame, self, self.palette)
+
+    def _select_tab_by_id(self, tab_id: str) -> None:
+        frame = self._tab_frames.get(tab_id) if hasattr(self, "_tab_frames") else None
+        if frame is not None and hasattr(self, "notebook"):
+            try:
+                self.notebook.select(frame)
+            except Exception:
+                pass
+        if hasattr(self, "tab_rail") and self.tab_rail is not None:
+            self.tab_rail.select_tab(tab_id, trigger_callback=False)
+
+    def _on_notebook_tab_changed(self, event=None) -> None:
+        try:
+            curr_frame = self.notebook.select()
+            tab_id = self._frame_to_tab_id.get(str(curr_frame))
+            if tab_id and hasattr(self, "tab_rail") and self.tab_rail is not None:
+                self.tab_rail.select_tab(tab_id, trigger_callback=False)
+            self._on_active_tab_changed(tab_id)
+        except Exception:
+            pass
+
+    def _on_active_tab_changed(self, tab_id: Optional[str]) -> None:
+        if hasattr(self, "today_view"):
+            if tab_id == "today":
+                self.today_view.start()
+            else:
+                self.today_view.stop()
+
+        if hasattr(self, "system_view"):
+            if tab_id == "system":
+                self.system_view.start()
+            else:
+                self.system_view.stop()
+
+        if tab_id == "insights" and hasattr(self, "insights_view"):
+            self.insights_view.load_data()
+        elif tab_id == "contacts" and hasattr(self, "contacts_view"):
+            self.contacts_view.refresh()
+        elif tab_id == "files" and hasattr(self, "files_view"):
+            self.files_view.refresh()
+
+    def _setup_chat_search(self) -> None:
+        self.search_frame = ttk.Frame(self.left_frame, padding=2)
+        ttk.Label(self.search_frame, text="Find: ", font=("Segoe UI", 9)).pack(side="left")
+        self.search_entry = ttk.Entry(self.search_frame, width=18)
+        self.search_entry.pack(side="left", padx=4)
+        self.search_entry.bind("<Return>", lambda e: self._find_next())
+        self.search_entry.bind("<Shift-Return>", lambda e: self._find_prev())
+        self.search_entry.bind("<Escape>", lambda e: self._hide_search())
+
+        next_btn = ttk.Button(self.search_frame, text="Next", command=self._find_next)
+        next_btn.pack(side="left", padx=2)
+        prev_btn = ttk.Button(self.search_frame, text="Prev", command=self._find_prev)
+        prev_btn.pack(side="left", padx=2)
+        close_btn = ttk.Button(self.search_frame, text="X", width=3, command=self._hide_search)
+        close_btn.pack(side="left", padx=2)
+
+        self._search_matches: list[str] = []
+        self._search_idx: int = -1
+
+        self.root.bind("<Control-f>", lambda e: self._show_search())
+        self.root.bind("<Control-F>", lambda e: self._show_search())
+
+    def _show_search(self) -> None:
+        if not self.search_frame.winfo_ismapped():
+            self.search_frame.pack(fill="x", side="top", before=self.history, padx=4, pady=2)
+        self.search_entry.focus_set()
+        self.search_entry.select_range(0, tk.END)
+
+    def _hide_search(self) -> None:
+        self.history.tag_remove("search_highlight", "1.0", tk.END)
+        self.history.tag_remove("search_current", "1.0", tk.END)
+        self.search_frame.pack_forget()
+        self.history.focus_set()
+
+    def _find_next(self) -> None:
+        query = self.search_entry.get().strip()
+        if not query:
+            return
+        self._highlight_all_matches(query)
+        if not self._search_matches:
+            return
+        self._search_idx = (self._search_idx + 1) % len(self._search_matches)
+        pos = self._search_matches[self._search_idx]
+        self.history.tag_remove("search_current", "1.0", tk.END)
+        end_pos = f"{pos}+{len(query)}c"
+        self.history.tag_add("search_current", pos, end_pos)
+        self.history.see(pos)
+
+    def _find_prev(self) -> None:
+        query = self.search_entry.get().strip()
+        if not query or not self._search_matches:
+            return
+        self._search_idx = (self._search_idx - 1) % len(self._search_matches)
+        pos = self._search_matches[self._search_idx]
+        self.history.tag_remove("search_current", "1.0", tk.END)
+        end_pos = f"{pos}+{len(query)}c"
+        self.history.tag_add("search_current", pos, end_pos)
+        self.history.see(pos)
+
+    def _highlight_all_matches(self, query: str) -> None:
+        self.history.tag_remove("search_highlight", "1.0", tk.END)
+        self._search_matches = []
+        start = "1.0"
+        while True:
+            pos = self.history.search(query, start, stopindex=tk.END, nocase=True)
+            if not pos:
+                break
+            end_pos = f"{pos}+{len(query)}c"
+            self.history.tag_add("search_highlight", pos, end_pos)
+            self._search_matches.append(pos)
+            start = end_pos
+
+    def _setup_scroll_detection(self) -> None:
+        self._auto_scroll_enabled = True
+        self.jump_pill = tk.Button(
+            self.left_frame,
+            text="Jump to latest",
+            bg=self.palette.panel_edge,
+            fg=self.palette.accent,
+            font=("Segoe UI", 8, "bold"),
+            relief="groove",
+            bd=1,
+            cursor="hand2",
+            command=self._on_jump_to_latest,
+        )
+
+        def _on_scroll(*args):
+            try:
+                yv = self.history.yview()
+                if yv[1] < 0.98:
+                    self._auto_scroll_enabled = False
+                    if not self.jump_pill.winfo_ismapped():
+                        self.jump_pill.place(relx=0.95, rely=0.88, anchor="se")
+                else:
+                    self._auto_scroll_enabled = True
+                    if self.jump_pill.winfo_ismapped():
+                        self.jump_pill.place_forget()
+            except Exception:
+                pass
+
+        try:
+            vbar = getattr(self.history, "vbar", None)
+            if vbar:
+                self.history.configure(yscrollcommand=lambda *a: (vbar.set(*a), _on_scroll()))
+        except Exception:
+            pass
+
+    def _on_jump_to_latest(self) -> None:
+        self._auto_scroll_enabled = True
+        self.history.see(tk.END)
+        self.jump_pill.place_forget()
+
+    def _setup_message_hover_actions(self) -> None:
+        self.hover_bar = tk.Frame(self.left_frame, bg=self.palette.panel_edge, bd=1, relief="solid")
+        self._hovered_msg_text = ""
+
+        copy_btn = tk.Button(
+            self.hover_bar, text="Copy", font=("Segoe UI", 7), bg=self.palette.panel, fg=self.palette.text, bd=0, command=self._copy_hovered_msg
+        )
+        copy_btn.pack(side="left", padx=2, pady=1)
+
+        speak_btn = tk.Button(
+            self.hover_bar, text="Speak", font=("Segoe UI", 7), bg=self.palette.panel, fg=self.palette.text, bd=0, command=self._speak_hovered_msg
+        )
+        speak_btn.pack(side="left", padx=2, pady=1)
+
+        quote_btn = tk.Button(
+            self.hover_bar, text="Quote", font=("Segoe UI", 7), bg=self.palette.panel, fg=self.palette.text, bd=0, command=self._quote_hovered_msg
+        )
+        quote_btn.pack(side="left", padx=2, pady=1)
+
+        def on_hist_motion(event):
+            try:
+                idx = self.history.index(f"@{event.x},{event.y}")
+                found = None
+                for m in getattr(self, "_recent_chat_messages", []):
+                    if self.history.compare(idx, ">=", m["start"]) and self.history.compare(idx, "<=", m["end"]):
+                        found = m
+                        break
+                if found:
+                    self._hovered_msg_text = found["text"]
+                    self.hover_bar.place(x=event.x + 10, y=max(0, event.y - 25))
+                else:
+                    self.hover_bar.place_forget()
+            except Exception:
+                pass
+
+        self.history.bind("<Motion>", on_hist_motion, add="+")
+        self.history.bind("<Leave>", lambda e: self.hover_bar.place_forget(), add="+")
+
+    def _copy_hovered_msg(self) -> None:
+        if self._hovered_msg_text:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(self._hovered_msg_text)
+        self.hover_bar.place_forget()
+
+    def _speak_hovered_msg(self) -> None:
+        if self._hovered_msg_text and getattr(self, "voice_controller", None):
+            self.voice_controller.speak_reply(self._hovered_msg_text)
+        self.hover_bar.place_forget()
+
+    def _quote_hovered_msg(self) -> None:
+        if self._hovered_msg_text:
+            self.input_text.insert(tk.END, f"> {self._hovered_msg_text}\n")
+            self.input_text.focus_set()
+        self.hover_bar.place_forget()
+
+    def _show_thinking_indicator(self) -> None:
+        if getattr(self, "_thinking_mark", None) is not None:
+            return
+        motion = getattr(settings, "UI_MOTION", "full")
+        self.history.configure(state="normal")
+        self._thinking_mark = self.history.index(tk.END)
+        dots = "..." if motion != "off" else ""
+        self.history.insert(tk.END, f"ORBIT is thinking{dots}\n", ("thinking",))
+        if getattr(self, "_auto_scroll_enabled", True):
+            self.history.see(tk.END)
+        self.history.configure(state="disabled")
+
+    def _hide_thinking_indicator(self) -> None:
+        if getattr(self, "_thinking_mark", None) is not None:
+            self.history.configure(state="normal")
+            try:
+                self.history.delete(self._thinking_mark, f"{self._thinking_mark} lineend + 1c")
+            except Exception:
+                pass
+            self._thinking_mark = None
+            self.history.configure(state="disabled")
+
+    def _tick_status_chips(self) -> None:
+        chips_enabled = bool(getattr(settings, "UI_STATUS_CHIPS", 1))
+        motion = getattr(settings, "UI_MOTION", "full")
+        if not chips_enabled or motion == "off":
+            if hasattr(self, "chips_frame") and self.chips_frame.winfo_ismapped():
+                self.chips_frame.pack_forget()
+            self.root.after(2000, self._tick_status_chips)
+            return
+
+        if hasattr(self, "chips_frame") and not self.chips_frame.winfo_ismapped():
+            self.chips_frame.pack(side="right", padx=6)
+
+        try:
+            cpu = self._cpu_probe()
+            mem = self.mem_probe() if callable(getattr(self, "mem_probe", None)) else self._mem_probe()
+            bat = self._battery_probe()
+            self.chip_cpu.configure(text=f"CPU: {int(cpu)}%")
+            self.chip_mem.configure(text=f"RAM: {int(mem)}%")
+            if bat and hasattr(bat, "percent"):
+                self.chip_bat.configure(text=f"BAT: {int(bat.percent)}%")
+            else:
+                self.chip_bat.configure(text="BAT: --")
+        except Exception:
+            pass
+
+        self.root.after(2000, self._tick_status_chips)
+
     def _build_activity_tab(self) -> None:
         self.activity_frame = ttk.Frame(self.notebook, padding=6)
-        self.notebook.add(self.activity_frame, text="Activity")
+        self.notebook.add(self.activity_frame, text="Act")
 
         columns = ("task", "step", "tool", "status", "info")
         self.activity_tree = ttk.Treeview(
@@ -1668,7 +2192,7 @@ class OrbitWindow:
 
     def _build_context_tab(self) -> None:
         self.context_frame = ttk.Frame(self.notebook, padding=12)
-        self.notebook.add(self.context_frame, text="Context")
+        self.notebook.add(self.context_frame, text="Ctx")
 
         self.context_vars = {
             "site": tk.StringVar(value="—"),
@@ -1734,7 +2258,7 @@ class OrbitWindow:
 
     def _build_memories_tab(self) -> None:
         self.memories_frame = ttk.Frame(self.notebook, padding=6)
-        self.notebook.add(self.memories_frame, text="Memories")
+        self.notebook.add(self.memories_frame, text="Mem")
 
         self.memory_tree = ttk.Treeview(
             self.memories_frame,
@@ -1769,11 +2293,11 @@ class OrbitWindow:
         self.docs_frame = ttk.Frame(self.notebook, padding=6)
         # Check if doc_index is available
         has_doc_index = bool(
-            self.controller.app
+            getattr(self.controller, "app", None)
             and getattr(self.controller.app, "doc_index", None) is not None
         )
         if has_doc_index:
-            self.notebook.add(self.docs_frame, text="Documents")
+            self.notebook.add(self.docs_frame, text="Docs")
 
         self.docs_tree = ttk.Treeview(
             self.docs_frame,
@@ -1806,7 +2330,7 @@ class OrbitWindow:
 
     def _build_reminders_tab(self) -> None:
         self.reminders_frame = ttk.Frame(self.notebook, padding=6)
-        self.notebook.add(self.reminders_frame, text="Reminders")
+        self.notebook.add(self.reminders_frame, text="Rem")
 
         columns = ("id", "kind", "text", "due_in")
         self.reminders_tree = ttk.Treeview(
@@ -1895,7 +2419,7 @@ class OrbitWindow:
 
     def _build_routines_tab(self) -> None:
         self.routines_frame = ttk.Frame(self.notebook, padding=6)
-        self.notebook.add(self.routines_frame, text="Routines")
+        self.notebook.add(self.routines_frame, text="Rout")
 
         routines_enabled = getattr(settings, "ROUTINES_ENABLED", True)
         if hasattr(self.controller, "app") and self.controller.app is not None:
@@ -2097,7 +2621,7 @@ class OrbitWindow:
 
     def _build_last_run_tab(self) -> None:
         self.last_run_frame = ttk.Frame(self.notebook, padding=6)
-        self.notebook.add(self.last_run_frame, text="Last run")
+        self.notebook.add(self.last_run_frame, text="Run")
 
         self.last_run_text = scrolledtext.ScrolledText(
             self.last_run_frame,
@@ -2106,6 +2630,60 @@ class OrbitWindow:
             font=("Consolas", 9),
         )
         self.last_run_text.pack(fill="both", expand=True)
+
+    def _setup_notebook_tooltips(self) -> None:
+        self._tab_tip_window: Optional[tk.Toplevel] = None
+        tab_names = {
+            "Act": "Activity log",
+            "Ctx": "Context details",
+            "Mem": "Agent memories",
+            "Docs": "Indexed documents",
+            "Rem": "Reminders",
+            "Rout": "Routines automation",
+            "Run": "Last run results",
+        }
+
+        def on_motion(event: tk.Event) -> None:
+            try:
+                elem = self.notebook.identify(event.x, event.y)
+                if "label" in elem or "tab" in elem:
+                    idx = self.notebook.index(f"@{event.x},{event.y}")
+                    text = self.notebook.tab(idx, "text")
+                    tip = tab_names.get(text, text)
+                    if not self._tab_tip_window:
+                        tw = tk.Toplevel(self.notebook)
+                        tw.wm_overrideredirect(True)
+                        rx = self.notebook.winfo_rootx() + event.x + 10
+                        ry = self.notebook.winfo_rooty() + event.y + 20
+                        tw.wm_geometry(f"+{rx}+{ry}")
+                        lbl = tk.Label(
+                            tw,
+                            text=tip,
+                            bg=self.palette.panel,
+                            fg=self.palette.text,
+                            relief="solid",
+                            bd=1,
+                            font=("Segoe UI", 8),
+                            padx=4,
+                            pady=2,
+                        )
+                        lbl.pack()
+                        self._tab_tip_window = tw
+                else:
+                    hide_tip()
+            except Exception:
+                hide_tip()
+
+        def hide_tip(*_: Any) -> None:
+            if getattr(self, "_tab_tip_window", None) is not None:
+                try:
+                    self._tab_tip_window.destroy()
+                except Exception:
+                    pass
+                self._tab_tip_window = None
+
+        self.notebook.bind("<Motion>", on_motion, add="+")
+        self.notebook.bind("<Leave>", hide_tip, add="+")
 
     def _build_status_bar(self, container: ttk.Frame) -> None:
         status_bar = ttk.Frame(container, padding=(8, 4))
@@ -2186,6 +2764,38 @@ class OrbitWindow:
         )
         self.doctor_chip.bind("<Button-1>", lambda e: self._on_doctor_click())
 
+        # Hands-free chip
+        self.handsfree_chip = tk.Label(
+            status_bar,
+            text="HANDS-FREE",
+            fg=getattr(self.palette, "accent", "#00e5ff"),
+            bg=getattr(self.palette, "bg", "#040d12"),
+            font=("Segoe UI", 8, "bold"),
+            relief="groove",
+            padx=4,
+            pady=1,
+            cursor="hand2",
+        )
+        self.handsfree_chip.bind("<Button-1>", lambda e: self._on_toggle_handsfree())
+        def _show_hf_tip(e):
+            if hasattr(self, "status_lbl"):
+                self.status_lbl.configure(text="Local wake word. Nothing is stored. Turn off with Ctrl+Shift+M")
+        def _hide_hf_tip(e):
+            if hasattr(self, "status_lbl"):
+                self.status_lbl.configure(text="")
+        self.handsfree_chip.bind("<Enter>", _show_hf_tip)
+        self.handsfree_chip.bind("<Leave>", _hide_hf_tip)
+
+        # System chips (CPU, RAM, BAT)
+        self.chips_frame = ttk.Frame(status_bar)
+        self.chips_frame.pack(side="right", padx=6)
+        self.chip_cpu = ttk.Label(self.chips_frame, text="CPU: --", font=("Segoe UI", 8))
+        self.chip_cpu.pack(side="left", padx=3)
+        self.chip_mem = ttk.Label(self.chips_frame, text="RAM: --", font=("Segoe UI", 8))
+        self.chip_mem.pack(side="left", padx=3)
+        self.chip_bat = ttk.Label(self.chips_frame, text="BAT: --", font=("Segoe UI", 8))
+        self.chip_bat.pack(side="left", padx=3)
+
         # Notice banner
         if self.notice:
             self.notice_lbl = tk.Label(
@@ -2241,13 +2851,13 @@ class OrbitWindow:
                         err_msg = str(exc) or exc.__class__.__name__
                         self._append_chat(f"UI error: {err_msg}\n\n", ("system",))
 
-            # Dynamically attach Documents tab if doc_index became available
-            if "Documents" not in [self.notebook.tab(i, "text") for i in self.notebook.tabs()]:
+            # Dynamically attach Docs tab if doc_index became available
+            if "Docs" not in [self.notebook.tab(i, "text") for i in self.notebook.tabs()]:
                 if (
                     self.controller.app
                     and getattr(self.controller.app, "doc_index", None) is not None
                 ):
-                    self.notebook.add(self.docs_frame, text="Documents")
+                    self.notebook.add(self.docs_frame, text="Docs")
                     self._refresh_documents()
         finally:
             if hasattr(self, "hud_model") and self.hud_model is not None:
@@ -2272,6 +2882,11 @@ class OrbitWindow:
                 pass
             try:
                 self._update_voice_ui()
+                vc = getattr(self, "voice_controller", None)
+                st = getattr(vc, "state", "idle") if vc is not None else "idle"
+                if st in ("idle", "error"):
+                    if getattr(self, "handsfree_controller", None) is not None and self.handsfree_controller.state == "paused":
+                        self.handsfree_controller.resume_from_click_to_talk()
             except Exception:
                 pass
             try:
@@ -2395,23 +3010,31 @@ class OrbitWindow:
             delta_text = data.get("delta") or data.get("text", "")
             if not self._streaming:
                 self._streaming = True
+                self._hide_thinking_indicator()
                 self._append_chat("ORBIT: ", ("orbit_prefix",))
             self._append_chat(delta_text, ("orbit",))
 
         elif kind == "reply":
+            self._hide_thinking_indicator()
+            self.history.configure(state="normal")
+            self._remove_streaming_caret()
+            self.history.configure(state="disabled")
             full_text = data.get("text") or data.get("reply", "")
             self._last_assistant_answer = str(full_text).strip()
             streamed = data.get("streamed", False)
+            was_streaming = self._streaming
+            self._streaming = False
             if self._current_task_had_denial or "user denied permission" in str(full_text).lower():
                 full_text = "Okay, I didn't do that because you didn't approve it."
-            if not streamed and not self._streaming:
+            if not streamed and not was_streaming:
                 self._append_chat("ORBIT: ", ("orbit_prefix",))
                 self._append_chat(f"{full_text}\n\n", ("orbit",))
             else:
                 self._append_chat("\n\n", ("orbit",))
-            self._streaming = False
             if getattr(self, "_speak_replies", False) and getattr(self, "voice_controller", None) is not None:
                 self.voice_controller.speak_reply(full_text)
+            if getattr(self, "handsfree_controller", None) is not None:
+                self.handsfree_controller.notify_reply()
             if hasattr(self, "hud_model") and self.hud_model is not None:
                 self.hud_model.trigger_pulse("soft", 0.5)
 
@@ -2504,6 +3127,25 @@ class OrbitWindow:
             self._append_chat(f"{reason_msg}\n\n", ("system",))
             if hasattr(self, "status_lbl"):
                 self.status_lbl.configure(text=reason_msg)
+
+        elif kind == "handsfree_state":
+            self._update_handsfree_ui()
+
+        elif kind == "handsfree_wake":
+            if hasattr(self, "hud_model") and self.hud_model is not None:
+                self.hud_model.trigger_pulse("full", 1.0)
+
+        elif kind == "handsfree_notice":
+            notice_text = data.get("text", "")
+            if notice_text:
+                self._append_chat(f"Hands-free: {notice_text}\n\n", ("system",))
+
+        elif kind == "handsfree_command":
+            text = (data.get("text") or "").strip()
+            if text:
+                self._append_chat(f"Heard: {text} (hands-free)\n", ("system",))
+                self._append_chat(f"User: {text}\n", ("user",))
+                self.controller.submit(text, source="voice-handsfree")
 
         elif kind == "voice_transcript":
             text = (data.get("text") or "").strip()
@@ -2811,25 +3453,98 @@ class OrbitWindow:
             if is_busy:
                 self.send_btn.configure(state="disabled")
                 self.input_text.configure(state="disabled")
+                self._show_thinking_indicator()
             self.stop_btn.configure(state="normal")
         else:
             if not self._plan_total_steps:
                 self.busy_lbl.configure(text="● Idle", fg="gray")
                 if hasattr(self, "plan_status_lbl"):
                     self.plan_status_lbl.configure(text="")
+            self._hide_thinking_indicator()
             self.send_btn.configure(state="normal")
             self.input_text.configure(state="normal")
             self.stop_btn.configure(state="disabled")
         self._update_voice_ui()
+
+    def _remove_streaming_caret(self) -> None:
+        try:
+            while True:
+                ranges = self.history.tag_ranges("streaming_caret")
+                if not ranges:
+                    break
+                self.history.delete(ranges[0], ranges[1])
+        except Exception:
+            pass
+        self._caret_mark = None
 
     def _append_chat(self, text: str, tags: tuple) -> None:
         if not isinstance(tags, tuple):
             tags = tuple(tags)
         if ("orbit" in tags or "user" in tags) and "bubble" not in tags:
             tags = tags + ("bubble",)
+
         self.history.configure(state="normal")
-        self.history.insert(tk.END, text, tags)
-        self.history.see(tk.END)
+
+        # 500-message widget cap
+        if not hasattr(self, "_chat_message_count"):
+            self._chat_message_count = 0
+
+        if self._chat_message_count >= 500:
+            try:
+                self.history.delete("1.0", "3.0")
+                self._chat_message_count -= 1
+            except Exception:
+                pass
+
+        # Remove caret if present
+        self._remove_streaming_caret()
+
+        # Remove thinking indicator if present
+        self._hide_thinking_indicator()
+
+        # Timestamps for user or orbit prefix
+        start_idx = self.history.index(tk.END)
+        now_ts = datetime.now().strftime("%H:%M")
+        if "user" in tags and not text.startswith(" "):
+            self.history.insert(tk.END, f"[{now_ts}] ", ("dim_ts",))
+        elif "orbit_prefix" in tags:
+            self.history.insert(tk.END, f"[{now_ts}] ", ("dim_ts",))
+
+        # Fenced code blocks
+        if "```" in text:
+            parts = text.split("```")
+            for i, part in enumerate(parts):
+                if i % 2 == 1:
+                    self.history.insert(tk.END, f"\n{part}\n", ("code_block",))
+                else:
+                    self.history.insert(tk.END, part, tags)
+        else:
+            self.history.insert(tk.END, text, tags)
+
+        end_idx = self.history.index(tk.END)
+
+        if not hasattr(self, "_recent_chat_messages"):
+            self._recent_chat_messages = []
+        if ("user" in tags or "orbit" in tags) and text.strip():
+            self._recent_chat_messages.append({
+                "sender": "user" if "user" in tags else "orbit",
+                "text": text.strip(),
+                "start": start_idx,
+                "end": end_idx,
+            })
+            if len(self._recent_chat_messages) > 30:
+                self._recent_chat_messages.pop(0)
+
+        # Streaming caret if actively streaming
+        if getattr(self, "_streaming", False):
+            self._caret_mark = self.history.index(tk.END)
+            self.history.insert(tk.END, " ▊", ("streaming_caret",))
+
+        self._chat_message_count += 1
+
+        if getattr(self, "_auto_scroll_enabled", True):
+            self.history.see(tk.END)
+
         self.history.configure(state="disabled")
 
     # --- User Actions ---
@@ -2892,6 +3607,8 @@ class OrbitWindow:
     def _on_stop(self) -> None:
         if getattr(self, "voice_controller", None) is not None:
             self.voice_controller.cancel()
+        if getattr(self, "handsfree_controller", None) is not None:
+            self.handsfree_controller.cancel_current_capture()
         self.controller.cancel()
 
     # --- Tab Handlers ---
@@ -3039,6 +3756,8 @@ class OrbitWindow:
         self.history.configure(state="normal")
         self.history.delete("1.0", tk.END)
         self.history.configure(state="disabled")
+        self._chat_message_count = 0
+        self._recent_chat_messages = []
 
         if hasattr(self.controller, "reset"):
             self.controller.reset()
@@ -3138,6 +3857,18 @@ class OrbitWindow:
 
         t = threading.Thread(target=_worker, daemon=True)
         t.start()
+
+    def _on_verify_click(self) -> None:
+        """Open verification suite window."""
+        try:
+            if hasattr(self, "_verify_window") and self._verify_window is not None and self._verify_window.winfo_exists():
+                self._verify_window.lift()
+                self._verify_window.focus_force()
+                return
+            from ui.verify_window import VerificationWindow
+            self._verify_window = VerificationWindow(self.root, palette=self.palette)
+        except Exception as exc:
+            print(f"Failed to open Verification window: {exc}")
 
     def _on_contacts_click(self) -> None:
         if self._is_dialog_open():
@@ -3333,9 +4064,15 @@ class OrbitWindow:
             PaletteItem("Interrupt / Stop speaking", "Voice", self._on_stop),
             PaletteItem("Doctor diagnostics", "System", self._on_doctor_click),
             PaletteItem("Open Settings", "System", self._on_settings_click),
+            PaletteItem("Verification", "Tools", self._on_verify_click),
             PaletteItem("Cycle UI Theme", "Display", self._cycle_theme),
             PaletteItem("Copy last assistant answer", "Chat", self._on_copy_last_answer),
         ]
+
+        for tab_id, label, _, _ in TAB_DEFINITIONS:
+            def _make_show_tab(tid=tab_id):
+                return lambda: self._select_tab_by_id(tid)
+            static_items.append(PaletteItem(f"Show {label} tab", "Tabs", _make_show_tab(tab_id)))
 
         routine_names: list[str] = []
         try:
@@ -3396,7 +4133,10 @@ class OrbitWindow:
             try:
                 if getattr(self, "voice_controller", None) is not None:
                     self.voice_controller.shutdown()
-                self.controller.shutdown()
+                if getattr(self, "handsfree_controller", None) is not None:
+                    self.handsfree_controller.shutdown()
+                if hasattr(self.controller, "shutdown"):
+                    self.controller.shutdown()
             finally:
                 self._destroyed = True
                 self.root.destroy()
@@ -3415,6 +4155,7 @@ class OrbitWindow:
                 try:
                     if getattr(self, "voice_controller", None) is not None:
                         self.voice_controller.shutdown()
+                    if hasattr(self.controller, "shutdown"):
+                        self.controller.shutdown()
                 except Exception:
                     pass
-                self.controller.shutdown()

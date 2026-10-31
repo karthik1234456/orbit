@@ -174,7 +174,7 @@ def seed_demo_home(demo_dir: Path) -> None:
     index_docs_directory(index=doc_index, docs_root=docs_dir)
 
 
-def build_child_env(demo_dir: Path, offline: bool = False) -> dict[str, str]:
+def build_child_env(demo_dir: Path, offline: bool = False, verify: bool = False) -> dict[str, str]:
     """Construct an isolated environment dictionary for the demo child process."""
     env = os.environ.copy()
     env["ORBIT_HOME"] = str(demo_dir.resolve())
@@ -182,6 +182,8 @@ def build_child_env(demo_dir: Path, offline: bool = False) -> dict[str, str]:
     if offline:
         env["ORBIT_OFFLINE"] = "1"
         env["LLM_PROVIDER"] = "ollama"
+    if verify:
+        env["ORBIT_VERIFY"] = "1"
     return env
 
 
@@ -199,6 +201,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--offline",
         action="store_true",
         help="Force offline execution with Ollama and in-process network blocks",
+    )
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Launch with Verification window open on startup",
     )
     parser.add_argument(
         "--keep",
@@ -238,7 +245,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     elif not demo_dir.exists():
         seed_demo_home(demo_dir)
 
-    child_env = build_child_env(demo_dir, offline=args.offline)
+    child_env = build_child_env(demo_dir, offline=args.offline, verify=args.verify)
 
     print(f"Launching ORBIT in demo mode using folder: {demo_dir}")
 

@@ -76,6 +76,7 @@ class HudLayout:
     right_x_left: float
     right_x_right: float
     chips_y: float
+    orb_box_size: float = 0.0
     dock_width: float = 0.0
     dock_height: float = 0.0
     dock_margin: float = 0.0
@@ -102,9 +103,10 @@ def layout(W: float, H: float, scaling: float = 1.0) -> HudLayout:
 
     Reference geometry:
     - Orb centre cx = 0.50 W, cy = 0.43 H
-    - Sphere radius 0.21 H, scaled if needed so panels never overlap orb
-    - Panel widths = min(0.262 W, cx - arc outer radius - 12 px) with floor 260 px
-    - If floor cannot be met, shrink whole orb by scale factor
+    - OrbLayer box size: square of 0.74 H * scale
+    - Sphere radius 0.21 H * scale
+    - Panel widths = min(0.262 W, cx - arc_outer - 12 px) with floor 260 px
+    - If floor cannot be met, shrink whole orb by scale factor so panels NEVER overlap
     - Dock canvas sized from radii, margins, and Tk scaling factor so bounding boxes never clip
     """
     W = float(W)
@@ -113,12 +115,12 @@ def layout(W: float, H: float, scaling: float = 1.0) -> HudLayout:
     cx = 0.50 * W
     cy = 0.43 * H
 
-    unscaled_arc_outer = 0.310 * H
     chat_x_left = 0.03 * W
     right_x_right = 0.97 * W
 
-    # Clearance required: cx - (arc_outer_radius * scale) - 12.0 - chat_x_left >= 260.0
-    max_clear_radius = cx - 12.0 - chat_x_left - 260.0
+    # Clearance required: cx - arc_outer - 12 px margin - chat_x_left >= 260.0
+    unscaled_arc_outer = 0.310 * H
+    max_clear_radius = (cx - 12.0) - chat_x_left - 260.0
     if unscaled_arc_outer > max_clear_radius and unscaled_arc_outer > 0:
         scale = max(0.1, max_clear_radius / unscaled_arc_outer)
         panel_width = 260.0
@@ -130,6 +132,8 @@ def layout(W: float, H: float, scaling: float = 1.0) -> HudLayout:
     chat_x_right = chat_x_left + panel_width
     right_x_left = right_x_right - panel_width
 
+    orb_box_size = 0.74 * H * scale
+
     # Sphere & Core
     sphere_radius = 0.21 * H * scale
     core_radii = [r * sphere_radius for r in (0.12, 0.20, 0.30, 0.42, 0.55)]
@@ -140,7 +144,7 @@ def layout(W: float, H: float, scaling: float = 1.0) -> HudLayout:
     minor_tick_len = 0.006 * H * scale
     major_tick_len = 0.012 * H * scale
 
-    # Segmented arcs
+    # Segmented arcs (band 0.285 H to 0.310 H)
     arc_inner_radius = 0.285 * H * scale
     arc_outer_radius = 0.310 * H * scale
 
@@ -204,6 +208,7 @@ def layout(W: float, H: float, scaling: float = 1.0) -> HudLayout:
         right_x_left=right_x_left,
         right_x_right=right_x_right,
         chips_y=chips_y,
+        orb_box_size=orb_box_size,
         dock_width=dock_width,
         dock_height=dock_height,
         dock_margin=dock_margin,
@@ -352,6 +357,13 @@ def project_orthographic(
     return projected
 
 
+def quantize_depth_bucket(z: float, num_buckets: int = 6) -> int:
+    """Quantize depth z in [-1.0, 1.0] into discrete buckets in range [0, num_buckets - 1]."""
+    norm = (float(z) + 1.0) / 2.0
+    bucket = int(norm * num_buckets)
+    return max(0, min(num_buckets - 1, bucket))
+
+
 def depth_color(
     depth: float,
     palette: Any,
@@ -386,16 +398,17 @@ class ArcBlock:
     brightness: float
 
 
-def build_segmented_arcs(rng: random.Random) -> tuple[list[ArcBlock], list[ArcBlock]]:
+def build_segmented_arcs(
+    rng: random.Random,
+    color_dim: str = "#7E6C48",
+    color_bright: str = "#F2D8A1",
+) -> tuple[list[ArcBlock], list[ArcBlock]]:
     """Build Arc A (92 to 188 deg, 24 blocks) and Arc B (8 to -72 deg, 20 blocks).
 
     Blocks are 3.2 deg with 0.8 deg gaps (pitch 4.0 deg).
     Brightness follows bell curve peaking at 55% along each arc.
     Each block receives a fixed random weight in [0.4, 1.0].
     """
-    color_dim = "#7E6C48"
-    color_bright = "#F2D8A1"
-
     blocks_a: list[ArcBlock] = []
     n_a = 24
     for i in range(n_a):
@@ -421,6 +434,149 @@ def build_segmented_arcs(rng: random.Random) -> tuple[list[ArcBlock], list[ArcBl
         blocks_b.append(ArcBlock(deg_start, deg_end, w, col, b_val))
 
     return blocks_a, blocks_b
+
+
+class DustRingSoA:
+    """Struct-of-arrays representation of dust ring particles for vectorized projection and depth sorting.
+
+    Features (A4, B4):
+    - 600 particles on tier high, 300 medium, 150 low
+    - Continuous elliptical band + second faint ring at half density
+    - 1 px particle size
+    - Vectorized rotation and projection with numpy when importable; pure Python fallback within 0.01 px
+    """
+
+    def __init__(self, rng: random.Random, count: int = 600):
+        self.count = max(10, int(count))
+        self.phases: list[float] = []
+        self.jitters: list[float] = []
+        self.speeds: list[float] = []
+        self.ring_types: list[int] = []  # 0: primary, 1: secondary faint
+
+        n_prim = int(round(self.count * (2.0 / 3.0)))
+        n_sec = self.count - n_prim
+
+        for i in range(n_prim):
+            phase = (2.0 * math.pi * i) / max(1, n_prim) + rng.uniform(-0.015, 0.015)
+            self.phases.append(phase)
+            self.jitters.append(rng.gauss(0.0, 0.018))
+            self.speeds.append(math.radians(6.0) * rng.uniform(0.9, 1.1))
+            self.ring_types.append(0)
+
+        for i in range(n_sec):
+            phase = (2.0 * math.pi * i) / max(1, n_sec) + rng.uniform(-0.02, 0.02)
+            self.phases.append(phase)
+            self.jitters.append(rng.gauss(0.0, 0.022))
+            self.speeds.append(math.radians(5.0) * rng.uniform(0.9, 1.1))
+            self.ring_types.append(1)
+
+        try:
+            import numpy as np
+
+            self._np_phases = np.array(self.phases, dtype=np.float64)
+            self._np_jitters = np.array(self.jitters, dtype=np.float64)
+            self._np_speeds = np.array(self.speeds, dtype=np.float64)
+            self._np_ring_types = np.array(self.ring_types, dtype=np.int32)
+            self._has_numpy = True
+        except ImportError:
+            self._has_numpy = False
+
+    def update(self, dt: float) -> None:
+        dt = max(0.0, float(dt))
+        two_pi = 2.0 * math.pi
+        if self._has_numpy:
+            self._np_phases = (self._np_phases + self._np_speeds * dt) % two_pi
+            self.phases = self._np_phases.tolist()
+        else:
+            for i in range(self.count):
+                self.phases[i] = (self.phases[i] + self.speeds[i] * dt) % two_pi
+
+    def project_python(
+        self,
+        cx: float,
+        cy: float,
+        semi_major_1: float,
+        semi_minor_1: float,
+        semi_major_2: float,
+        semi_minor_2: float,
+        tilt_rad: float = 0.0,
+    ) -> list[tuple[float, float, float, int]]:
+        """Pure Python fallback projection. Returns list of (x, y, z, ring_type)."""
+        cos_tilt = math.cos(tilt_rad)
+        sin_tilt = math.sin(tilt_rad)
+        results: list[tuple[float, float, float, int]] = []
+        for i in range(self.count):
+            rtype = self.ring_types[i]
+            s_maj = semi_major_1 if rtype == 0 else semi_major_2
+            s_min = semi_minor_1 if rtype == 0 else semi_minor_2
+            r = s_maj * (1.0 + self.jitters[i])
+            phase = self.phases[i]
+            x_loc = r * math.cos(phase)
+            y_loc = (r * (s_min / s_maj)) * math.sin(phase)
+            x_rot = x_loc * cos_tilt - y_loc * sin_tilt
+            y_rot = x_loc * sin_tilt + y_loc * cos_tilt
+            z = math.sin(phase)
+            results.append((cx + x_rot, cy + y_rot, z, rtype))
+        return results
+
+    def project_numpy(
+        self,
+        cx: float,
+        cy: float,
+        semi_major_1: float,
+        semi_minor_1: float,
+        semi_major_2: float,
+        semi_minor_2: float,
+        tilt_rad: float = 0.0,
+    ) -> list[tuple[float, float, float, int]]:
+        """Vectorized numpy projection matching project_python within 0.01 px."""
+        if not self._has_numpy:
+            return self.project_python(cx, cy, semi_major_1, semi_minor_1, semi_major_2, semi_minor_2, tilt_rad)
+        import numpy as np
+
+        mask0 = self._np_ring_types == 0
+        s_maj = np.where(mask0, semi_major_1, semi_major_2)
+        s_min = np.where(mask0, semi_minor_1, semi_minor_2)
+        r = s_maj * (1.0 + self._np_jitters)
+        cos_p = np.cos(self._np_phases)
+        sin_p = np.sin(self._np_phases)
+        x_loc = r * cos_p
+        y_loc = (r * (s_min / s_maj)) * sin_p
+        cos_tilt = math.cos(tilt_rad)
+        sin_tilt = math.sin(tilt_rad)
+        x_rot = x_loc * cos_tilt - y_loc * sin_tilt
+        y_rot = x_loc * sin_tilt + y_loc * cos_tilt
+        x_out = cx + x_rot
+        y_out = cy + y_rot
+        z_out = sin_p
+        out = []
+        for i in range(self.count):
+            out.append((float(x_out[i]), float(y_out[i]), float(z_out[i]), int(self._np_ring_types[i])))
+        return out
+
+
+@dataclass
+class StaticStar:
+    norm_x: float  # [0.0, 1.0] in window space
+    norm_y: float  # [0.0, 1.0]
+    brightness: float  # in [0.10, 0.35] (strictly <= 0.35)
+    size: float  # strictly 1.0 (never > 2.0)
+
+
+def build_static_stars(rng: random.Random, count: int = 40) -> list[StaticStar]:
+    """Generate at most 40 static stars with size 1 px and brightness <= 35% accent (B5)."""
+    count = min(40, max(0, int(count)))
+    stars: list[StaticStar] = []
+    for _ in range(count):
+        stars.append(
+            StaticStar(
+                norm_x=rng.uniform(0.02, 0.98),
+                norm_y=rng.uniform(0.02, 0.95),
+                brightness=rng.uniform(0.12, 0.35),
+                size=1.0,
+            )
+        )
+    return stars
 
 
 @dataclass
@@ -878,6 +1034,8 @@ class HudModel:
         self.ref_lat_curves, self.ref_meridian_curves = build_reference_sphere_curves()
         self.blocks_a, self.blocks_b = build_segmented_arcs(self.rng)
         self.dust_particles = build_dust_ring_particles(self.rng, count=350)
+        self.dust_ring_soa = DustRingSoA(self.rng, count=600)
+        self.static_stars = build_static_stars(self.rng, count=40)
         self.ref_ticks = build_reference_ticks()
         self.parallax_particles = build_parallax_particles(self.rng)
 
@@ -892,6 +1050,13 @@ class HudModel:
 
     def set_confirming(self, confirming: bool) -> None:
         self._confirming = bool(confirming)
+
+    def set_handsfree_armed(self, armed: bool) -> None:
+        self._handsfree_armed = bool(armed)
+
+    @property
+    def handsfree_armed(self) -> bool:
+        return getattr(self, "_handsfree_armed", False)
 
     def set_mic_level(self, level: float) -> None:
         lvl = max(0.0, min(1.0, float(level)))
@@ -1058,6 +1223,7 @@ class HudModel:
         self.arc_a_drift_deg = (self.arc_a_drift_deg + 3.0 * dt) % 360.0
         self.arc_b_drift_deg = (self.arc_b_drift_deg - 2.0 * dt) % 360.0
         self.dust_orbit_deg = (self.dust_orbit_deg + 6.0 * dt) % 360.0
+        self.dust_ring_soa.update(dt)
 
         # Core pulse calculation
         if st == HudState.SPEAKING:
